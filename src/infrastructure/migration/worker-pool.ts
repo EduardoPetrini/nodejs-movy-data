@@ -4,18 +4,28 @@ import { WorkerPayload, WorkerMessage } from '../../domain/types/worker.types';
 import { TableMigrationResult } from '../../domain/types/migration.types';
 import { resolveWorkerPath, chunkArray } from '../../shared/utils';
 
+export type ProgressCallback = (tableName: string, rowsDone: number, rowsTotal: number) => void;
+
 export class WorkerPool {
   async run(
     sourceConfig: ConnectionConfig,
     destConfig: ConnectionConfig,
     tables: string[],
-    workerCount: number
+    workerCount: number,
+    rowEstimates?: Map<string, number>,
+    onProgress?: ProgressCallback
   ): Promise<TableMigrationResult[]> {
     const chunks = chunkArray(tables, Math.ceil(tables.length / workerCount));
     const results: TableMigrationResult[] = [];
+    const estimatesRecord: Record<string, number> = {};
+    if (rowEstimates) {
+      for (const [table, count] of rowEstimates) {
+        estimatesRecord[table] = count;
+      }
+    }
 
     const workerPromises = chunks.map((chunk) =>
-      this.spawnWorker(sourceConfig, destConfig, chunk, results)
+      this.spawnWorker(sourceConfig, destConfig, chunk, estimatesRecord, results, onProgress)
     );
 
     await Promise.all(workerPromises);
@@ -26,10 +36,12 @@ export class WorkerPool {
     sourceConfig: ConnectionConfig,
     destConfig: ConnectionConfig,
     tables: string[],
-    results: TableMigrationResult[]
+    rowEstimates: Record<string, number>,
+    results: TableMigrationResult[],
+    onProgress?: ProgressCallback
   ): Promise<void> {
     return new Promise((resolve, reject) => {
-      const payload: WorkerPayload = { tables, sourceConfig, destConfig };
+      const payload: WorkerPayload = { tables, sourceConfig, destConfig, rowEstimates };
       const workerPath = resolveWorkerPath('table-copy.worker.ts');
 
       const isTs = workerPath.endsWith('.ts');
@@ -39,7 +51,9 @@ export class WorkerPool {
       });
 
       worker.on('message', (msg: WorkerMessage) => {
-        if (msg.type === 'table_done' && msg.tableName !== undefined) {
+        if (msg.type === 'progress' && msg.tableName !== undefined && onProgress) {
+          onProgress(msg.tableName, msg.rowsCompleted ?? 0, msg.rowsTotal ?? 0);
+        } else if (msg.type === 'table_done' && msg.tableName !== undefined) {
           results.push({
             tableName: msg.tableName,
             rowsCopied: msg.rowsCopied ?? 0,

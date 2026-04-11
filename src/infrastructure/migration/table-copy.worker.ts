@@ -7,7 +7,9 @@ import { WorkerPayload, WorkerMessage } from '../../domain/types/worker.types';
 async function copyTable(
   tableName: string,
   sourcePool: Pool,
-  destPool: Pool
+  destPool: Pool,
+  estimatedRows: number,
+  onProgress: (rowsDone: number, rowsTotal: number) => void
 ): Promise<number> {
   const sourceClient = await sourcePool.connect();
   const destClient = await destPool.connect();
@@ -23,8 +25,17 @@ async function copyTable(
     );
 
     let rowCount = 0;
+    let lastReportedPct = -1;
     sourceStream.on('data', (chunk: Buffer) => {
       rowCount += chunk.toString().split('\n').filter((l) => l.length > 0).length;
+
+      if (estimatedRows > 0) {
+        const pct = Math.floor((rowCount / estimatedRows) * 10) * 10;
+        if (pct > lastReportedPct && pct < 100) {
+          lastReportedPct = pct;
+          onProgress(rowCount, estimatedRows);
+        }
+      }
     });
 
     await pipeline(sourceStream, destStream);
@@ -37,7 +48,7 @@ async function copyTable(
 
 async function run(): Promise<void> {
   const payload = workerData as WorkerPayload;
-  const { tables, sourceConfig, destConfig } = payload;
+  const { tables, sourceConfig, destConfig, rowEstimates } = payload;
 
   const sourcePool = new Pool({
     host: sourceConfig.host,
@@ -57,8 +68,22 @@ async function run(): Promise<void> {
 
   for (const tableName of tables) {
     const start = Date.now();
+    const estimated = rowEstimates[tableName] ?? 0;
     try {
-      const rowsCopied = await copyTable(tableName, sourcePool, destPool);
+      const rowsCopied = await copyTable(
+        tableName,
+        sourcePool,
+        destPool,
+        estimated,
+        (rowsDone, rowsTotal) => {
+          parentPort!.postMessage({
+            type: 'progress',
+            tableName,
+            rowsCompleted: rowsDone,
+            rowsTotal,
+          } as WorkerMessage);
+        }
+      );
       const msg: WorkerMessage = {
         type: 'table_done',
         tableName,

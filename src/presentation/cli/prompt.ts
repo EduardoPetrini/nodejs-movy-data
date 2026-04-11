@@ -42,9 +42,47 @@ export async function promptDatabaseType(rl: readline.Interface, label: string):
   }
 }
 
+export type MigrationMode = 'full' | 'query';
+
+export async function promptMigrationMode(rl: readline.Interface): Promise<MigrationMode> {
+  console.log('\nMigration mode:');
+  console.log('  [1] Full migration (all tables)');
+  console.log('  [2] Custom SQL query  →  single destination table');
+  while (true) {
+    const input = await ask(rl, 'Choice [1]: ');
+    const val = input || '1';
+    if (val === '1') return 'full';
+    if (val === '2') return 'query';
+    console.log("  Please enter '1' or '2'.");
+  }
+}
+
+export interface QueryMigrationInput {
+  query: string;
+  targetTableName: string;
+}
+
+export async function promptQueryMigration(rl: readline.Interface): Promise<QueryMigrationInput> {
+  console.log('\nEnter your SQL query (finish with an empty line):');
+  const lines: string[] = [];
+  while (true) {
+    const line = await ask(rl, lines.length === 0 ? '> ' : '  ');
+    if (line === '') break;
+    lines.push(line);
+  }
+  const query = lines.join(' ').trim();
+  if (!query) throw new Error('Query cannot be empty.');
+
+  const targetTableName = await ask(rl, 'Destination table name: ');
+  if (!targetTableName) throw new Error('Destination table name cannot be empty.');
+
+  return { query, targetTableName };
+}
+
 export async function promptConnectionConfig(
   rl: readline.Interface,
-  label: string
+  label: string,
+  defaults?: { database?: string }
 ): Promise<ConnectionConfig> {
   console.log(`\n--- ${label} Connection ---`);
   const type = await promptDatabaseType(rl, label);
@@ -61,7 +99,10 @@ export async function promptConnectionConfig(
   const user = await ask(rl, 'User: ');
   const envPassword = label === 'Source' ? process.env.PGPASSWORD : process.env.DEST_PGPASSWORD;
   const password = envPassword ?? await promptPassword(rl, 'Password: ');
-  const database = await ask(rl, 'Database: ');
+
+  const dbPrompt = defaults?.database ? `Database [${defaults.database}]: ` : 'Database: ';
+  const dbInput = await ask(rl, dbPrompt);
+  const database = dbInput || defaults?.database || '';
 
   return { type, host, port, user, password, database };
 }

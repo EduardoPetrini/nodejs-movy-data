@@ -88,10 +88,31 @@ export class PgSchemaInspector implements ISchemaInspector {
        FROM pg_class
        WHERE relkind = 'r' AND relnamespace = 'public'::regnamespace`
     );
+
     const map = new Map<string, number>();
+    const tablesNeedingCount: string[] = [];
+
     for (const row of rows) {
-      map.set(row.relname, Math.max(0, row.reltuples));
+      const estimate = row.reltuples;
+      if (estimate > 0) {
+        map.set(row.relname, estimate);
+      } else {
+        // reltuples is -1 (never analyzed) or 0 (stats stale) — fall back to exact count
+        tablesNeedingCount.push(row.relname);
+      }
     }
+
+    if (tablesNeedingCount.length > 0) {
+      await Promise.all(
+        tablesNeedingCount.map(async (tableName) => {
+          const result = await connection.query<{ count: string }>(
+            `SELECT COUNT(*)::text AS count FROM "${tableName.replace(/"/g, '""')}"`
+          );
+          map.set(tableName, parseInt(result[0]?.count ?? '0', 10));
+        })
+      );
+    }
+
     return map;
   }
 

@@ -212,10 +212,20 @@ describe('PgSchemaInspector', () => {
       expect(map.get('orders')).toBe(5000);
     });
 
-    it('clamps negative reltuples to 0', async () => {
-      (conn.query as any).mockResolvedValue([{ relname: 'new_table', reltuples: -1 }]);
+    it('falls back to COUNT(*) when reltuples is -1 (no stats)', async () => {
+      (conn.query as any)
+        .mockResolvedValueOnce([{ relname: 'new_table', reltuples: -1 }])
+        .mockResolvedValueOnce([{ count: '42' }]);
       const map = await inspector.getTableRowEstimates(conn);
-      expect(map.get('new_table')).toBe(0);
+      expect(map.get('new_table')).toBe(42);
+    });
+
+    it('falls back to COUNT(*) when reltuples is 0 (stale stats)', async () => {
+      (conn.query as any)
+        .mockResolvedValueOnce([{ relname: 'empty_table', reltuples: 0 }])
+        .mockResolvedValueOnce([{ count: '0' }]);
+      const map = await inspector.getTableRowEstimates(conn);
+      expect(map.get('empty_table')).toBe(0);
     });
   });
 });

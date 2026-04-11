@@ -23,7 +23,14 @@ describe('PgDataMigrator', () => {
 
   it('delegates to WorkerPool.run', async () => {
     await migrator.migrate(makeConfig(), makeConfig('dst'), ['users'], 2);
-    expect(pool.run).toHaveBeenCalledWith(makeConfig(), makeConfig('dst'), ['users'], 2);
+    expect(pool.run).toHaveBeenCalledWith(
+      makeConfig(),
+      makeConfig('dst'),
+      ['users'],
+      2,
+      undefined,
+      undefined
+    );
   });
 
   it('returns success=true when all tables succeed', async () => {

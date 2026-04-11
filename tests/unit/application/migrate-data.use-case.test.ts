@@ -54,8 +54,11 @@ describe('MigrateDataUseCase', () => {
     expect(result.success).toBe(true);
   });
 
-  it('logs the report', async () => {
+  it('logs the summary table', async () => {
     await useCase.execute(makeConfig(), makeConfig('dest'), ['users'], new Map());
-    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('Migration Report'));
+    const calls: string[] = (logger.info as any).mock.calls.map((c: string[]) => c[0]);
+    // The summary contains a header row and a totals row
+    expect(calls.some((c) => c.includes('Table'))).toBe(true);
+    expect(calls.some((c) => c.includes('TOTAL'))).toBe(true);
   });
 });
