@@ -22,6 +22,28 @@ export function chunkArray<T>(arr: T[], size: number): T[][] {
   return chunks;
 }
 
+export async function retryWithBackoff<T>(
+  operation: () => Promise<T>,
+  maxRetries: number = 3,
+  baseDelayMs: number = 1000,
+  onRetry?: (attempt: number, error: Error, delayMs: number) => void
+): Promise<T> {
+  let lastError: Error = new Error('Unknown error');
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await operation();
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      if (attempt < maxRetries) {
+        const delayMs = baseDelayMs * Math.pow(2, attempt - 1);
+        onRetry?.(attempt, lastError, delayMs);
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
+    }
+  }
+  throw lastError;
+}
+
 export function resolveWorkerPath(filename: string): string {
   const distPath = path.resolve(__dirname, '../../dist/infrastructure/migration', filename.replace(/\.ts$/, '.js'));
   const isDist = process.env.NODE_ENV === 'production' || fs.existsSync(distPath);

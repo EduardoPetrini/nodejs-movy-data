@@ -1,4 +1,4 @@
-import { TableSchema, SequenceSchema, ConstraintSchema, IndexSchema } from './schema.types';
+import { TableSchema, SequenceSchema, ConstraintSchema, IndexSchema, EnumSchema } from './schema.types';
 
 export interface ColumnDiff {
   columnName: string;
@@ -17,6 +17,7 @@ export interface SchemaDiff {
   indexesToCreate: { tableName: string; index: IndexSchema }[];
   indexesToDrop: { tableName: string; indexName: string }[];
   sequencesToCreate: SequenceSchema[];
+  enumsToCreate: EnumSchema[];
 }
 
 export interface TableMigrationResult {

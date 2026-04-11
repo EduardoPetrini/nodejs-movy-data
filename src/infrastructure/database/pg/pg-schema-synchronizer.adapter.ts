@@ -7,6 +7,7 @@ import {
   ConstraintSchema,
   IndexSchema,
   SequenceSchema,
+  EnumSchema,
 } from '../../../domain/types/schema.types';
 import { SchemaDiff } from '../../../domain/types/migration.types';
 import { SchemaSyncError } from '../../../domain/errors/migration.errors';
@@ -27,6 +28,7 @@ export class PgSchemaSynchronizer implements ISchemaSynchronizer {
     const indexesToCreate: SchemaDiff['indexesToCreate'] = [];
     const indexesToDrop: SchemaDiff['indexesToDrop'] = [];
     const sequencesToCreate: SequenceSchema[] = [];
+    const enumsToCreate: EnumSchema[] = [];
 
     for (const sourceTable of source.tables) {
       const targetTable = targetTableMap.get(sourceTable.name);
@@ -52,6 +54,13 @@ export class PgSchemaSynchronizer implements ISchemaSynchronizer {
       }
     }
 
+    const targetEnumNames = new Set(target.enums.map((e) => e.name));
+    for (const e of source.enums) {
+      if (!targetEnumNames.has(e.name)) {
+        enumsToCreate.push(e);
+      }
+    }
+
     return {
       tablesToCreate,
       tablesToDrop,
@@ -63,11 +72,17 @@ export class PgSchemaSynchronizer implements ISchemaSynchronizer {
       indexesToCreate,
       indexesToDrop,
       sequencesToCreate,
+      enumsToCreate,
     };
   }
 
   async apply(connection: IDatabaseConnection, diff: SchemaDiff): Promise<void> {
     const statements: string[] = [];
+
+    for (const e of diff.enumsToCreate) {
+      const values = e.values.map((v) => `'${v.replace(/'/g, "''")}'`).join(', ');
+      statements.push(`CREATE TYPE ${escapeIdentifier(e.name)} AS ENUM (${values});`);
+    }
 
     for (const seq of diff.sequencesToCreate) {
       statements.push(this.buildCreateSequence(seq));
@@ -91,7 +106,7 @@ export class PgSchemaSynchronizer implements ISchemaSynchronizer {
 
     for (const { tableName, diff: colDiff } of diff.columnsToAlter) {
       statements.push(
-        `ALTER TABLE ${escapeIdentifier(tableName)} ALTER COLUMN ${escapeIdentifier(colDiff.columnName)} TYPE ${colDiff.sourceType};`
+        `ALTER TABLE ${escapeIdentifier(tableName)} ALTER COLUMN ${escapeIdentifier(colDiff.columnName)} TYPE ${this.quoteTypeIfNeeded(colDiff.sourceType)};`
       );
     }
 
@@ -113,12 +128,19 @@ export class PgSchemaSynchronizer implements ISchemaSynchronizer {
 
     if (statements.length === 0) return;
 
-    const sql = `BEGIN;\n${statements.join('\n')}\nCOMMIT;`;
+    const client = await connection.getClient();
     try {
-      await connection.query(sql);
+      await client.query('BEGIN');
+      for (const stmt of statements) {
+        await client.query(stmt);
+      }
+      await client.query('COMMIT');
     } catch (err) {
+      try { await client.query('ROLLBACK'); } catch { /* ignore rollback errors */ }
       const message = err instanceof Error ? err.message : String(err);
       throw new SchemaSyncError(`Schema sync failed: ${message}`);
+    } finally {
+      client.release();
     }
   }
 
@@ -257,11 +279,17 @@ export class PgSchemaSynchronizer implements ISchemaSynchronizer {
   }
 
   private buildColumnDef(col: ColumnSchema): string {
-    let def = `${escapeIdentifier(col.name)} ${col.dataType}`;
-    if (col.characterMaxLength) def = `${escapeIdentifier(col.name)} ${col.dataType}(${col.characterMaxLength})`;
+    const typeLiteral = this.quoteTypeIfNeeded(col.dataType);
+    let def = `${escapeIdentifier(col.name)} ${typeLiteral}`;
+    if (col.characterMaxLength) def = `${escapeIdentifier(col.name)} ${typeLiteral}(${col.characterMaxLength})`;
     if (!col.isNullable) def += ' NOT NULL';
     if (col.defaultValue !== null) def += ` DEFAULT ${col.defaultValue}`;
     return def;
+  }
+
+  /** Quote a type name only when it contains uppercase letters (user-defined mixed-case types). */
+  private quoteTypeIfNeeded(dataType: string): string {
+    return dataType !== dataType.toLowerCase() ? escapeIdentifier(dataType) : dataType;
   }
 
   private buildConstraintDef(constraint: ConstraintSchema): string {

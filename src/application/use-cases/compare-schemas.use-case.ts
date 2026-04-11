@@ -35,8 +35,12 @@ export class CompareSchemasUseCase {
     const diff = this.synchronizer.diff(sourceSchema, targetSchema);
 
     this.logger.info(
+      `Source enums: ${sourceSchema.enums.length} (${sourceSchema.enums.map((e) => e.name).join(', ') || 'none'})`
+    );
+    this.logger.info(
       `Diff: +${diff.tablesToCreate.length} tables, -${diff.tablesToDrop.length} tables, ` +
-      `+${diff.columnsToAdd.length} cols, -${diff.columnsToDrop.length} cols`
+      `+${diff.columnsToAdd.length} cols, -${diff.columnsToDrop.length} cols, ` +
+      `+${diff.enumsToCreate.length} enums`
     );
 
     return { sourceSchema, targetSchema, diff };

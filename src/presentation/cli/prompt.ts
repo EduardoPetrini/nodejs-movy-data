@@ -6,32 +6,17 @@ async function ask(rl: readline.Interface, question: string): Promise<string> {
   return answer.trim();
 }
 
-async function promptPassword(question: string): Promise<string> {
-  return new Promise((resolve) => {
-    process.stdout.write(question);
-    process.stdin.setRawMode(true);
-    process.stdin.resume();
-    process.stdin.setEncoding('utf8');
-    let password = '';
+async function promptPassword(rl: readline.Interface, question: string): Promise<string> {
+  const iface = rl as any;
+  const originalWrite = iface._writeToOutput?.bind(iface);
+  iface._writeToOutput = () => {};
 
-    const onData = (char: string) => {
-      if (char === '\r' || char === '\n') {
-        process.stdin.setRawMode(false);
-        process.stdin.pause();
-        process.stdin.removeListener('data', onData);
-        process.stdout.write('\n');
-        resolve(password);
-      } else if (char === '\u0003') {
-        process.exit();
-      } else if (char === '\u007f') {
-        password = password.slice(0, -1);
-      } else {
-        password += char;
-      }
-    };
+  const answer = await rl.question(question);
 
-    process.stdin.on('data', onData);
-  });
+  process.stdout.write('\n');
+  iface._writeToOutput = originalWrite;
+
+  return answer.trim();
 }
 
 function parseDatabaseType(input: string): DatabaseType | null {
@@ -75,7 +60,7 @@ export async function promptConnectionConfig(
 
   const user = await ask(rl, 'User: ');
   const envPassword = label === 'Source' ? process.env.PGPASSWORD : process.env.DEST_PGPASSWORD;
-  const password = envPassword ?? await promptPassword('Password: ');
+  const password = envPassword ?? await promptPassword(rl, 'Password: ');
   const database = await ask(rl, 'Database: ');
 
   return { type, host, port, user, password, database };

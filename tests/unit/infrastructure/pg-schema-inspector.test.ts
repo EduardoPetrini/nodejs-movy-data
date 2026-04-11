@@ -15,7 +15,7 @@ describe('PgSchemaInspector', () => {
 
   describe('inspect', () => {
     it('returns empty schema when no tables exist', async () => {
-      mockQuerySequence(conn, [[], [], [], []]);
+      mockQuerySequence(conn, [[], [], [], [], []]);
       const schema = await inspector.inspect(conn);
       expect(schema.tables).toHaveLength(0);
       expect(schema.sequences).toHaveLength(0);
@@ -46,7 +46,7 @@ describe('PgSchemaInspector', () => {
           numeric_scale: null,
         },
       ];
-      mockQuerySequence(conn, [columns, [], [], []]);
+      mockQuerySequence(conn, [columns, [], [], [], []]);
       const schema = await inspector.inspect(conn);
       expect(schema.tables).toHaveLength(1);
       expect(schema.tables[0].name).toBe('users');
@@ -69,7 +69,7 @@ describe('PgSchemaInspector', () => {
           numeric_scale: null,
         },
       ];
-      mockQuerySequence(conn, [columns, [], [], []]);
+      mockQuerySequence(conn, [columns, [], [], [], []]);
       const schema = await inspector.inspect(conn);
       expect(schema.tables[0].columns[0].isNullable).toBe(true);
     });
@@ -88,7 +88,7 @@ describe('PgSchemaInspector', () => {
           numeric_scale: null,
         },
       ];
-      mockQuerySequence(conn, [columns, [], [], []]);
+      mockQuerySequence(conn, [columns, [], [], [], []]);
       const schema = await inspector.inspect(conn);
       expect(schema.tables[0].columns[0].dataType).toBe('my_enum');
     });
@@ -120,7 +120,7 @@ describe('PgSchemaInspector', () => {
           check_clause: null,
         },
       ];
-      mockQuerySequence(conn, [columns, constraints, [], []]);
+      mockQuerySequence(conn, [columns, constraints, [], [], []]);
       const schema = await inspector.inspect(conn);
       const pk = schema.tables[0].constraints.find((c) => c.name === 'pk_users');
       expect(pk).toBeDefined();
@@ -145,7 +145,7 @@ describe('PgSchemaInspector', () => {
           check_clause: null,
         },
       ];
-      mockQuerySequence(conn, [columns, constraints, [], []]);
+      mockQuerySequence(conn, [columns, constraints, [], [], []]);
       const schema = await inspector.inspect(conn);
       const fk = schema.tables[0].constraints.find((c) => c.name === 'fk_orders_user');
       expect(fk!.type).toBe('FOREIGN KEY');
@@ -162,7 +162,7 @@ describe('PgSchemaInspector', () => {
         { table_name: 't', constraint_name: 'pk_t', constraint_type: 'PRIMARY KEY', column_name: 'a', foreign_table_name: null, foreign_column_name: null, delete_rule: null, update_rule: null, check_clause: null },
         { table_name: 't', constraint_name: 'pk_t', constraint_type: 'PRIMARY KEY', column_name: 'b', foreign_table_name: null, foreign_column_name: null, delete_rule: null, update_rule: null, check_clause: null },
       ];
-      mockQuerySequence(conn, [columns, constraints, [], []]);
+      mockQuerySequence(conn, [columns, constraints, [], [], []]);
       const schema = await inspector.inspect(conn);
       const pk = schema.tables[0].constraints[0];
       expect(pk.columns).toEqual(['a', 'b']);
@@ -175,7 +175,7 @@ describe('PgSchemaInspector', () => {
       const indexes = [
         { table_name: 'users', index_name: 'idx_users_email', column_name: 'email', is_unique: true, index_method: 'btree' },
       ];
-      mockQuerySequence(conn, [columns, [], indexes, []]);
+      mockQuerySequence(conn, [columns, [], indexes, [], []]);
       const schema = await inspector.inspect(conn);
       expect(schema.tables[0].indexes).toHaveLength(1);
       expect(schema.tables[0].indexes[0].name).toBe('idx_users_email');
@@ -188,7 +188,7 @@ describe('PgSchemaInspector', () => {
         { sequence_name: 'users_id_seq', start_value: '1', minimum_value: '1', maximum_value: '9223372036854775807', increment: '1', cycle_option: 'NO' },
       ];
       // sequences query + last_value query
-      mockQuerySequence(conn, [[], [], [], seqRows, [{ last_value: 42 }]]);
+      mockQuerySequence(conn, [[], [], [], seqRows, [], [{ last_value: 42 }]]);
       const schema = await inspector.inspect(conn);
       expect(schema.sequences).toHaveLength(1);
       expect(schema.sequences[0].name).toBe('users_id_seq');

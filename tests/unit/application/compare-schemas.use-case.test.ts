@@ -8,14 +8,14 @@ import { DatabaseSchema } from '../../../src/domain/types/schema.types';
 import { SchemaDiff } from '../../../src/domain/types/migration.types';
 
 function emptySchema(): DatabaseSchema {
-  return { tables: [], sequences: [] };
+  return { tables: [], sequences: [], enums: [] };
 }
 
 function emptyDiff(): SchemaDiff {
   return {
     tablesToCreate: [], tablesToDrop: [], columnsToAdd: [], columnsToDrop: [],
     columnsToAlter: [], constraintsToAdd: [], constraintsToDrop: [],
-    indexesToCreate: [], indexesToDrop: [], sequencesToCreate: [],
+    indexesToCreate: [], indexesToDrop: [], sequencesToCreate: [], enumsToCreate: [],
   };
 }
 
@@ -59,6 +59,7 @@ describe('CompareSchemasUseCase', () => {
     const srcSchema: DatabaseSchema = {
       tables: [{ name: 'users', columns: [], constraints: [], indexes: [] }],
       sequences: [],
+      enums: [],
     };
     const dstSchema = emptySchema();
     (inspector.inspect as any)

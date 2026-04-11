@@ -42,6 +42,18 @@ export async function runCli(): Promise<void> {
     const orchestrator = new MigrationOrchestrator(registry, logger);
     const result = await orchestrator.run(sourceConfig, destConfig);
 
+    if (result.success) {
+      await new Promise<void>((resolve) => {
+        process.stdout.write('\nMigration completed successfully. Press Enter to exit...');
+        process.stdin.resume();
+        process.stdin.setEncoding('utf8');
+        process.stdin.once('data', () => {
+          process.stdin.pause();
+          resolve();
+        });
+      });
+    }
+
     process.exit(result.success ? 0 : 1);
   } catch (err) {
     rl.close();

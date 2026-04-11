@@ -7,6 +7,7 @@ import {
   ConstraintSchema,
   IndexSchema,
   SequenceSchema,
+  EnumSchema,
 } from '../../../domain/types/schema.types';
 import { SchemaInspectionError } from '../../../domain/errors/migration.errors';
 
@@ -62,15 +63,16 @@ export class PgSchemaInspector implements ISchemaInspector {
     schemaName = 'public'
   ): Promise<DatabaseSchema> {
     try {
-      const [columns, constraints, indexes, sequences] = await Promise.all([
+      const [columns, constraints, indexes, sequences, enums] = await Promise.all([
         this.fetchColumns(connection, schemaName),
         this.fetchConstraints(connection, schemaName),
         this.fetchIndexes(connection, schemaName),
         this.fetchSequences(connection, schemaName),
+        this.fetchEnums(connection, schemaName),
       ]);
 
       const tables = this.buildTables(columns, constraints, indexes);
-      return { tables, sequences };
+      return { tables, sequences, enums };
     } catch (err) {
       if (err instanceof SchemaInspectionError) throw err;
       const message = err instanceof Error ? err.message : String(err);
@@ -221,6 +223,41 @@ export class PgSchemaInspector implements ISchemaInspector {
     }
 
     return sequences;
+  }
+
+  private async fetchEnums(
+    connection: IDatabaseConnection,
+    schemaName: string
+  ): Promise<EnumSchema[]> {
+    // Find all enum types referenced by columns of tables in the target schema.
+    // We intentionally do NOT filter by the type's own schema so that enums
+    // created in a non-public schema (but used by public tables) are captured.
+    const rows = await connection.query<{ name: string; value: string }>(
+      `SELECT t.typname AS name, e.enumlabel AS value
+       FROM pg_type t
+       JOIN pg_enum e ON e.enumtypid = t.oid
+       WHERE t.typtype = 'e'
+         AND t.oid IN (
+           SELECT DISTINCT a.atttypid
+           FROM pg_attribute a
+           JOIN pg_class c ON c.oid = a.attrelid
+           JOIN pg_namespace nc ON nc.oid = c.relnamespace
+           WHERE nc.nspname = $1
+             AND c.relkind = 'r'
+             AND a.attnum > 0
+             AND NOT a.attisdropped
+         )
+       ORDER BY t.typname, e.enumsortorder`,
+      [schemaName]
+    );
+
+    const map = new Map<string, string[]>();
+    for (const row of rows) {
+      if (!map.has(row.name)) map.set(row.name, []);
+      map.get(row.name)!.push(row.value);
+    }
+
+    return Array.from(map.entries()).map(([name, values]) => ({ name, values }));
   }
 
   private buildTables(

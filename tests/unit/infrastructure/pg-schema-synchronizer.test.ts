@@ -5,7 +5,7 @@ import { DatabaseSchema, TableSchema } from '../../../src/domain/types/schema.ty
 import { SchemaSyncError } from '../../../src/domain/errors/migration.errors';
 
 function emptySchema(): DatabaseSchema {
-  return { tables: [], sequences: [] };
+  return { tables: [], sequences: [], enums: [] };
 }
 
 function makeTable(name: string, overrides?: Partial<TableSchema>): TableSchema {
@@ -27,7 +27,7 @@ describe('PgSchemaSynchronizer', () => {
 
   describe('diff', () => {
     it('returns empty diff for identical schemas', () => {
-      const schema: DatabaseSchema = { tables: [makeTable('users')], sequences: [] };
+      const schema: DatabaseSchema = { tables: [makeTable('users')], sequences: [], enums: [] };
       const diff = sync.diff(schema, schema);
       expect(diff.tablesToCreate).toHaveLength(0);
       expect(diff.tablesToDrop).toHaveLength(0);
@@ -35,14 +35,14 @@ describe('PgSchemaSynchronizer', () => {
     });
 
     it('identifies tables to create', () => {
-      const source: DatabaseSchema = { tables: [makeTable('users')], sequences: [] };
+      const source: DatabaseSchema = { tables: [makeTable('users')], sequences: [], enums: [] };
       const diff = sync.diff(source, emptySchema());
       expect(diff.tablesToCreate).toHaveLength(1);
       expect(diff.tablesToCreate[0].name).toBe('users');
     });
 
     it('identifies tables to drop', () => {
-      const target: DatabaseSchema = { tables: [makeTable('old_table')], sequences: [] };
+      const target: DatabaseSchema = { tables: [makeTable('old_table')], sequences: [], enums: [] };
       const diff = sync.diff(emptySchema(), target);
       expect(diff.tablesToDrop).toContain('old_table');
     });
@@ -56,6 +56,7 @@ describe('PgSchemaSynchronizer', () => {
           ],
         })],
         sequences: [],
+        enums: [],
       };
       const target: DatabaseSchema = {
         tables: [makeTable('users', {
@@ -64,6 +65,7 @@ describe('PgSchemaSynchronizer', () => {
           ],
         })],
         sequences: [],
+        enums: [],
       };
       const diff = sync.diff(source, target);
       expect(diff.columnsToAdd).toHaveLength(1);
@@ -74,6 +76,7 @@ describe('PgSchemaSynchronizer', () => {
       const source: DatabaseSchema = {
         tables: [makeTable('users', { columns: [{ name: 'id', dataType: 'integer', isNullable: false, defaultValue: null, characterMaxLength: null, numericPrecision: null, numericScale: null }] })],
         sequences: [],
+        enums: [],
       };
       const target: DatabaseSchema = {
         tables: [makeTable('users', {
@@ -83,6 +86,7 @@ describe('PgSchemaSynchronizer', () => {
           ],
         })],
         sequences: [],
+        enums: [],
       };
       const diff = sync.diff(source, target);
       expect(diff.columnsToDrop).toHaveLength(1);
@@ -93,10 +97,12 @@ describe('PgSchemaSynchronizer', () => {
       const source: DatabaseSchema = {
         tables: [makeTable('users', { columns: [{ name: 'score', dataType: 'bigint', isNullable: true, defaultValue: null, characterMaxLength: null, numericPrecision: null, numericScale: null }] })],
         sequences: [],
+        enums: [],
       };
       const target: DatabaseSchema = {
         tables: [makeTable('users', { columns: [{ name: 'score', dataType: 'integer', isNullable: true, defaultValue: null, characterMaxLength: null, numericPrecision: null, numericScale: null }] })],
         sequences: [],
+        enums: [],
       };
       const diff = sync.diff(source, target);
       expect(diff.columnsToAlter).toHaveLength(1);
@@ -107,6 +113,7 @@ describe('PgSchemaSynchronizer', () => {
       const source: DatabaseSchema = {
         tables: [],
         sequences: [{ name: 'users_id_seq', startValue: 1, minValue: 1, maxValue: 9999, incrementBy: 1, cycleOption: false, lastValue: null }],
+        enums: [],
       };
       const diff = sync.diff(source, emptySchema());
       expect(diff.sequencesToCreate).toHaveLength(1);
@@ -119,26 +126,60 @@ describe('PgSchemaSynchronizer', () => {
       await sync.apply(conn, {
         tablesToCreate: [], tablesToDrop: [], columnsToAdd: [], columnsToDrop: [],
         columnsToAlter: [], constraintsToAdd: [], constraintsToDrop: [],
-        indexesToCreate: [], indexesToDrop: [], sequencesToCreate: [],
+        indexesToCreate: [], indexesToDrop: [], sequencesToCreate: [], enumsToCreate: [],
       });
       expect(conn.query).not.toHaveBeenCalled();
+      expect(conn.getClient).not.toHaveBeenCalled();
     });
 
-    it('wraps DDL in a transaction', async () => {
+    it('wraps DDL in a transaction via dedicated client', async () => {
+      const mockClient = { query: vi.fn(), release: vi.fn() };
       const conn = createMockConnection();
-      const diff = sync.diff({ tables: [makeTable('users')], sequences: [] }, emptySchema());
+      (conn.getClient as ReturnType<typeof vi.fn>).mockResolvedValue(mockClient);
+
+      const diff = sync.diff({ tables: [makeTable('users')], sequences: [], enums: [] }, emptySchema());
       await sync.apply(conn, diff);
-      const sql = (conn.query as any).mock.calls[0][0] as string;
-      expect(sql).toMatch(/BEGIN/);
-      expect(sql).toMatch(/COMMIT/);
-      expect(sql).toMatch(/CREATE TABLE/);
+
+      const calls = (mockClient.query as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0] as string);
+      expect(calls[0]).toBe('BEGIN');
+      expect(calls[calls.length - 1]).toBe('COMMIT');
+      expect(calls.some((c) => /CREATE TABLE/.test(c))).toBe(true);
+      expect(mockClient.release).toHaveBeenCalled();
     });
 
-    it('throws SchemaSyncError on query failure', async () => {
+    it('creates enum types before tables', async () => {
+      const mockClient = { query: vi.fn(), release: vi.fn() };
       const conn = createMockConnection();
-      (conn.query as any).mockRejectedValue(new Error('syntax error'));
-      const diff = sync.diff({ tables: [makeTable('users')], sequences: [] }, emptySchema());
+      (conn.getClient as ReturnType<typeof vi.fn>).mockResolvedValue(mockClient);
+
+      const table = makeTable('items', {
+        columns: [{ name: 'status', dataType: 'myenum', isNullable: false, defaultValue: null, characterMaxLength: null, numericPrecision: null, numericScale: null }],
+      });
+      const source = { tables: [table], sequences: [], enums: [{ name: 'myenum', values: ['a', 'b'] }] };
+      const diff = sync.diff(source, emptySchema());
+      await sync.apply(conn, diff);
+
+      const calls = (mockClient.query as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0] as string);
+      const beginIdx = calls.findIndex((c) => c === 'BEGIN');
+      const enumIdx = calls.findIndex((c) => /CREATE TYPE/.test(c));
+      const tableIdx = calls.findIndex((c) => /CREATE TABLE/.test(c));
+      expect(beginIdx).toBeLessThan(enumIdx);
+      expect(enumIdx).toBeLessThan(tableIdx);
+    });
+
+    it('rolls back and throws SchemaSyncError on DDL failure', async () => {
+      const mockClient = {
+        query: vi.fn()
+          .mockResolvedValueOnce({}) // BEGIN
+          .mockRejectedValueOnce(new Error('syntax error')), // first DDL fails
+        release: vi.fn(),
+      };
+      const conn = createMockConnection();
+      (conn.getClient as ReturnType<typeof vi.fn>).mockResolvedValue(mockClient);
+
+      const diff = sync.diff({ tables: [makeTable('users')], sequences: [], enums: [] }, emptySchema());
       await expect(sync.apply(conn, diff)).rejects.toThrow(SchemaSyncError);
+      expect(mockClient.release).toHaveBeenCalled();
     });
   });
 
@@ -164,7 +205,7 @@ describe('PgSchemaSynchronizer', () => {
         tablesToCreate: [], tablesToDrop: [], columnsToAdd: [], columnsToDrop: [],
         columnsToAlter: [], constraintsToAdd: [], constraintsToDrop: [],
         indexesToCreate: [{ tableName: 'users', index: { name: 'idx_email', columns: ['email'], isUnique: true, method: 'btree' } }],
-        indexesToDrop: [], sequencesToCreate: [],
+        indexesToDrop: [], sequencesToCreate: [], enumsToCreate: [],
       });
       const sql = (conn.query as any).mock.calls[0][0] as string;
       expect(sql).toMatch(/CREATE UNIQUE INDEX/);
@@ -180,7 +221,7 @@ describe('PgSchemaSynchronizer', () => {
           tablesToCreate: [], tablesToDrop: [], columnsToAdd: [], columnsToDrop: [],
           columnsToAlter: [], constraintsToAdd: [], constraintsToDrop: [],
           indexesToCreate: [{ tableName: 'users', index: { name: 'idx_x', columns: ['x'], isUnique: false, method: 'btree' } }],
-          indexesToDrop: [], sequencesToCreate: [],
+          indexesToDrop: [], sequencesToCreate: [], enumsToCreate: [],
         })
       ).resolves.not.toThrow();
       expect(warnSpy).toHaveBeenCalled();

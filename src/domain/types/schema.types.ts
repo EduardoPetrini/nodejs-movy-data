@@ -45,7 +45,13 @@ export interface SequenceSchema {
   lastValue: number | null;
 }
 
+export interface EnumSchema {
+  name: string;
+  values: string[];
+}
+
 export interface DatabaseSchema {
   tables: TableSchema[];
   sequences: SequenceSchema[];
+  enums: EnumSchema[];
 }

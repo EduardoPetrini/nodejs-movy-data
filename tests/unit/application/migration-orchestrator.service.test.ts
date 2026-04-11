@@ -16,14 +16,14 @@ function makeConfig(db = 'src'): ConnectionConfig {
 }
 
 function emptySchema(): DatabaseSchema {
-  return { tables: [], sequences: [] };
+  return { tables: [], sequences: [], enums: [] };
 }
 
 function emptyDiff(): SchemaDiff {
   return {
     tablesToCreate: [], tablesToDrop: [], columnsToAdd: [], columnsToDrop: [],
     columnsToAlter: [], constraintsToAdd: [], constraintsToDrop: [],
-    indexesToCreate: [], indexesToDrop: [], sequencesToCreate: [],
+    indexesToCreate: [], indexesToDrop: [], sequencesToCreate: [], enumsToCreate: [],
   };
 }
 
