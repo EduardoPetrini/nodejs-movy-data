@@ -181,8 +181,8 @@ export class PgSchemaSynchronizer implements ISchemaSynchronizer {
   ): Promise<void> {
     for (const seq of sequences) {
       try {
-        const rows = await source.query<{ last_value: number }>(
-          `SELECT last_value FROM ${escapeIdentifier(seq.name)}`
+        const rows = await source.query<{ last_value: string }>(
+          `SELECT last_value::text FROM ${escapeIdentifier(seq.name)}`
         );
         const lastValue = rows[0]?.last_value;
         if (lastValue !== undefined && lastValue !== null) {

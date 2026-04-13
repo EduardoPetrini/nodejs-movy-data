@@ -112,7 +112,7 @@ describe('PgSchemaSynchronizer', () => {
     it('identifies sequences to create', () => {
       const source: DatabaseSchema = {
         tables: [],
-        sequences: [{ name: 'users_id_seq', startValue: 1, minValue: 1, maxValue: 9999, incrementBy: 1, cycleOption: false, lastValue: null }],
+        sequences: [{ name: 'users_id_seq', startValue: '1', minValue: '1', maxValue: '9999', incrementBy: '1', cycleOption: false, lastValue: null }],
         enums: [],
       };
       const diff = sync.diff(source, emptySchema());
@@ -235,7 +235,7 @@ describe('PgSchemaSynchronizer', () => {
       const dest = createMockConnection();
       (source.query as any).mockResolvedValue([{ last_value: 99 }]);
       await sync.resetSequences(source, dest, [
-        { name: 'users_id_seq', startValue: 1, minValue: 1, maxValue: 9999, incrementBy: 1, cycleOption: false, lastValue: null },
+        { name: 'users_id_seq', startValue: '1', minValue: '1', maxValue: '9999', incrementBy: '1', cycleOption: false, lastValue: null },
       ]);
       expect(dest.query).toHaveBeenCalledWith(expect.stringContaining('setval'), ['users_id_seq', 99]);
     });
@@ -247,7 +247,7 @@ describe('PgSchemaSynchronizer', () => {
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       await expect(
         sync.resetSequences(source, dest, [
-          { name: 'missing_seq', startValue: 1, minValue: 1, maxValue: 9999, incrementBy: 1, cycleOption: false, lastValue: null },
+          { name: 'missing_seq', startValue: '1', minValue: '1', maxValue: '9999', incrementBy: '1', cycleOption: false, lastValue: null },
         ])
       ).resolves.not.toThrow();
       expect(warnSpy).toHaveBeenCalled();

@@ -37,12 +37,12 @@ export interface TableSchema {
 
 export interface SequenceSchema {
   name: string;
-  startValue: number;
-  minValue: number;
-  maxValue: number;
-  incrementBy: number;
+  startValue: string;
+  minValue: string;
+  maxValue: string;
+  incrementBy: string;
   cycleOption: boolean;
-  lastValue: number | null;
+  lastValue: string | null;
 }
 
 export interface EnumSchema {

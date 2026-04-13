@@ -222,10 +222,10 @@ export class PgSchemaInspector implements ISchemaInspector {
 
     const sequences: SequenceSchema[] = [];
     for (const row of rows) {
-      let lastValue: number | null = null;
+      let lastValue: string | null = null;
       try {
-        const lastRows = await connection.query<{ last_value: number }>(
-          `SELECT last_value FROM "${schemaName}"."${row.sequence_name}"`
+        const lastRows = await connection.query<{ last_value: string }>(
+          `SELECT last_value::text FROM "${schemaName}"."${row.sequence_name}"`
         );
         lastValue = lastRows[0]?.last_value ?? null;
       } catch {
@@ -234,10 +234,10 @@ export class PgSchemaInspector implements ISchemaInspector {
 
       sequences.push({
         name: row.sequence_name,
-        startValue: parseInt(row.start_value, 10),
-        minValue: parseInt(row.minimum_value, 10),
-        maxValue: parseInt(row.maximum_value, 10),
-        incrementBy: parseInt(row.increment, 10),
+        startValue: row.start_value,
+        minValue: row.minimum_value,
+        maxValue: row.maximum_value,
+        incrementBy: row.increment,
         cycleOption: row.cycle_option === 'YES',
         lastValue,
       });

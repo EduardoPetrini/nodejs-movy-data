@@ -25,13 +25,13 @@ async function copyTable(
     );
 
     let rowCount = 0;
-    let lastReportedPct = -1;
+    let lastReportedPct = 0;
     sourceStream.on('data', (chunk: Buffer) => {
       rowCount += chunk.toString().split('\n').filter((l) => l.length > 0).length;
 
       if (estimatedRows > 0) {
         const pct = Math.floor((rowCount / estimatedRows) * 10) * 10;
-        if (pct > lastReportedPct && pct < 100) {
+        if (pct > lastReportedPct) {
           lastReportedPct = pct;
           onProgress(rowCount, estimatedRows);
         }

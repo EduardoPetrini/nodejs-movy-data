@@ -12,7 +12,7 @@ function emptyDiff(): SchemaDiff {
   return {
     tablesToCreate: [], tablesToDrop: [], columnsToAdd: [], columnsToDrop: [],
     columnsToAlter: [], constraintsToAdd: [], constraintsToDrop: [],
-    indexesToCreate: [], indexesToDrop: [], sequencesToCreate: [],
+    indexesToCreate: [], indexesToDrop: [], sequencesToCreate: [], enumsToCreate: [],
   };
 }
 

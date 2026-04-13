@@ -54,6 +54,9 @@ export class WorkerPool {
         if (msg.type === 'progress' && msg.tableName !== undefined && onProgress) {
           onProgress(msg.tableName, msg.rowsCompleted ?? 0, msg.rowsTotal ?? 0);
         } else if (msg.type === 'table_done' && msg.tableName !== undefined) {
+          if (onProgress) {
+            onProgress(msg.tableName, msg.rowsCopied ?? 0, msg.rowsCopied ?? 0);
+          }
           results.push({
             tableName: msg.tableName,
             rowsCopied: msg.rowsCopied ?? 0,

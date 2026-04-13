@@ -42,6 +42,21 @@ export async function promptDatabaseType(rl: readline.Interface, label: string):
   }
 }
 
+export type AppMode = 'migrate' | 'validate';
+
+export async function promptAppMode(rl: readline.Interface): Promise<AppMode> {
+  console.log('\nWhat would you like to do?');
+  console.log('  [1] Migrate  – copy schema and data to destination');
+  console.log('  [2] Validate – compare row counts between source and destination');
+  while (true) {
+    const input = await ask(rl, 'Choice [1]: ');
+    const val = input || '1';
+    if (val === '1') return 'migrate';
+    if (val === '2') return 'validate';
+    console.log("  Please enter '1' or '2'.");
+  }
+}
+
 export type MigrationMode = 'full' | 'query';
 
 export async function promptMigrationMode(rl: readline.Interface): Promise<MigrationMode> {

@@ -27,8 +27,8 @@ export class MigrateDataUseCase {
     const workerCount = Math.min(MAX_WORKERS, sorted.length || 1);
     this.logger.info(`Starting migration with ${workerCount} parallel worker(s)...`);
 
-    const totalEstimated = sorted.reduce((sum, t) => sum + (rowEstimates.get(t) ?? 0), 0);
     const rowsDoneByTable = new Map<string, number>();
+    const completedTables = new Map<string, number>(); // tableName -> actual rows copied
 
     const result = await this.migrator.migrate(
       sourceConfig,
@@ -37,16 +37,42 @@ export class MigrateDataUseCase {
       workerCount,
       rowEstimates,
       (tableName, rowsDone, rowsTotal) => {
-        rowsDoneByTable.set(tableName, rowsDone);
+        // Completion signal: worker-pool sends (actual, actual) on table_done
+        const isCompletion = rowsTotal > 0 && rowsDone === rowsTotal;
+        if (isCompletion) {
+          completedTables.set(tableName, rowsDone);
+          rowsDoneByTable.delete(tableName);
+        } else {
+          rowsDoneByTable.set(tableName, rowsDone);
+        }
 
-        const pct = rowsTotal > 0 ? ((rowsDone / rowsTotal) * 100).toFixed(0) : '?';
-        const overallDone = [...rowsDoneByTable.values()].reduce((s, v) => s + v, 0);
+        const pct =
+          rowsTotal > 0 ? Math.min(100, Math.round((rowsDone / rowsTotal) * 100)) : 0;
+
+        // Overall numerator: actual rows for completed + current progress for in-progress
+        const completedActual = [...completedTables.values()].reduce((s, v) => s + v, 0);
+        const inProgressDone = [...rowsDoneByTable.values()].reduce((s, v) => s + v, 0);
+        const overallDone = completedActual + inProgressDone;
+
+        // Overall denominator: actual for completed + max(estimate, actual) for in-progress + estimate for not-yet-started
+        const inProgressTotal = sorted
+          .filter((t) => rowsDoneByTable.has(t))
+          .reduce((s, t) => s + Math.max(rowEstimates.get(t) ?? 0, rowsDoneByTable.get(t) ?? 0), 0);
+        const pendingEstimate = sorted
+          .filter((t) => !completedTables.has(t) && !rowsDoneByTable.has(t))
+          .reduce((s, t) => s + (rowEstimates.get(t) ?? 0), 0);
+        const overallTotal = completedActual + inProgressTotal + pendingEstimate;
+
         const overallPct =
-          totalEstimated > 0 ? ((overallDone / totalEstimated) * 100).toFixed(1) : '?';
+          overallTotal > 0
+            ? Math.min(100, (overallDone / overallTotal) * 100).toFixed(1)
+            : '?';
 
-        this.logger.info(
-          `  [${tableName}] ${rowsDone.toLocaleString()} / ~${rowsTotal.toLocaleString()} rows  ${pct}%  (overall: ${overallPct}%)`
-        );
+        if (!isCompletion) {
+          this.logger.info(
+            `  [${tableName}] ${rowsDone.toLocaleString()} / ~${rowsTotal.toLocaleString()} rows  ${pct}%  (overall: ${overallPct}%)`
+          );
+        }
       }
     );
 

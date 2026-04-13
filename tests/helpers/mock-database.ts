@@ -22,9 +22,9 @@ export function mockQueryResults<T>(
   (connection.query as ReturnType<typeof vi.fn>).mockResolvedValue(results);
 }
 
-export function mockQuerySequence<T>(
+export function mockQuerySequence(
   connection: IDatabaseConnection,
-  sequence: T[][]
+  sequence: any[][]
 ): void {
   const mock = connection.query as ReturnType<typeof vi.fn>;
   sequence.forEach((result) => {
