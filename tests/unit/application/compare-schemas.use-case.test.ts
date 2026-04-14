@@ -25,15 +25,21 @@ function makeLogger(): ILogger {
 
 describe('CompareSchemasUseCase', () => {
   let useCase: CompareSchemasUseCase;
-  let inspector: ISchemaInspector;
+  let sourceInspector: ISchemaInspector;
+  let destInspector: ISchemaInspector;
   let synchronizer: ISchemaSynchronizer;
   let logger: ILogger;
 
-  beforeEach(() => {
-    inspector = {
-      inspect: vi.fn().mockResolvedValue(emptySchema()),
+  function makeInspector(schema: DatabaseSchema = emptySchema()): ISchemaInspector {
+    return {
+      inspect: vi.fn().mockResolvedValue(schema),
       getTableRowEstimates: vi.fn().mockResolvedValue(new Map()),
     };
+  }
+
+  beforeEach(() => {
+    sourceInspector = makeInspector();
+    destInspector = makeInspector();
     synchronizer = {
       diff: vi.fn().mockReturnValue(emptyDiff()),
       apply: vi.fn(),
@@ -43,16 +49,15 @@ describe('CompareSchemasUseCase', () => {
       resetSequences: vi.fn(),
     };
     logger = makeLogger();
-    useCase = new CompareSchemasUseCase(inspector, synchronizer, logger);
+    useCase = new CompareSchemasUseCase(sourceInspector, destInspector, synchronizer, logger);
   });
 
-  it('calls inspect on both connections', async () => {
+  it('calls sourceInspector on source connection and destInspector on dest connection', async () => {
     const src = createMockConnection();
     const dst = createMockConnection();
     await useCase.execute(src, dst);
-    expect(inspector.inspect).toHaveBeenCalledTimes(2);
-    expect(inspector.inspect).toHaveBeenCalledWith(src);
-    expect(inspector.inspect).toHaveBeenCalledWith(dst);
+    expect(sourceInspector.inspect).toHaveBeenCalledWith(src);
+    expect(destInspector.inspect).toHaveBeenCalledWith(dst);
   });
 
   it('passes source and target schemas to diff', async () => {
@@ -62,9 +67,8 @@ describe('CompareSchemasUseCase', () => {
       enums: [],
     };
     const dstSchema = emptySchema();
-    (inspector.inspect as any)
-      .mockResolvedValueOnce(srcSchema)
-      .mockResolvedValueOnce(dstSchema);
+    (sourceInspector.inspect as any).mockResolvedValueOnce(srcSchema);
+    (destInspector.inspect as any).mockResolvedValueOnce(dstSchema);
 
     const src = createMockConnection();
     const dst = createMockConnection();
@@ -77,7 +81,8 @@ describe('CompareSchemasUseCase', () => {
     const srcSchema = emptySchema();
     const dstSchema = emptySchema();
     const diff = emptyDiff();
-    (inspector.inspect as any).mockResolvedValueOnce(srcSchema).mockResolvedValueOnce(dstSchema);
+    (sourceInspector.inspect as any).mockResolvedValueOnce(srcSchema);
+    (destInspector.inspect as any).mockResolvedValueOnce(dstSchema);
     (synchronizer.diff as any).mockReturnValue(diff);
 
     const src = createMockConnection();

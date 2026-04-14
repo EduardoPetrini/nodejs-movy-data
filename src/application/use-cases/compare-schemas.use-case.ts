@@ -13,7 +13,8 @@ export interface CompareSchemaResult {
 
 export class CompareSchemasUseCase {
   constructor(
-    private readonly inspector: ISchemaInspector,
+    private readonly sourceInspector: ISchemaInspector,
+    private readonly destInspector: ISchemaInspector,
     private readonly synchronizer: ISchemaSynchronizer,
     private readonly logger: ILogger
   ) {}
@@ -23,10 +24,10 @@ export class CompareSchemasUseCase {
     destConnection: IDatabaseConnection
   ): Promise<CompareSchemaResult> {
     this.logger.info('Inspecting source schema...');
-    const sourceSchema = await this.inspector.inspect(sourceConnection);
+    const sourceSchema = await this.sourceInspector.inspect(sourceConnection);
 
     this.logger.info('Inspecting destination schema...');
-    const targetSchema = await this.inspector.inspect(destConnection);
+    const targetSchema = await this.destInspector.inspect(destConnection);
 
     this.logger.info(
       `Source: ${sourceSchema.tables.length} tables, ${sourceSchema.sequences.length} sequences`

@@ -64,8 +64,9 @@ export class MigrationOrchestrator {
 
       // Step 2: Inspect and diff schemas
       const inspector = sourceAdapters.createSchemaInspector();
+      const destInspector = destAdapters.createSchemaInspector();
       const synchronizer = destAdapters.createSchemaSynchronizer();
-      const compareSchemas = new CompareSchemasUseCase(inspector, synchronizer, this.logger);
+      const compareSchemas = new CompareSchemasUseCase(inspector, destInspector, synchronizer, this.logger);
       const { sourceSchema, diff } = await compareSchemas.execute(sourceConnection, destConnection);
 
       // Step 3: Sync schema (without indexes)
