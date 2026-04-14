@@ -28,8 +28,8 @@ export class MigrationOrchestrator {
     const sourceConnection = sourceAdapters.createConnection(sourceConfig);
     const destConnection = destAdapters.createConnection(destConfig);
 
-    // Admin connection targets 'postgres' db for database creation
-    const adminConfig: ConnectionConfig = { ...destConfig, database: 'postgres' };
+    // Admin connection targets the system DB (e.g. 'postgres' for PG, 'mysql' for MySQL)
+    const adminConfig: ConnectionConfig = { ...destConfig, database: destAdapters.adminDatabase };
     const adminConnection = destAdapters.createConnection(adminConfig);
 
     try {
@@ -50,7 +50,7 @@ export class MigrationOrchestrator {
       );
 
       // Step 1: Create database if needed
-      const createDb = new CreateDatabaseUseCase(this.logger);
+      const createDb = new CreateDatabaseUseCase(destAdapters, this.logger);
       await createDb.execute(adminConnection, destConfig.database);
 
       // Now connect to the actual dest database
@@ -76,9 +76,9 @@ export class MigrationOrchestrator {
       const tableNames = sourceSchema.tables.map((t) => t.name);
       await synchronizer.disableTriggers(destConnection, tableNames);
 
-      // Step 5: Migrate data
+      // Step 5: Migrate data using the appropriate migrator for the source↔dest pair
       const rowEstimates = await inspector.getTableRowEstimates(sourceConnection);
-      const dataMigrator = sourceAdapters.createDataMigrator();
+      const dataMigrator = this.registry.getDataMigrator(sourceConfig.type, destConfig.type);
       const migrateData = new MigrateDataUseCase(dataMigrator, this.logger);
       const result = await migrateData.execute(sourceConfig, destConfig, tableNames, rowEstimates);
 

@@ -1,5 +1,7 @@
+import type { PoolClient } from 'pg';
 import { IDatabaseConnection } from '../../../domain/ports/database.port';
 import { IQueryAnalyzer, QueryColumn } from '../../../domain/ports/query-analyzer.port';
+import { PgConnection } from './pg-connection.adapter';
 
 // Maps common PostgreSQL type OIDs to SQL type names.
 // These are stable built-in OIDs that do not change across Postgres versions.
@@ -26,7 +28,9 @@ const BUILTIN_TYPE_MAP: Record<number, string> = {
 
 export class PgQueryAnalyzer implements IQueryAnalyzer {
   async analyzeQuery(connection: IDatabaseConnection, query: string): Promise<QueryColumn[]> {
-    const client = await connection.getClient();
+    // PgQueryAnalyzer requires a PgConnection to access field metadata.
+    const pgConn = connection as PgConnection;
+    const client: PoolClient = await pgConn.getPoolClient();
     try {
       // Run with LIMIT 0 to get column metadata without transferring data
       const wrappedSql = `SELECT * FROM (${query}) AS _movy_q LIMIT 0`;
@@ -52,10 +56,7 @@ export class PgQueryAnalyzer implements IQueryAnalyzer {
     }
   }
 
-  private async resolveTypeName(
-    client: import('pg').PoolClient,
-    typeOid: number
-  ): Promise<string> {
+  private async resolveTypeName(client: PoolClient, typeOid: number): Promise<string> {
     const builtin = BUILTIN_TYPE_MAP[typeOid];
     if (builtin) return builtin;
 

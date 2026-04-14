@@ -42,6 +42,8 @@ function makeConnection(): IDatabaseConnection {
 
 function makeAdapterSet(): DatabaseAdapterSet {
   return {
+    adminDatabase: 'postgres',
+    ensureDatabase: vi.fn().mockResolvedValue(false),
     createConnection: vi.fn(() => makeConnection()),
     createSchemaInspector: vi.fn(() => ({
       inspect: vi.fn().mockResolvedValue(emptySchema()),

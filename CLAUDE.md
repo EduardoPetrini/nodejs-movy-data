@@ -12,6 +12,9 @@ npm run dev                  # ts-node-dev with hot reload
 # Build
 npm run build                # tsc → dist/
 
+# Type check (no emit)
+npx tsc --noEmit
+
 # Tests
 npm test                     # vitest run (all tests, single pass)
 npm run test:watch           # vitest watch mode
@@ -45,6 +48,7 @@ All database interactions are behind interfaces in `src/domain/ports/`:
 | `ISchemaSynchronizer` | Apply schema diffs, manage triggers, create indexes, reset sequences |
 | `ISchemaTranslator` | Translate column types and defaults between DB dialects |
 | `IDataMigrator` | Copy row data from source to destination |
+| `IQueryAnalyzer` | Analyze a SQL query to infer result column names and types |
 | `ILogger` | Structured logging |
 
 ### Adapter registration
@@ -52,6 +56,15 @@ All database interactions are behind interfaces in `src/domain/ports/`:
 `DatabaseAdapterRegistry` (`src/infrastructure/database/registry.ts`) maps a `DatabaseType` enum value to a `DatabaseAdapterSet` (a factory that creates the five adapter instances for that DB). Only PostgreSQL is currently registered; MySQL, MSSQL, and Snowflake have placeholder `README.md` stubs.
 
 To add a new database, implement `DatabaseAdapterSet` and call `registry.register(DatabaseType.X, new XAdapterSet())` in `cli.ts`.
+
+### CLI app modes
+
+The CLI prompts the user to choose an app mode at startup:
+
+- **migrate** — full migration (schema + data). Sub-modes: `full` (entire database) or `query` (custom SQL → new table via `MigrateQueryUseCase`). After migration, optionally runs row count validation.
+- **validate** — connects to both databases and runs `ValidateCountsUseCase` to compare per-table row counts without migrating anything.
+
+Logs are written to both the console and a timestamped file under `logs/` (`movy_YYYY-MM-DD_HH-MM-SS_src_to_dst.log`) via `TeeLogger`.
 
 ### Migration flow (MigrationOrchestrator)
 

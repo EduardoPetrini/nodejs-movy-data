@@ -2,24 +2,31 @@ import * as path from 'path';
 import * as readline from 'readline/promises';
 import { stdin as input, stdout as output } from 'process';
 import {
-  promptConnectionConfig,
-  promptMigrationMode,
-  promptQueryMigration,
   promptAppMode,
+  promptConnectionConfig,
+  promptExecutionReview,
+  promptMigrationMode,
+  promptPressEnterToExit,
+  promptQueryMigration,
+  renderCliWelcome,
 } from './prompt';
 import { DatabaseAdapterRegistry } from '../../infrastructure/database/registry';
-import { DatabaseType } from '../../domain/types/connection.types';
+import { ConnectionConfig, DatabaseType } from '../../domain/types/connection.types';
 import { ConsoleLogger } from '../../infrastructure/logging/console-logger.adapter';
 import { FileLogger } from '../../infrastructure/logging/file-logger.adapter';
 import { TeeLogger } from '../../infrastructure/logging/tee-logger.adapter';
 import { PgAdapterSet } from '../../infrastructure/database/pg/pg-adapter-set';
+import { MysqlAdapterSet } from '../../infrastructure/database/mysql/mysql-adapter-set';
 import { PgQueryAnalyzer } from '../../infrastructure/database/pg/pg-query-analyzer.adapter';
+import { MysqlToPostgresTranslator } from '../../infrastructure/database/mysql/mysql-to-postgres-translator.adapter';
+import { PostgresToMysqlTranslator } from '../../infrastructure/database/pg/postgres-to-mysql-translator.adapter';
+import { CrossDbDataMigrator } from '../../infrastructure/migration/cross-db-data-migrator';
 import { MigrationOrchestrator } from '../../application/services/migration-orchestrator.service';
 import { MigrateQueryUseCase } from '../../application/use-cases/migrate-query.use-case';
 import { ValidateCountsUseCase } from '../../application/use-cases/validate-counts.use-case';
+import { CreateDatabaseUseCase } from '../../application/use-cases/create-database.use-case';
 import { UnsupportedDatabaseError } from '../../domain/errors/migration.errors';
 import { retryWithBackoff } from '../../shared/utils';
-import { ConnectionConfig } from '../../domain/types/connection.types';
 import { ILogger } from '../../domain/ports/logger.port';
 
 const MAX_CONNECT_RETRIES = 3;
@@ -27,7 +34,32 @@ const CONNECT_BASE_DELAY_MS = 1000;
 
 function buildRegistry(): DatabaseAdapterRegistry {
   const registry = new DatabaseAdapterRegistry();
+
   registry.register(DatabaseType.POSTGRES, new PgAdapterSet());
+  registry.register(DatabaseType.MYSQL, new MysqlAdapterSet());
+
+  registry.registerTranslator(
+    DatabaseType.MYSQL,
+    DatabaseType.POSTGRES,
+    () => new MysqlToPostgresTranslator()
+  );
+  registry.registerTranslator(
+    DatabaseType.POSTGRES,
+    DatabaseType.MYSQL,
+    () => new PostgresToMysqlTranslator()
+  );
+
+  registry.registerDataMigrator(
+    DatabaseType.MYSQL,
+    DatabaseType.POSTGRES,
+    () => new CrossDbDataMigrator()
+  );
+  registry.registerDataMigrator(
+    DatabaseType.POSTGRES,
+    DatabaseType.MYSQL,
+    () => new CrossDbDataMigrator()
+  );
+
   return registry;
 }
 
@@ -42,7 +74,7 @@ function buildLogFilePath(sourceDb: string, destDb: string): string {
 }
 
 async function runValidation(
-  rl: readline.Interface,
+  _rl: readline.Interface,
   sourceConfig: ConnectionConfig,
   destConfig: ConnectionConfig,
   registry: DatabaseAdapterRegistry,
@@ -80,27 +112,39 @@ async function runValidation(
 
 export async function runCli(): Promise<void> {
   const consoleLogger = new ConsoleLogger('movy');
-  const rl = readline.createInterface({ input, output });
-
-  console.log('\n=== Movy Data Migration ===\n');
-
+  const rl = readline.createInterface({ input, output, historySize: 0 });
   let fileLogger: FileLogger | null = null;
 
   try {
-    const appMode = await promptAppMode(rl);
+    renderCliWelcome();
 
-    const sourceConfig = await promptConnectionConfig(rl, 'Source');
-    const destConfig = await promptConnectionConfig(rl, 'Destination', {
-      database: sourceConfig.database,
+    const registry = buildRegistry();
+    const supportedTypes = registry.listTypes();
+    const appMode = await promptAppMode(rl);
+    const source = await promptConnectionConfig(rl, 'Source', { supportedTypes });
+    const destination = await promptConnectionConfig(rl, 'Destination', {
+      supportedTypes,
+      defaultDatabase: source.config.database,
     });
 
-    // Set up file logging now that we know the DB names
+    let migrationMode: 'full' | 'query' | undefined;
+    if (appMode === 'migrate') {
+      migrationMode = await promptMigrationMode(rl);
+    }
+
+    const review = await promptExecutionReview(rl, {
+      appMode,
+      migrationMode,
+      source,
+      destination,
+    });
+
+    const sourceConfig = source.config;
+    const destConfig = destination.config;
     const logFilePath = buildLogFilePath(sourceConfig.database, destConfig.database);
     fileLogger = new FileLogger(logFilePath);
     const logger = new TeeLogger([consoleLogger, fileLogger]);
     logger.info(`Log file: ${path.resolve(logFilePath)}`);
-
-    const registry = buildRegistry();
 
     try {
       registry.get(sourceConfig.type);
@@ -115,14 +159,12 @@ export async function runCli(): Promise<void> {
 
     if (appMode === 'validate') {
       await runValidation(rl, sourceConfig, destConfig, registry, logger);
-      await rl.question('\nValidation complete. Press Enter to exit...');
+      await promptPressEnterToExit(rl, 'Validation complete. Press Enter to exit...');
       rl.close();
       process.exit(0);
     }
 
-    // --- Migration mode ---
-    const mode = await promptMigrationMode(rl);
-
+    const mode = migrationMode!;
     let success = false;
 
     if (mode === 'query') {
@@ -135,11 +177,9 @@ export async function runCli(): Promise<void> {
 
       const sourceAdapters = registry.get(sourceConfig.type);
       const destAdapters = registry.get(destConfig.type);
-
       const sourceConnection = sourceAdapters.createConnection(sourceConfig);
       const destConnection = destAdapters.createConnection(destConfig);
-
-      const adminConfig = { ...destConfig, database: 'postgres' };
+      const adminConfig = { ...destConfig, database: destAdapters.adminDatabase };
       const adminConnection = destAdapters.createConnection(adminConfig);
 
       try {
@@ -159,8 +199,7 @@ export async function runCli(): Promise<void> {
             logger.warn(`Admin connection attempt ${attempt} failed: ${err.message}. Retrying in ${delayMs}ms...`)
         );
 
-        const { CreateDatabaseUseCase } = await import('../../application/use-cases/create-database.use-case');
-        const createDb = new CreateDatabaseUseCase(logger);
+        const createDb = new CreateDatabaseUseCase(destAdapters, logger);
         await createDb.execute(adminConnection, destConfig.database);
 
         await retryWithBackoff(
@@ -174,7 +213,6 @@ export async function runCli(): Promise<void> {
         const analyzer = new PgQueryAnalyzer();
         const synchronizer = destAdapters.createSchemaSynchronizer();
         const migrateQuery = new MigrateQueryUseCase(analyzer, synchronizer, logger);
-
         const result = await migrateQuery.execute(
           sourceConnection,
           destConnection,
@@ -197,14 +235,12 @@ export async function runCli(): Promise<void> {
 
     if (success) {
       logger.info('Migration completed successfully.');
-
-      const runValidate = await rl.question('\nRun row count validation? [Y/n]: ');
-      if (!runValidate.trim() || runValidate.trim().toLowerCase() === 'y') {
+      if (review.runValidationAfterMigration) {
         await runValidation(rl, sourceConfig, destConfig, registry, logger);
       }
     }
 
-    await rl.question('\nDone. Press Enter to exit...');
+    await promptPressEnterToExit(rl, 'Done. Press Enter to exit...');
     rl.close();
     process.exit(success ? 0 : 1);
   } catch (err) {

@@ -7,12 +7,15 @@ import {
 import { DatabaseType } from '../../../src/domain/types/connection.types';
 import { UnsupportedDatabaseError } from '../../../src/domain/errors/migration.errors';
 
-function makeFakeAdapterSet(): DatabaseAdapterSet {
+function makeFakeAdapterSet(overrides: Partial<DatabaseAdapterSet> = {}): DatabaseAdapterSet {
   return {
+    adminDatabase: 'postgres',
     createConnection: vi.fn(),
     createSchemaInspector: vi.fn(),
     createSchemaSynchronizer: vi.fn(),
-    createDataMigrator: vi.fn(),
+    createDataMigrator: vi.fn().mockReturnValue({ migrate: vi.fn() }),
+    ensureDatabase: vi.fn().mockResolvedValue(false),
+    ...overrides,
   };
 }
 
@@ -60,21 +63,88 @@ describe('DatabaseAdapterRegistry', () => {
       expect(translator).toBeInstanceOf(PassthroughSchemaTranslator);
     });
 
-    it('returns PassthroughSchemaTranslator when adapter has no createSchemaTranslator', () => {
+    it('returns PassthroughSchemaTranslator when no translator is registered', () => {
       registry.register(DatabaseType.POSTGRES, makeFakeAdapterSet());
       registry.register(DatabaseType.MYSQL, makeFakeAdapterSet());
       const translator = registry.getTranslator(DatabaseType.POSTGRES, DatabaseType.MYSQL);
       expect(translator).toBeInstanceOf(PassthroughSchemaTranslator);
     });
 
-    it('uses createSchemaTranslator from source adapter set when available', () => {
+    it('uses registered translator from registerTranslator()', () => {
+      registry.register(DatabaseType.POSTGRES, makeFakeAdapterSet());
+      registry.register(DatabaseType.MYSQL, makeFakeAdapterSet());
+
       const fakeTranslator = new PassthroughSchemaTranslator();
-      const set = { ...makeFakeAdapterSet(), createSchemaTranslator: vi.fn(() => fakeTranslator) };
+      const factory = vi.fn(() => fakeTranslator);
+      registry.registerTranslator(DatabaseType.POSTGRES, DatabaseType.MYSQL, factory);
+
+      const translator = registry.getTranslator(DatabaseType.POSTGRES, DatabaseType.MYSQL);
+      expect(translator).toBe(fakeTranslator);
+      expect(factory).toHaveBeenCalledOnce();
+    });
+
+    it('registered translator takes priority over createSchemaTranslator()', () => {
+      const deprecatedTranslator = new PassthroughSchemaTranslator();
+      const set = makeFakeAdapterSet({
+        createSchemaTranslator: vi.fn(() => deprecatedTranslator),
+      });
       registry.register(DatabaseType.POSTGRES, set);
       registry.register(DatabaseType.MYSQL, makeFakeAdapterSet());
+
+      const explicitTranslator = new PassthroughSchemaTranslator();
+      registry.registerTranslator(DatabaseType.POSTGRES, DatabaseType.MYSQL, () => explicitTranslator);
+
+      const result = registry.getTranslator(DatabaseType.POSTGRES, DatabaseType.MYSQL);
+      expect(result).toBe(explicitTranslator);
+      expect(set.createSchemaTranslator).not.toHaveBeenCalled();
+    });
+
+    it('falls back to deprecated createSchemaTranslator() when no explicit translator registered', () => {
+      const fakeTranslator = new PassthroughSchemaTranslator();
+      const set = makeFakeAdapterSet({
+        createSchemaTranslator: vi.fn(() => fakeTranslator),
+      });
+      registry.register(DatabaseType.POSTGRES, set);
+      registry.register(DatabaseType.MYSQL, makeFakeAdapterSet());
+
       const translator = registry.getTranslator(DatabaseType.POSTGRES, DatabaseType.MYSQL);
       expect(translator).toBe(fakeTranslator);
       expect(set.createSchemaTranslator).toHaveBeenCalled();
+    });
+  });
+
+  describe('getDataMigrator', () => {
+    it('uses same-type adapter createDataMigrator() when source equals dest', () => {
+      const pgMigrator = { migrate: vi.fn() };
+      const pgSet = makeFakeAdapterSet({ createDataMigrator: vi.fn().mockReturnValue(pgMigrator) });
+      registry.register(DatabaseType.POSTGRES, pgSet);
+
+      const migrator = registry.getDataMigrator(DatabaseType.POSTGRES, DatabaseType.POSTGRES);
+      expect(migrator).toBe(pgMigrator);
+      expect(pgSet.createDataMigrator).toHaveBeenCalled();
+    });
+
+    it('returns registered migrator from registerDataMigrator()', () => {
+      registry.register(DatabaseType.POSTGRES, makeFakeAdapterSet());
+      registry.register(DatabaseType.MYSQL, makeFakeAdapterSet());
+
+      const crossMigrator = { migrate: vi.fn() };
+      const factory = vi.fn(() => crossMigrator);
+      registry.registerDataMigrator(DatabaseType.MYSQL, DatabaseType.POSTGRES, factory);
+
+      const migrator = registry.getDataMigrator(DatabaseType.MYSQL, DatabaseType.POSTGRES);
+      expect(migrator).toBe(crossMigrator);
+      expect(factory).toHaveBeenCalledOnce();
+    });
+
+    it('falls back to dest createDataMigrator() when no cross-db migrator registered', () => {
+      const pgMigrator = { migrate: vi.fn() };
+      const pgSet = makeFakeAdapterSet({ createDataMigrator: vi.fn().mockReturnValue(pgMigrator) });
+      registry.register(DatabaseType.MYSQL, makeFakeAdapterSet());
+      registry.register(DatabaseType.POSTGRES, pgSet);
+
+      const migrator = registry.getDataMigrator(DatabaseType.MYSQL, DatabaseType.POSTGRES);
+      expect(migrator).toBe(pgMigrator);
     });
   });
 

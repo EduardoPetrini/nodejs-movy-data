@@ -1,5 +1,5 @@
 import { Pool, PoolClient } from 'pg';
-import { IDatabaseConnection } from '../../../domain/ports/database.port';
+import { IDatabaseConnection, IDbClient } from '../../../domain/ports/database.port';
 import { ConnectionConfig } from '../../../domain/types/connection.types';
 import { ConnectionError } from '../../../domain/errors/migration.errors';
 
@@ -39,7 +39,25 @@ export class PgConnection implements IDatabaseConnection {
     }
   }
 
-  async getClient(): Promise<PoolClient> {
+  /**
+   * Returns a generic IDbClient wrapping a pg PoolClient.
+   * Used by PgSchemaSynchronizer for transactional DDL.
+   */
+  async getClient(): Promise<IDbClient> {
+    try {
+      const pgClient = await this.pool.connect();
+      return wrapPgClient(pgClient);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new ConnectionError(`Failed to acquire client: ${message}`);
+    }
+  }
+
+  /**
+   * Returns the raw pg PoolClient for PG-specific streaming operations
+   * (e.g. pg-copy-streams). Only use where PG-specific behaviour is required.
+   */
+  async getPoolClient(): Promise<PoolClient> {
     try {
       return await this.pool.connect();
     } catch (err) {
@@ -51,4 +69,14 @@ export class PgConnection implements IDatabaseConnection {
   async end(): Promise<void> {
     await this.pool.end();
   }
+}
+
+function wrapPgClient(pgClient: PoolClient): IDbClient {
+  return {
+    query: async <T>(sql: string, params?: unknown[]): Promise<T[]> => {
+      const result = await pgClient.query(sql, params as unknown[]);
+      return result.rows as T[];
+    },
+    release: (err?: Error) => pgClient.release(err),
+  };
 }

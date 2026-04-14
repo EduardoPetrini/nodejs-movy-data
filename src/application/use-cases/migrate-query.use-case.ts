@@ -1,11 +1,13 @@
 import { pipeline } from 'stream/promises';
 import { from as copyFrom, to as copyTo } from 'pg-copy-streams';
+import type { PoolClient } from 'pg';
 import { IQueryAnalyzer, QueryColumn } from '../../domain/ports/query-analyzer.port';
 import { ISchemaSynchronizer } from '../../domain/ports/schema-synchronizer.port';
 import { IDatabaseConnection } from '../../domain/ports/database.port';
 import { ILogger } from '../../domain/ports/logger.port';
 import { TableSchema, ColumnSchema } from '../../domain/types/schema.types';
 import { SchemaDiff, MigrationResult } from '../../domain/types/migration.types';
+import { PgConnection } from '../../infrastructure/database/pg/pg-connection.adapter';
 
 // Map analyzed type names to valid PostgreSQL DDL type names
 function toDdlType(typeName: string): string {
@@ -98,7 +100,7 @@ export class MigrateQueryUseCase {
     await this.synchronizer.apply(destConnection, diff);
     this.logger.info(`Table "${targetTableName}" created.`);
 
-    // Step 4: Stream data via COPY
+    // Step 4: Stream data via COPY (PostgreSQL-specific)
     this.logger.info(`Copying data from query into "${targetTableName}"...`);
     const rowsCopied = await this.streamData(sourceConnection, destConnection, query, targetTableName);
 
@@ -118,8 +120,13 @@ export class MigrateQueryUseCase {
     query: string,
     targetTableName: string
   ): Promise<number> {
-    const sourceClient = await sourceConn.getClient();
-    const destClient = await destConn.getClient();
+    // This method requires PostgreSQL connections with COPY stream support.
+    // The CLI already guards this behind a PG-source-only check.
+    const sourcePgConn = sourceConn as PgConnection;
+    const destPgConn = destConn as PgConnection;
+
+    const sourceClient: PoolClient = await sourcePgConn.getPoolClient();
+    const destClient: PoolClient = await destPgConn.getPoolClient();
 
     try {
       const sourceStream = sourceClient.query(copyTo(`COPY (${query}) TO STDOUT`));
