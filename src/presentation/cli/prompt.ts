@@ -4,7 +4,8 @@ import { stdin as input, stdout as output } from 'process';
 import { ConnectionConfig, DatabaseType } from '../../domain/types/connection.types';
 
 type ValidationResult = string | undefined;
-type PasswordSource = 'prompt' | 'env';
+
+export type EnvRole = 'SOURCE' | 'TARGET';
 
 interface PromptOption<T> {
   label: string;
@@ -35,7 +36,8 @@ interface ConfirmPromptOptions {
 
 export interface PromptedConnectionConfig {
   config: ConnectionConfig;
-  passwordSource: PasswordSource;
+  /** Set of ConnectionConfig field names whose values were loaded from environment variables. */
+  envSources: ReadonlySet<keyof ConnectionConfig>;
 }
 
 export interface CliExecutionReview {
@@ -357,6 +359,85 @@ function validatePort(value: string): ValidationResult {
   return parsePortValue(value) === null ? 'Port must be a number between 1 and 65535.' : undefined;
 }
 
+// ---------------------------------------------------------------------------
+// Environment variable helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Builds an env var key following the pattern:
+ *   {SOURCE|TARGET}_{DBTYPE}_{FIELD}
+ *
+ * Examples: SOURCE_MYSQL_HOSTNAME, TARGET_POSTGRES_PASSWORD
+ */
+function buildEnvKey(role: EnvRole, type: DatabaseType, field: string): string {
+  return `${role}_${type.toUpperCase()}_${field}`;
+}
+
+interface EnvConfig {
+  host?: string;
+  port?: number;
+  user?: string;
+  password?: string;
+  database?: string;
+}
+
+/**
+ * Reads connection fields from environment variables for a given role+type.
+ * Supported variables (replace {ROLE} with SOURCE or TARGET, {TYPE} with
+ * POSTGRES, MYSQL, MSSQL, or SNOWFLAKE):
+ *   {ROLE}_{TYPE}_HOSTNAME
+ *   {ROLE}_{TYPE}_PORT
+ *   {ROLE}_{TYPE}_USERNAME
+ *   {ROLE}_{TYPE}_PASSWORD
+ *   {ROLE}_{TYPE}_DATABASE
+ */
+function readEnvConfig(role: EnvRole, type: DatabaseType): EnvConfig {
+  const get = (field: string): string | undefined =>
+    process.env[buildEnvKey(role, type, field)];
+  const result: EnvConfig = {};
+
+  const host = get('HOSTNAME');
+  if (host !== undefined) result.host = host;
+
+  const portStr = get('PORT');
+  if (portStr !== undefined) {
+    const port = parsePortValue(portStr);
+    if (port !== null) result.port = port;
+  }
+
+  const user = get('USERNAME');
+  if (user !== undefined) result.user = user;
+
+  const password = get('PASSWORD');
+  if (password !== undefined) result.password = password;
+
+  const database = get('DATABASE');
+  if (database !== undefined) result.database = database;
+
+  return result;
+}
+
+/**
+ * Scans environment variables to detect which database type has been
+ * configured for the given role. Returns the first match among
+ * supportedTypes, or null if none is detected.
+ */
+function detectDbTypeFromEnv(
+  role: EnvRole,
+  supportedTypes: readonly DatabaseType[]
+): DatabaseType | null {
+  const fields = ['HOSTNAME', 'PORT', 'USERNAME', 'PASSWORD', 'DATABASE'];
+  for (const type of supportedTypes) {
+    const hasAny = fields.some(
+      (field) => process.env[buildEnvKey(role, type, field)] !== undefined
+    );
+    if (hasAny) return type;
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+
 export function renderCliWelcome(): void {
   console.log('');
   console.log(bold('Movy Data Migration'));
@@ -390,17 +471,21 @@ export function maskSecret(secret: string): string {
 export function formatConnectionSummary(
   label: string,
   config: ConnectionConfig,
-  passwordSource: PasswordSource
+  envSources: ReadonlySet<keyof ConnectionConfig>
 ): string {
-  const passwordHint = passwordSource === 'env' ? 'loaded from env' : 'hidden input';
+  const envTag = (field: keyof ConnectionConfig): string =>
+    envSources.has(field) ? ` ${muted('(env)')}` : '';
+  const passwordNote = envSources.has('password')
+    ? muted(' (env)')
+    : muted(' (hidden input)');
   return [
     `${bold(label)}`,
-    `  Type: ${config.type}`,
-    `  Host: ${config.host}`,
-    `  Port: ${config.port}`,
-    `  User: ${config.user}`,
-    `  Password: ${maskSecret(config.password)} ${muted(`(${passwordHint})`)}`,
-    `  Database: ${config.database}`,
+    `  Type:     ${config.type}${envTag('type')}`,
+    `  Host:     ${config.host}${envTag('host')}`,
+    `  Port:     ${config.port}${envTag('port')}`,
+    `  User:     ${config.user}${envTag('user')}`,
+    `  Password: ${maskSecret(config.password)}${passwordNote}`,
+    `  Database: ${config.database}${envTag('database')}`,
   ].join('\n');
 }
 
@@ -479,54 +564,126 @@ export async function promptConnectionConfig(
   options: {
     supportedTypes: readonly DatabaseType[];
     defaultDatabase?: string;
+    /** Set to 'SOURCE' or 'TARGET' to enable reading credentials from env vars. */
+    envRole?: EnvRole;
   }
 ): Promise<PromptedConnectionConfig> {
+  const { envRole } = options;
+  const envSources = new Set<keyof ConnectionConfig>();
+
   console.log(`\n${bold(`${label} Connection`)}`);
-  console.log(muted('Use Enter to accept defaults when they fit your environment.'));
 
-  const type = await promptDatabaseType(rl, label, options.supportedTypes);
-  const host = await promptText(rl, {
-    label: 'Host',
-    defaultValue: '127.0.0.1',
-    required: true,
-  });
-  const portValue = await promptText(rl, {
-    label: 'Port',
-    defaultValue: String(getDefaultPort(type)),
-    required: true,
-    validate: validatePort,
-  });
-  const port = parsePortValue(portValue);
-  if (port === null) {
-    throw new Error('Port must be a number between 1 and 65535.');
+  // ── Ask how the user wants to supply credentials ───────────────────────────
+  let useEnv = false;
+  if (envRole) {
+    const configSource = await promptSelect<'env' | 'manual'>(rl, {
+      label: 'How do you want to configure this connection?',
+      helpText: `Env vars follow the pattern ${envRole}_<TYPE>_<FIELD> (e.g. ${envRole}_POSTGRES_HOSTNAME).`,
+      defaultValue: 'manual',
+      options: [
+        { label: 'Load from environment variables', value: 'env', hint: `${envRole}_<TYPE>_<FIELD>` },
+        { label: 'Enter manually', value: 'manual', hint: 'type each value at the prompts' },
+      ],
+    });
+    useEnv = configSource === 'env';
   }
 
-  const user = await promptText(rl, {
-    label: 'User',
-    required: true,
-  });
+  if (!useEnv) {
+    console.log(muted('Use Enter to accept defaults when they fit your environment.'));
+  }
 
-  const passwordEnvVar = label === 'Source' ? 'PGPASSWORD' : 'DEST_PGPASSWORD';
-  const envPassword = process.env[passwordEnvVar];
-  let passwordSource: PasswordSource = 'env';
-  let password = envPassword ?? '';
+  // ── Database type ──────────────────────────────────────────────────────────
+  const envType =
+    useEnv && envRole ? detectDbTypeFromEnv(envRole, options.supportedTypes) : null;
 
-  if (envPassword === undefined) {
-    password = await promptPassword(rl, 'Password');
-    passwordSource = 'prompt';
+  let type: DatabaseType;
+  if (envType !== null) {
+    type = envType;
+    console.log(
+      `${bold(`${label} database type`)} ${muted('→')} ${accent(type)} ${muted('(env)')}`
+    );
+    envSources.add('type');
   } else {
-    console.log(accent(`${label} password loaded from ${passwordEnvVar}.`));
+    type = await promptDatabaseType(rl, label, options.supportedTypes);
   }
 
-  const database = await promptText(rl, {
-    label: 'Database',
-    defaultValue: options.defaultDatabase,
-    required: true,
-  });
+  // ── Remaining fields from env (now that we know the type) ─────────────────
+  const envConfig: EnvConfig = useEnv && envRole ? readEnvConfig(envRole, type) : {};
+
+  // ── Host ───────────────────────────────────────────────────────────────────
+  let host: string;
+  if (envConfig.host !== undefined) {
+    host = envConfig.host;
+    console.log(`${bold('Host')} ${muted('→')} ${accent(host)} ${muted('(env)')}`);
+    envSources.add('host');
+  } else {
+    host = await promptText(rl, {
+      label: 'Host',
+      defaultValue: '127.0.0.1',
+      required: true,
+    });
+  }
+
+  // ── Port ───────────────────────────────────────────────────────────────────
+  let port: number;
+  if (envConfig.port !== undefined) {
+    port = envConfig.port;
+    console.log(`${bold('Port')} ${muted('→')} ${accent(String(port))} ${muted('(env)')}`);
+    envSources.add('port');
+  } else {
+    const portValue = await promptText(rl, {
+      label: 'Port',
+      defaultValue: String(getDefaultPort(type)),
+      required: true,
+      validate: validatePort,
+    });
+    const parsedPort = parsePortValue(portValue);
+    if (parsedPort === null) {
+      throw new Error('Port must be a number between 1 and 65535.');
+    }
+    port = parsedPort;
+  }
+
+  // ── User ───────────────────────────────────────────────────────────────────
+  let user: string;
+  if (envConfig.user !== undefined) {
+    user = envConfig.user;
+    console.log(`${bold('User')} ${muted('→')} ${accent(user)} ${muted('(env)')}`);
+    envSources.add('user');
+  } else {
+    user = await promptText(rl, {
+      label: 'User',
+      required: true,
+    });
+  }
+
+  // ── Password ───────────────────────────────────────────────────────────────
+  let password: string;
+  if (envConfig.password !== undefined) {
+    password = envConfig.password;
+    console.log(accent(`${label} password loaded from env.`));
+    envSources.add('password');
+  } else {
+    password = await promptPassword(rl, 'Password');
+  }
+
+  // ── Database ───────────────────────────────────────────────────────────────
+  let database: string;
+  if (envConfig.database !== undefined) {
+    database = envConfig.database;
+    console.log(`${bold('Database')} ${muted('→')} ${accent(database)} ${muted('(env)')}`);
+    envSources.add('database');
+  } else {
+    database = await promptText(rl, {
+      label: 'Database',
+      defaultValue: options.defaultDatabase,
+      required: true,
+    });
+  }
 
   return {
     config: { type, host, port, user, password, database },
-    passwordSource,
+    envSources,
   };
 }
 
@@ -541,9 +698,9 @@ export async function promptExecutionReview(
 ): Promise<CliExecutionReview> {
   console.log(`\n${bold('Review')}`);
   console.log(muted('Confirm the setup before Movy opens database connections.'));
-  console.log(formatConnectionSummary('Source', details.source.config, details.source.passwordSource));
+  console.log(formatConnectionSummary('Source', details.source.config, details.source.envSources));
   console.log('');
-  console.log(formatConnectionSummary('Destination', details.destination.config, details.destination.passwordSource));
+  console.log(formatConnectionSummary('Destination', details.destination.config, details.destination.envSources));
   console.log('');
   console.log(`${bold('Workflow')}`);
   console.log(`  Action: ${details.appMode}`);
