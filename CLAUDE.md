@@ -53,9 +53,18 @@ All database interactions are behind interfaces in `src/domain/ports/`:
 
 ### Adapter registration
 
-`DatabaseAdapterRegistry` (`src/infrastructure/database/registry.ts`) maps a `DatabaseType` enum value to a `DatabaseAdapterSet` (a factory that creates the five adapter instances for that DB). Only PostgreSQL is currently registered; MySQL, MSSQL, and Snowflake have placeholder `README.md` stubs.
+`DatabaseAdapterRegistry` (`src/infrastructure/database/registry.ts`) maps a `DatabaseType` enum value to a `DatabaseAdapterSet`. Both **PostgreSQL** and **MySQL** are fully registered. Cross-DB translator and migrator pairs are registered separately via `registerTranslator()` and `registerDataMigrator()`.
 
-To add a new database, implement `DatabaseAdapterSet` and call `registry.register(DatabaseType.X, new XAdapterSet())` in `cli.ts`.
+```
+registry.register(DatabaseType.POSTGRES, new PgAdapterSet())
+registry.register(DatabaseType.MYSQL, new MysqlAdapterSet())
+registry.registerTranslator(MYSQL, POSTGRES, () => new MysqlToPostgresTranslator())
+registry.registerTranslator(POSTGRES, MYSQL, () => new PostgresToMysqlTranslator())
+registry.registerDataMigrator(MYSQL, POSTGRES, () => new CrossDbDataMigrator())
+registry.registerDataMigrator(POSTGRES, MYSQL, () => new CrossDbDataMigrator())
+```
+
+To add a new database, implement `DatabaseAdapterSet` and register it (plus any cross-DB translators/migrators) in `cli.ts`.
 
 ### CLI app modes
 
@@ -77,9 +86,19 @@ Logs are written to both the console and a timestamped file under `logs/` (`movy
 7. Create indexes
 8. Reset sequences
 
-### Data migration concurrency
+### Cross-database migrations
 
-`WorkerPool` (`src/infrastructure/migration/worker-pool.ts`) spawns worker threads (`table-copy.worker.ts`) to COPY each table in parallel using `pg-copy-streams`. Row estimates from `ISchemaInspector.getTableRowEstimates` are used to order tables (largest first).
+When source and destination are **different** engine types (MySQL↔PostgreSQL), `CrossDbDataMigrator` (`src/infrastructure/migration/cross-db-data-migrator.ts`) is used instead of the engine-native migrator. It reads rows in batches (`BATCH_SIZE=500`) via SELECT and writes them with batch INSERT — no worker threads, sequential per table.
+
+Schema type mapping is handled by `CrossDbSchemaTranslator` subclasses:
+- `MysqlToPostgresTranslator` — MySQL → PostgreSQL type/default translation
+- `PostgresToMysqlTranslator` — PostgreSQL → MySQL type/default translation
+
+Both extend `CrossDbSchemaTranslator` (`src/infrastructure/database/translation/cross-db-schema-translator.ts`), which does normalised type lookup with precision-suffix propagation.
+
+### Data migration concurrency (same-engine)
+
+`WorkerPool` (`src/infrastructure/migration/worker-pool.ts`) spawns worker threads (`table-copy.worker.ts`) to COPY each table in parallel using `pg-copy-streams`. This path is used for PostgreSQL→PostgreSQL migrations only. Row estimates from `ISchemaInspector.getTableRowEstimates` are used to order tables (largest first).
 
 ### Schema types
 
