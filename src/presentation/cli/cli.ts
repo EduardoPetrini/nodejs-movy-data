@@ -121,10 +121,14 @@ export async function runCli(): Promise<void> {
     const registry = buildRegistry();
     const supportedTypes = registry.listTypes();
     const appMode = await promptAppMode(rl);
-    const source = await promptConnectionConfig(rl, 'Source', { supportedTypes });
+    const source = await promptConnectionConfig(rl, 'Source', {
+      supportedTypes,
+      envRole: 'SOURCE',
+    });
     const destination = await promptConnectionConfig(rl, 'Destination', {
       supportedTypes,
       defaultDatabase: source.config.database,
+      envRole: 'TARGET',
     });
 
     let migrationMode: 'full' | 'query' | undefined;
