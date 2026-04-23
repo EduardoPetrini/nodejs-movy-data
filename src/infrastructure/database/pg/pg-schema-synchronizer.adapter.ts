@@ -99,10 +99,16 @@ export class PgSchemaSynchronizer implements ISchemaSynchronizer {
       statements.push(this.buildCreateTable(table));
     }
 
-    for (const { tableName, column } of diff.columnsToAdd) {
+    // Drop constraints and indexes before dropping columns so that dependent
+    // objects don't block or silently reshape when the column is removed.
+    for (const { tableName, constraintName } of diff.constraintsToDrop) {
       statements.push(
-        `ALTER TABLE ${escapeIdentifier(tableName)} ADD COLUMN ${this.buildColumnDef(column)};`
+        `ALTER TABLE ${escapeIdentifier(tableName)} DROP CONSTRAINT IF EXISTS ${escapeIdentifier(constraintName)};`
       );
+    }
+
+    for (const { tableName, indexName } of diff.indexesToDrop) {
+      statements.push(`DROP INDEX IF EXISTS ${escapeIdentifier(indexName)};`);
     }
 
     for (const { tableName, columnName } of diff.columnsToDrop) {
@@ -111,15 +117,15 @@ export class PgSchemaSynchronizer implements ISchemaSynchronizer {
       );
     }
 
-    for (const { tableName, diff: colDiff } of diff.columnsToAlter) {
+    for (const { tableName, column } of diff.columnsToAdd) {
       statements.push(
-        `ALTER TABLE ${escapeIdentifier(tableName)} ALTER COLUMN ${escapeIdentifier(colDiff.columnName)} TYPE ${this.quoteTypeIfNeeded(colDiff.sourceType)};`
+        `ALTER TABLE ${escapeIdentifier(tableName)} ADD COLUMN ${this.buildColumnDef(column)};`
       );
     }
 
-    for (const { tableName, constraintName } of diff.constraintsToDrop) {
+    for (const { tableName, diff: colDiff } of diff.columnsToAlter) {
       statements.push(
-        `ALTER TABLE ${escapeIdentifier(tableName)} DROP CONSTRAINT IF EXISTS ${escapeIdentifier(constraintName)};`
+        `ALTER TABLE ${escapeIdentifier(tableName)} ALTER COLUMN ${escapeIdentifier(colDiff.columnName)} TYPE ${this.quoteTypeIfNeeded(colDiff.sourceType)};`
       );
     }
 

@@ -85,14 +85,25 @@ export class MysqlSchemaSynchronizer implements ISchemaSynchronizer {
     const statements: string[] = [];
 
     // MySQL DDL auto-commits, so we execute statements sequentially.
-    // Order matters: create tables before altering columns, drop constraints before dropping tables.
+    // Constraints and indexes that reference a column must be dropped BEFORE the column is
+    // dropped — otherwise MySQL tries to keep composite indexes alive with the remaining
+    // columns and throws a "Duplicate entry" error when those columns are not unique.
     for (const table of diff.tablesToCreate) {
       statements.push(this.buildCreateTable(table));
     }
 
-    for (const { tableName, column } of diff.columnsToAdd) {
+    // Drop constraints and indexes before dropping columns.
+    for (const { tableName, constraintName } of diff.constraintsToDrop) {
+      // Try FK first, then index — unique constraints are stored as indexes in MySQL.
       statements.push(
-        `ALTER TABLE ${escapeId(tableName)} ADD COLUMN ${this.buildColumnDef(column)};`
+        `ALTER TABLE ${escapeId(tableName)} DROP FOREIGN KEY IF EXISTS ${escapeId(constraintName)};`,
+        `ALTER TABLE ${escapeId(tableName)} DROP INDEX IF EXISTS ${escapeId(constraintName)};`
+      );
+    }
+
+    for (const { tableName, indexName } of diff.indexesToDrop) {
+      statements.push(
+        `ALTER TABLE ${escapeId(tableName)} DROP INDEX IF EXISTS ${escapeId(indexName)};`
       );
     }
 
@@ -102,17 +113,15 @@ export class MysqlSchemaSynchronizer implements ISchemaSynchronizer {
       );
     }
 
-    for (const { tableName, diff: colDiff } of diff.columnsToAlter) {
+    for (const { tableName, column } of diff.columnsToAdd) {
       statements.push(
-        `ALTER TABLE ${escapeId(tableName)} MODIFY COLUMN ${escapeId(colDiff.columnName)} ${colDiff.sourceType};`
+        `ALTER TABLE ${escapeId(tableName)} ADD COLUMN ${this.buildColumnDef(column)};`
       );
     }
 
-    for (const { tableName, constraintName } of diff.constraintsToDrop) {
-      // Try to drop as FK first, then as key (index)
+    for (const { tableName, diff: colDiff } of diff.columnsToAlter) {
       statements.push(
-        `ALTER TABLE ${escapeId(tableName)} DROP FOREIGN KEY IF EXISTS ${escapeId(constraintName)};`,
-        `ALTER TABLE ${escapeId(tableName)} DROP INDEX IF EXISTS ${escapeId(constraintName)};`
+        `ALTER TABLE ${escapeId(tableName)} MODIFY COLUMN ${escapeId(colDiff.columnName)} ${colDiff.sourceType};`
       );
     }
 
