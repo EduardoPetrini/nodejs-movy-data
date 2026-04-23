@@ -120,7 +120,14 @@ export class MysqlSchemaInspector implements ISchemaInspector {
     }
 
     const tableConstraints = this.buildConstraints(constraintRows);
-    const tableIndexes = this.buildIndexes(indexRows);
+    // Exclude indexes that back a constraint (UNIQUE, PK, FK) — they appear in both
+    // information_schema.TABLE_CONSTRAINTS and STATISTICS, so they would otherwise
+    // show up in both table.constraints and table.indexes, causing duplicate drops.
+    const constraintNamesByTable = new Map<string, Set<string>>();
+    for (const [tableName, constraints] of tableConstraints) {
+      constraintNamesByTable.set(tableName, new Set(constraints.map((c) => c.name)));
+    }
+    const tableIndexes = this.buildIndexes(indexRows, constraintNamesByTable);
 
     const tableNames = [...tableColumns.keys()];
     return tableNames.map((name) => ({
@@ -232,10 +239,17 @@ export class MysqlSchemaInspector implements ISchemaInspector {
     }
   }
 
-  private buildIndexes(rows: IndexRow[]): Map<string, IndexSchema[]> {
+  private buildIndexes(
+    rows: IndexRow[],
+    constraintNamesByTable: Map<string, Set<string>>
+  ): Map<string, IndexSchema[]> {
     const grouped = new Map<string, Map<string, { nonUnique: number; columns: string[] }>>();
 
     for (const row of rows) {
+      // Skip indexes that back a constraint — they are already represented in table.constraints.
+      const constraintNames = constraintNamesByTable.get(row.table_name);
+      if (constraintNames?.has(row.index_name)) continue;
+
       if (!grouped.has(row.table_name)) grouped.set(row.table_name, new Map());
       const tableMap = grouped.get(row.table_name)!;
       if (!tableMap.has(row.index_name)) {
