@@ -260,7 +260,7 @@ export class PgSchemaSynchronizer implements ISchemaSynchronizer {
 
     for (const constraint of target.constraints) {
       if (!sourceConstraints.has(constraint.name)) {
-        toDrop.push({ tableName: source.name, constraintName: constraint.name });
+        toDrop.push({ tableName: source.name, constraintName: constraint.name, constraintType: constraint.type });
       }
     }
   }

@@ -93,12 +93,20 @@ export class MysqlSchemaSynchronizer implements ISchemaSynchronizer {
     }
 
     // Drop constraints and indexes before dropping columns.
-    for (const { tableName, constraintName } of diff.constraintsToDrop) {
-      // Try FK first, then index — unique constraints are stored as indexes in MySQL.
-      statements.push(
-        `ALTER TABLE ${escapeId(tableName)} DROP FOREIGN KEY IF EXISTS ${escapeId(constraintName)};`,
-        `ALTER TABLE ${escapeId(tableName)} DROP INDEX IF EXISTS ${escapeId(constraintName)};`
-      );
+    // MySQL does not support IF EXISTS on DROP FOREIGN KEY, only on DROP INDEX.
+    // FKs have a backing index with the same name that must also be dropped explicitly.
+    for (const { tableName, constraintName, constraintType } of diff.constraintsToDrop) {
+      if (constraintType === 'FOREIGN KEY') {
+        statements.push(
+          `ALTER TABLE ${escapeId(tableName)} DROP FOREIGN KEY ${escapeId(constraintName)};`,
+          `ALTER TABLE ${escapeId(tableName)} DROP INDEX IF EXISTS ${escapeId(constraintName)};`
+        );
+      } else {
+        // PRIMARY KEY, UNIQUE, CHECK — stored as indexes in MySQL
+        statements.push(
+          `ALTER TABLE ${escapeId(tableName)} DROP INDEX IF EXISTS ${escapeId(constraintName)};`
+        );
+      }
     }
 
     for (const { tableName, indexName } of diff.indexesToDrop) {
@@ -244,7 +252,7 @@ export class MysqlSchemaSynchronizer implements ISchemaSynchronizer {
 
     for (const constraint of target.constraints) {
       if (!sourceConstraints.has(constraint.name)) {
-        toDrop.push({ tableName: source.name, constraintName: constraint.name });
+        toDrop.push({ tableName: source.name, constraintName: constraint.name, constraintType: constraint.type });
       }
     }
   }

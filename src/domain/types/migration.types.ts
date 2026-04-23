@@ -13,7 +13,7 @@ export interface SchemaDiff {
   columnsToDrop: { tableName: string; columnName: string }[];
   columnsToAlter: { tableName: string; diff: ColumnDiff }[];
   constraintsToAdd: { tableName: string; constraint: ConstraintSchema }[];
-  constraintsToDrop: { tableName: string; constraintName: string }[];
+  constraintsToDrop: { tableName: string; constraintName: string; constraintType: 'PRIMARY KEY' | 'UNIQUE' | 'FOREIGN KEY' | 'CHECK' }[];
   indexesToCreate: { tableName: string; index: IndexSchema }[];
   indexesToDrop: { tableName: string; indexName: string }[];
   sequencesToCreate: SequenceSchema[];
