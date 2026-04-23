@@ -83,6 +83,10 @@ export class MysqlSchemaSynchronizer implements ISchemaSynchronizer {
 
   async apply(connection: IDatabaseConnection, diff: SchemaDiff): Promise<void> {
     const statements: string[] = [];
+    // Index drops are best-effort: MySQL refuses to drop an index that is the sole
+    // backing index for a FK that still exists on the target. We warn and skip rather
+    // than aborting the whole migration for what is essentially a cosmetic difference.
+    const indexDropStatements: string[] = [];
 
     // MySQL DDL auto-commits, so we execute statements sequentially.
     // Constraints and indexes that reference a column must be dropped BEFORE the column is
@@ -92,14 +96,17 @@ export class MysqlSchemaSynchronizer implements ISchemaSynchronizer {
       statements.push(this.buildCreateTable(table));
     }
 
-    // Drop constraints and indexes before dropping columns.
+    // Drop constraints before dropping columns.
     // These objects are sourced from the diff (they were found in the target schema), so they
     // always exist — no IF EXISTS needed, and MySQL doesn't support it on DROP FOREIGN KEY at all.
     // FKs have a backing index with the same name that must also be dropped explicitly.
     for (const { tableName, constraintName, constraintType } of diff.constraintsToDrop) {
       if (constraintType === 'FOREIGN KEY') {
         statements.push(
-          `ALTER TABLE ${escapeId(tableName)} DROP FOREIGN KEY ${escapeId(constraintName)};`,
+          `ALTER TABLE ${escapeId(tableName)} DROP FOREIGN KEY ${escapeId(constraintName)};`
+        );
+        // The FK backing index may still be needed by another FK; treat as best-effort.
+        indexDropStatements.push(
           `ALTER TABLE ${escapeId(tableName)} DROP INDEX ${escapeId(constraintName)};`
         );
       } else {
@@ -111,7 +118,7 @@ export class MysqlSchemaSynchronizer implements ISchemaSynchronizer {
     }
 
     for (const { tableName, indexName } of diff.indexesToDrop) {
-      statements.push(
+      indexDropStatements.push(
         `ALTER TABLE ${escapeId(tableName)} DROP INDEX ${escapeId(indexName)};`
       );
     }
@@ -151,6 +158,21 @@ export class MysqlSchemaSynchronizer implements ISchemaSynchronizer {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         throw new SchemaSyncError(`Schema sync failed on statement:\n${stmt}\n\nError: ${message}`);
+      }
+    }
+
+    // Execute index drops as best-effort: a FK on the target may still depend on the
+    // index even though the source no longer has a standalone index with that name.
+    for (const stmt of indexDropStatements) {
+      try {
+        await connection.query(stmt);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (message.includes('needed in a foreign key constraint')) {
+          console.warn(`WARN: Skipped index drop (FK dependency): ${stmt}`);
+        } else {
+          throw new SchemaSyncError(`Schema sync failed on statement:\n${stmt}\n\nError: ${message}`);
+        }
       }
     }
   }
