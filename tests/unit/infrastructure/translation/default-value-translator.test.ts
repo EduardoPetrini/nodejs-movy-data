@@ -28,12 +28,12 @@ describe('DefaultValueTranslator', () => {
       expect(translator.translate('CURRENT_TIMESTAMP', src, dst)).toBe('CURRENT_TIMESTAMP');
     });
 
-    it('translates 0 to false (for boolean columns)', () => {
-      expect(translator.translate('0', src, dst)).toBe('false');
+    it('passes 0 through unchanged (boolean coercion is applied by SyncSchemaUseCase)', () => {
+      expect(translator.translate('0', src, dst)).toBe('0');
     });
 
-    it('translates 1 to true (for boolean columns)', () => {
-      expect(translator.translate('1', src, dst)).toBe('true');
+    it('passes 1 through unchanged (boolean coercion is applied by SyncSchemaUseCase)', () => {
+      expect(translator.translate('1', src, dst)).toBe('1');
     });
 
     it('translates UUID() to gen_random_uuid()', () => {
