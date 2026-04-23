@@ -26,13 +26,20 @@ export class SyncSchemaUseCase {
   }
 
   private translateDiff(diff: SchemaDiff): SchemaDiff {
-    const translateCol = (col: ColumnSchema): ColumnSchema => ({
-      ...col,
-      dataType: this.translator.translateColumnType(col.dataType, this.sourceType, this.destType),
-      defaultValue: col.defaultValue
+    const translateCol = (col: ColumnSchema): ColumnSchema => {
+      const dataType = this.translator.translateColumnType(col.dataType, this.sourceType, this.destType);
+      let defaultValue = col.defaultValue
         ? this.translator.translateDefaultValue(col.defaultValue, this.sourceType, this.destType)
-        : col.defaultValue,
-    });
+        : col.defaultValue;
+
+      // Coerce numeric boolean defaults only when the column is actually boolean.
+      // This cannot be done in the generic translator because it has no knowledge
+      // of the translated column type.
+      if (dataType === 'boolean' && defaultValue === '0') defaultValue = 'false';
+      else if (dataType === 'boolean' && defaultValue === '1') defaultValue = 'true';
+
+      return { ...col, dataType, defaultValue };
+    };
 
     const translateConstraint = (c: ConstraintSchema): ConstraintSchema =>
       this.translator.translateConstraint(c, this.sourceType, this.destType);

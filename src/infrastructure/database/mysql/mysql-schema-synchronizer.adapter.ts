@@ -196,9 +196,17 @@ export class MysqlSchemaSynchronizer implements ISchemaSynchronizer {
       if (!targetCol) {
         toAdd.push({ tableName: source.name, column: col });
       } else if (col.dataType !== targetCol.dataType) {
+        // Embed characterMaxLength into the type string so the translator can
+        // propagate it (e.g. "character varying" + 36 → "character varying(36)"
+        // → translated to "varchar(36)"). Without this the length is lost and
+        // MySQL rejects bare "varchar" in MODIFY COLUMN.
+        const sourceType =
+          col.characterMaxLength && !col.dataType.includes('(')
+            ? `${col.dataType}(${col.characterMaxLength})`
+            : col.dataType;
         toAlter.push({
           tableName: source.name,
-          diff: { columnName: col.name, sourceType: col.dataType, targetType: targetCol.dataType },
+          diff: { columnName: col.name, sourceType, targetType: targetCol.dataType },
         });
       }
     }

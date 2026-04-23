@@ -13,6 +13,13 @@ import { SchemaDiff } from '../../../domain/types/migration.types';
 import { SchemaSyncError } from '../../../domain/errors/migration.errors';
 import { escapeIdentifier } from '../../../shared/utils';
 
+// PostgreSQL types that accept a length/precision modifier via characterMaxLength.
+// All other types ignore it — e.g. "text" is always unlimited.
+const PG_LENGTH_SUPPORTING_TYPES = new Set([
+  'char', 'character', 'varchar', 'character varying',
+  'bit', 'bit varying', 'varbit',
+]);
+
 export class PgSchemaSynchronizer implements ISchemaSynchronizer {
   diff(source: DatabaseSchema, target: DatabaseSchema): SchemaDiff {
     const targetTableMap = new Map(target.tables.map((t) => [t.name, t]));
@@ -118,7 +125,7 @@ export class PgSchemaSynchronizer implements ISchemaSynchronizer {
 
     for (const { tableName, constraint } of diff.constraintsToAdd) {
       statements.push(
-        `ALTER TABLE ${escapeIdentifier(tableName)} ADD ${this.buildConstraintDef(constraint)};`
+        `ALTER TABLE ${escapeIdentifier(tableName)} ADD ${this.buildConstraintDef(constraint, tableName)};`
       );
     }
 
@@ -210,9 +217,15 @@ export class PgSchemaSynchronizer implements ISchemaSynchronizer {
       if (!targetCol) {
         toAdd.push({ tableName: source.name, column: col });
       } else if (col.dataType !== targetCol.dataType) {
+        // Embed characterMaxLength so translators can propagate the length
+        // when the source type string doesn't carry it (e.g. PG "character varying").
+        const sourceType =
+          col.characterMaxLength && !col.dataType.includes('(')
+            ? `${col.dataType}(${col.characterMaxLength})`
+            : col.dataType;
         toAlter.push({
           tableName: source.name,
-          diff: { columnName: col.name, sourceType: col.dataType, targetType: targetCol.dataType },
+          diff: { columnName: col.name, sourceType, targetType: targetCol.dataType },
         });
       }
     }
@@ -272,7 +285,7 @@ export class PgSchemaSynchronizer implements ISchemaSynchronizer {
     const colDefs = table.columns.map((c) => `  ${this.buildColumnDef(c)}`);
     const inlineConstraints = table.constraints
       .filter((c) => c.type === 'PRIMARY KEY' || c.type === 'UNIQUE')
-      .map((c) => `  ${this.buildConstraintDef(c)}`);
+      .map((c) => `  ${this.buildConstraintDef(c, table.name)}`);
 
     const lines = [...colDefs, ...inlineConstraints];
     return `CREATE TABLE IF NOT EXISTS ${escapeIdentifier(table.name)} (\n${lines.join(',\n')}\n);`;
@@ -280,8 +293,17 @@ export class PgSchemaSynchronizer implements ISchemaSynchronizer {
 
   private buildColumnDef(col: ColumnSchema): string {
     const typeLiteral = this.quoteTypeIfNeeded(col.dataType);
-    let def = `${escapeIdentifier(col.name)} ${typeLiteral}`;
-    if (col.characterMaxLength) def = `${escapeIdentifier(col.name)} ${typeLiteral}(${col.characterMaxLength})`;
+    // Only append characterMaxLength when:
+    // 1. The type doesn't already carry an inline precision (e.g. translated "varchar(255)")
+    // 2. The base type actually supports a length modifier in PG (e.g. not "text", "integer")
+    const baseType = col.dataType.replace(/\s*\(.*\)$/, '').trim().toLowerCase();
+    const needsLength =
+      col.characterMaxLength &&
+      !col.dataType.includes('(') &&
+      PG_LENGTH_SUPPORTING_TYPES.has(baseType);
+    let def = needsLength
+      ? `${escapeIdentifier(col.name)} ${typeLiteral}(${col.characterMaxLength})`
+      : `${escapeIdentifier(col.name)} ${typeLiteral}`;
     if (!col.isNullable) def += ' NOT NULL';
     if (col.defaultValue !== null) def += ` DEFAULT ${col.defaultValue}`;
     return def;
@@ -292,9 +314,13 @@ export class PgSchemaSynchronizer implements ISchemaSynchronizer {
     return dataType !== dataType.toLowerCase() ? escapeIdentifier(dataType) : dataType;
   }
 
-  private buildConstraintDef(constraint: ConstraintSchema): string {
+  private buildConstraintDef(constraint: ConstraintSchema, tableName?: string): string {
     const cols = constraint.columns.map(escapeIdentifier).join(', ');
-    const name = `CONSTRAINT ${escapeIdentifier(constraint.name)}`;
+    // MySQL names every PK "PRIMARY"; that name must be unique per schema in PG
+    // (it backs an index), so rewrite it to the standard PG convention.
+    const resolvedName =
+      constraint.name === 'PRIMARY' && tableName ? `${tableName}_pkey` : constraint.name;
+    const name = `CONSTRAINT ${escapeIdentifier(resolvedName)}`;
 
     switch (constraint.type) {
       case 'PRIMARY KEY':

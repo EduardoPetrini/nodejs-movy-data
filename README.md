@@ -1,15 +1,16 @@
 # Movy
 
-A database-agnostic CLI migration tool. Migrates schema and data between PostgreSQL and MySQL databases.
+A database-agnostic CLI migration tool. Migrates schema and data between PostgreSQL and MySQL databases, including cross-engine pairs.
 
 ## Features
 
 - Full schema migration (tables, columns, constraints, indexes, sequences/enums)
-- Cross-database migrations: PostgreSQL ↔ MySQL
-- Same-database high-throughput migrations (PostgreSQL → PostgreSQL via `pg-copy-streams` workers)
-- Schema diff — only applies changes that are missing on the destination
-- Custom query migration: run a SQL query on the source and land the results as a new table on the destination
+- Same-engine migrations: PostgreSQL → PostgreSQL, MySQL → MySQL
+- Cross-engine migrations: PostgreSQL ↔ MySQL
+- Schema diff — only applies changes missing on the destination
+- Custom query migration: run a SQL query on the source and land results as a new table on the destination
 - Row-count validation to verify migration completeness
+- Connection retry with exponential backoff
 - Structured logs written to console and a timestamped file under `logs/`
 
 ## Requirements
@@ -22,6 +23,16 @@ A database-agnostic CLI migration tool. Migrates schema and data between Postgre
 ```bash
 npm install
 ```
+
+## Configuration
+
+Copy `.env.example` to `.env` and fill in your connection details:
+
+```bash
+cp .env.example .env
+```
+
+Environment variables are optional — the CLI will prompt for any values not set.
 
 ## Usage
 
@@ -47,8 +58,10 @@ The CLI will prompt for:
 |------------|--------|-------------|
 | PostgreSQL | ✅     | ✅          |
 | MySQL      | ✅     | ✅          |
+| MSSQL      | ⬜ Planned (v3) | ⬜ Planned (v3) |
+| Snowflake  | ⬜ Planned (v3) | ⬜ Planned (v3) |
 
-Cross-engine pairs supported: MySQL → PostgreSQL and PostgreSQL → MySQL.
+All four cross-engine pairs between PostgreSQL and MySQL are supported.
 
 ## Commands
 
@@ -77,21 +90,29 @@ src/
 
 1. Create destination database if it doesn't exist
 2. Inspect source schema; diff against destination
-3. Apply schema diff (tables, columns, constraints)
+3. Apply schema diff (tables, columns, constraints); types translated via `ISchemaTranslator`
 4. Disable FK checks / triggers on destination
-5. Migrate data (parallel workers for same-engine; batched SELECT/INSERT for cross-engine)
+5. Migrate data:
+   - **PG→PG**: parallel `pg-copy-streams` workers (up to 4 threads)
+   - **MySQL→MySQL**: sequential batched SELECT + INSERT
+   - **MySQL↔PG**: sequential batched SELECT + INSERT via `CrossDbDataMigrator`
 6. Re-enable FK checks / triggers
-7. Create indexes
-8. Reset sequences (PostgreSQL only)
+7. Create indexes (deferred from step 3 for bulk-load performance)
+8. Reset sequences (PostgreSQL destinations only)
 
 ### Adding a new database
 
 1. Implement `DatabaseAdapterSet` in `src/infrastructure/database/<engine>/`
-2. Register it in `cli.ts`:
+2. Add type-map(s) in `src/infrastructure/database/translation/type-maps/`
+3. Implement `ISchemaTranslator` subclass(es) extending `CrossDbSchemaTranslator`
+4. Register in `cli.ts`:
    ```ts
    registry.register(DatabaseType.X, new XAdapterSet())
+   registry.registerTranslator(DatabaseType.X, DatabaseType.POSTGRES, () => new XToPostgresTranslator())
+   registry.registerDataMigrator(DatabaseType.X, DatabaseType.POSTGRES, () => new CrossDbDataMigrator())
    ```
-3. Register cross-DB translators and migrators for any new source↔dest pairs.
+
+See `docs/implementation-plan.md` for the full checklist.
 
 ## Logs
 

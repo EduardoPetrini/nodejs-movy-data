@@ -41,8 +41,9 @@ export const MYSQL_TO_POSTGRES_DEFAULT_MAP: Readonly<Record<string, string>> = {
   'now()': 'CURRENT_TIMESTAMP',
   'current_date': 'CURRENT_DATE',
   'current_time': 'CURRENT_TIME',
-  '0': 'false',         // default for TINYINT(1) columns converted to boolean
-  '1': 'true',
+  // 0/1 → false/true is intentionally omitted here: the coercion is only valid
+  // for boolean columns (tinyint(1) → boolean). SyncSchemaUseCase applies it
+  // after the column type is known.
   'uuid()': 'gen_random_uuid()',
 };
 

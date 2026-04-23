@@ -1,6 +1,33 @@
 import * as path from 'path';
 import * as fs from 'fs';
 
+/**
+ * Loads a .env file into process.env.
+ * Skips silently if the file does not exist.
+ * Already-set variables are NOT overwritten (same behaviour as dotenv).
+ */
+export function loadEnvFile(filePath = path.resolve(process.cwd(), '.env')): void {
+  if (!fs.existsSync(filePath)) return;
+
+  const content = fs.readFileSync(filePath, 'utf8');
+  for (const raw of content.split('\n')) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#')) continue;
+
+    const eqIndex = line.indexOf('=');
+    if (eqIndex === -1) continue;
+
+    const key = line.slice(0, eqIndex).trim();
+    const rawValue = line.slice(eqIndex + 1).trim();
+    // Strip optional surrounding quotes (" or ')
+    const value = rawValue.replace(/^(['"])(.*)\1$/, '$2');
+
+    if (key && !(key in process.env)) {
+      process.env[key] = value;
+    }
+  }
+}
+
 export function escapeIdentifier(name: string): string {
   return '"' + name.replace(/"/g, '""') + '"';
 }

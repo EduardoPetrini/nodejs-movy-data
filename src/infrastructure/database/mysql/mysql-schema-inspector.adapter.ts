@@ -138,11 +138,45 @@ export class MysqlSchemaInspector implements ISchemaInspector {
       name: row.column_name,
       dataType: row.column_type.toLowerCase(),
       isNullable: row.is_nullable === 'YES',
-      defaultValue: row.column_default,
+      defaultValue: this.normalizeDefault(row.column_default),
       characterMaxLength: row.character_maximum_length,
       numericPrecision: row.numeric_precision,
       numericScale: row.numeric_scale,
     };
+  }
+
+  /**
+   * MySQL's information_schema.COLUMN_DEFAULT stores string defaults as bare
+   * values without quotes (e.g. the stored default for `DEFAULT 'active'` is
+   * just `active`). If passed as-is to PostgreSQL DDL the DB sees a column
+   * reference, not a literal. This method quotes bare string values so that
+   * downstream DDL builders and translators always receive well-formed SQL
+   * default expressions.
+   *
+   * Leave unchanged:
+   *   - null (no default)
+   *   - already single-quoted strings
+   *   - numeric literals (handled by the dialect translator: 0 → false, etc.)
+   *   - known SQL keywords / function calls
+   *   - bit literals (b'0') and hex literals (0x...)
+   *   - expressions starting with '(' (computed defaults)
+   */
+  private normalizeDefault(value: string | null): string | null {
+    if (value === null) return null;
+    const v = value.trim();
+
+    if (v.startsWith("'") && v.endsWith("'")) return value;
+    if (v.startsWith('(')) return value;
+    if (/^-?\d+(\.\d+)?$/.test(v)) return value;
+    if (/^0x[0-9a-fA-F]+$/i.test(v)) return value;
+    if (/^b'\d+'$/i.test(v)) return value;
+
+    const SQL_KEYWORDS =
+      /^(NULL|TRUE|FALSE|CURRENT_TIMESTAMP(\(\d*\))?|NOW\(\)|CURRENT_DATE|CURRENT_TIME|UUID\(\))$/i;
+    if (SQL_KEYWORDS.test(v)) return value;
+
+    // Bare string literal — wrap in single quotes, escaping any internal quotes.
+    return `'${v.replace(/'/g, "''")}'`;
   }
 
   private buildConstraints(rows: ConstraintRow[]): Map<string, ConstraintSchema[]> {
