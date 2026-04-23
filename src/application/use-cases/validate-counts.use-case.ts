@@ -1,5 +1,6 @@
 import { IDatabaseConnection } from '../../domain/ports/database.port';
 import { ILogger } from '../../domain/ports/logger.port';
+import { DatabaseType } from '../../domain/types/connection.types';
 
 export interface TableCountResult {
   tableName: string;
@@ -16,24 +17,62 @@ export interface ValidateCountsResult {
   allMatch: boolean;
 }
 
-async function getTableNames(connection: IDatabaseConnection, schemaName = 'public'): Promise<string[]> {
+export interface ValidateCountsTarget {
+  type: DatabaseType;
+  database: string;
+}
+
+interface DbDialect {
+  listTablesSql: string;
+  listTablesParam: string;
+  quoteIdent(name: string): string;
+}
+
+function getDialect(target: ValidateCountsTarget): DbDialect {
+  switch (target.type) {
+    case DatabaseType.POSTGRES:
+      return {
+        listTablesSql:
+          `SELECT table_name FROM information_schema.tables ` +
+          `WHERE table_schema = $1 AND table_type = 'BASE TABLE' ORDER BY table_name`,
+        listTablesParam: 'public',
+        quoteIdent: (name) => `"${name.replace(/"/g, '""')}"`,
+      };
+    case DatabaseType.MYSQL:
+      return {
+        listTablesSql:
+          `SELECT table_name AS table_name FROM information_schema.tables ` +
+          `WHERE table_schema = ? AND table_type = 'BASE TABLE' ORDER BY table_name`,
+        listTablesParam: target.database,
+        quoteIdent: (name) => `\`${name.replace(/`/g, '``')}\``,
+      };
+    default:
+      throw new Error(`Unsupported database type for row count validation: ${target.type}`);
+  }
+}
+
+async function getTableNames(
+  connection: IDatabaseConnection,
+  dialect: DbDialect
+): Promise<string[]> {
   const rows = await connection.query<{ table_name: string }>(
-    `SELECT table_name
-     FROM information_schema.tables
-     WHERE table_schema = $1
-       AND table_type = 'BASE TABLE'
-     ORDER BY table_name`,
-    [schemaName]
+    dialect.listTablesSql,
+    [dialect.listTablesParam]
   );
   return rows.map((r) => r.table_name);
 }
 
-async function getExactCount(connection: IDatabaseConnection, tableName: string): Promise<number> {
-  const rows = await connection.query<{ count: string }>(
-    `SELECT COUNT(*) AS count FROM "${tableName}"`,
+async function getExactCount(
+  connection: IDatabaseConnection,
+  dialect: DbDialect,
+  tableName: string
+): Promise<number> {
+  const rows = await connection.query<{ count: string | number }>(
+    `SELECT COUNT(*) AS count FROM ${dialect.quoteIdent(tableName)}`,
     []
   );
-  return parseInt(rows[0].count, 10);
+  const raw = rows[0].count;
+  return typeof raw === 'number' ? raw : parseInt(raw, 10);
 }
 
 function pad(s: string, len: number): string {
@@ -58,12 +97,17 @@ export class ValidateCountsUseCase {
 
   async execute(
     sourceConnection: IDatabaseConnection,
-    destConnection: IDatabaseConnection
+    destConnection: IDatabaseConnection,
+    source: ValidateCountsTarget,
+    dest: ValidateCountsTarget
   ): Promise<ValidateCountsResult> {
     this.logger.info('Starting row count validation...');
 
-    const sourceTables = await getTableNames(sourceConnection);
-    const destTables = new Set(await getTableNames(destConnection));
+    const sourceDialect = getDialect(source);
+    const destDialect = getDialect(dest);
+
+    const sourceTables = await getTableNames(sourceConnection, sourceDialect);
+    const destTables = new Set(await getTableNames(destConnection, destDialect));
 
     if (sourceTables.length === 0) {
       this.logger.warn('No tables found in source database.');
@@ -89,9 +133,9 @@ export class ValidateCountsUseCase {
     let totalDest = 0;
 
     for (const tableName of sourceTables) {
-      const sourceCount = await getExactCount(sourceConnection, tableName);
+      const sourceCount = await getExactCount(sourceConnection, sourceDialect, tableName);
       const destCount = destTables.has(tableName)
-        ? await getExactCount(destConnection, tableName)
+        ? await getExactCount(destConnection, destDialect, tableName)
         : 0;
 
       const matchPct = sourceCount === 0

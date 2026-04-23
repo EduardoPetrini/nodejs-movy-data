@@ -104,7 +104,12 @@ async function runValidation(
     );
 
     const validateCounts = new ValidateCountsUseCase(logger);
-    await validateCounts.execute(sourceConnection, destConnection);
+    await validateCounts.execute(
+      sourceConnection,
+      destConnection,
+      { type: sourceConfig.type, database: sourceConfig.database },
+      { type: destConfig.type, database: destConfig.database }
+    );
   } finally {
     await Promise.allSettled([sourceConnection.end(), destConnection.end()]);
   }
