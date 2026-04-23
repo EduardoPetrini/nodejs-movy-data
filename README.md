@@ -1,6 +1,12 @@
-# Movy
+
+
+# Movy Data
 
 A database-agnostic CLI migration tool. Migrates schema and data between PostgreSQL and MySQL databases, including cross-engine pairs.
+
+<p align="center">
+    <img src="docs/hero-logo.png" alt="Movy Data" width="320" />
+  </p>
 
 ## Features
 
