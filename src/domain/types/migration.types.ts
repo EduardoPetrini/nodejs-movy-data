@@ -12,7 +12,7 @@ export interface SchemaDiff {
   columnsToAdd: { tableName: string; column: import('./schema.types').ColumnSchema }[];
   columnsToDrop: { tableName: string; columnName: string }[];
   columnsToAlter: { tableName: string; diff: ColumnDiff }[];
-  constraintsToAdd: { tableName: string; constraint: ConstraintSchema }[];
+  constraintsToAdd: { tableName: string; constraint: ConstraintSchema; columnTypes?: Record<string, string> }[];
   constraintsToDrop: { tableName: string; constraintName: string; constraintType: 'PRIMARY KEY' | 'UNIQUE' | 'FOREIGN KEY' | 'CHECK' }[];
   indexesToCreate: { tableName: string; index: IndexSchema }[];
   indexesToDrop: { tableName: string; indexName: string }[];

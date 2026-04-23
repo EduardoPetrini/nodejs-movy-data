@@ -145,8 +145,9 @@ export class MysqlSchemaSynchronizer implements ISchemaSynchronizer {
       );
     }
 
-    for (const { tableName, constraint } of diff.constraintsToAdd) {
-      const def = this.buildConstraintDef(constraint);
+    for (const { tableName, constraint, columnTypes } of diff.constraintsToAdd) {
+      const colTypeMap = columnTypes ? new Map(Object.entries(columnTypes)) : new Map<string, string>();
+      const def = this.buildConstraintDef(constraint, colTypeMap);
       if (!def) continue;
       if (constraint.type === 'FOREIGN KEY') {
         fkAddStatements.push(`ALTER TABLE ${escapeId(tableName)} ADD ${def};`);
@@ -285,10 +286,13 @@ export class MysqlSchemaSynchronizer implements ISchemaSynchronizer {
   ): void {
     const targetConstraints = new Map(target.constraints.map((c) => [c.name, c]));
     const sourceConstraints = new Map(source.constraints.map((c) => [c.name, c]));
+    const columnTypes: Record<string, string> = Object.fromEntries(
+      source.columns.map((c) => [c.name, c.dataType])
+    );
 
     for (const constraint of source.constraints) {
       if (!targetConstraints.has(constraint.name)) {
-        toAdd.push({ tableName: source.name, constraint });
+        toAdd.push({ tableName: source.name, constraint, columnTypes });
       }
     }
 
