@@ -93,25 +93,27 @@ export class MysqlSchemaSynchronizer implements ISchemaSynchronizer {
     }
 
     // Drop constraints and indexes before dropping columns.
-    // MySQL does not support IF EXISTS on DROP FOREIGN KEY, only on DROP INDEX.
+    // MySQL does not support IF EXISTS on DROP FOREIGN KEY at all.
+    // ALTER TABLE ... DROP INDEX IF EXISTS ... was only added in MySQL 8.0.29;
+    // use the older "DROP INDEX IF EXISTS name ON table" form for broader compatibility.
     // FKs have a backing index with the same name that must also be dropped explicitly.
     for (const { tableName, constraintName, constraintType } of diff.constraintsToDrop) {
       if (constraintType === 'FOREIGN KEY') {
         statements.push(
           `ALTER TABLE ${escapeId(tableName)} DROP FOREIGN KEY ${escapeId(constraintName)};`,
-          `ALTER TABLE ${escapeId(tableName)} DROP INDEX IF EXISTS ${escapeId(constraintName)};`
+          `DROP INDEX IF EXISTS ${escapeId(constraintName)} ON ${escapeId(tableName)};`
         );
       } else {
         // PRIMARY KEY, UNIQUE, CHECK — stored as indexes in MySQL
         statements.push(
-          `ALTER TABLE ${escapeId(tableName)} DROP INDEX IF EXISTS ${escapeId(constraintName)};`
+          `DROP INDEX IF EXISTS ${escapeId(constraintName)} ON ${escapeId(tableName)};`
         );
       }
     }
 
     for (const { tableName, indexName } of diff.indexesToDrop) {
       statements.push(
-        `ALTER TABLE ${escapeId(tableName)} DROP INDEX IF EXISTS ${escapeId(indexName)};`
+        `DROP INDEX IF EXISTS ${escapeId(indexName)} ON ${escapeId(tableName)};`
       );
     }
 
