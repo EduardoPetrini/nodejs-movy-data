@@ -87,6 +87,10 @@ export class MysqlSchemaSynchronizer implements ISchemaSynchronizer {
     // backing index for a FK that still exists on the target. We warn and skip rather
     // than aborting the whole migration for what is essentially a cosmetic difference.
     const indexDropStatements: string[] = [];
+    // FK constraint additions are best-effort: the destination may have columns with
+    // slightly different types (signedness, charset) that make the FK incompatible
+    // even though the data migration can proceed without the constraint.
+    const fkAddStatements: string[] = [];
 
     // MySQL DDL auto-commits, so we execute statements sequentially.
     // Constraints and indexes that reference a column must be dropped BEFORE the column is
@@ -143,7 +147,10 @@ export class MysqlSchemaSynchronizer implements ISchemaSynchronizer {
 
     for (const { tableName, constraint } of diff.constraintsToAdd) {
       const def = this.buildConstraintDef(constraint);
-      if (def) {
+      if (!def) continue;
+      if (constraint.type === 'FOREIGN KEY') {
+        fkAddStatements.push(`ALTER TABLE ${escapeId(tableName)} ADD ${def};`);
+      } else {
         statements.push(`ALTER TABLE ${escapeId(tableName)} ADD ${def};`);
       }
     }
@@ -173,6 +180,18 @@ export class MysqlSchemaSynchronizer implements ISchemaSynchronizer {
         } else {
           throw new SchemaSyncError(`Schema sync failed on statement:\n${stmt}\n\nError: ${message}`);
         }
+      }
+    }
+
+    // Execute FK additions as best-effort: the destination may have column type differences
+    // (signedness, charset, precision) that make a FK incompatible even when the data is
+    // otherwise migratable. Warn and skip rather than aborting the entire migration.
+    for (const stmt of fkAddStatements) {
+      try {
+        await connection.query(stmt);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(`WARN: Skipped FK constraint addition (incompatible columns): ${message}\n  Statement: ${stmt}`);
       }
     }
   }

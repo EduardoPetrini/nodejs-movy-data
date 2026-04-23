@@ -129,31 +129,49 @@ export class PgSchemaSynchronizer implements ISchemaSynchronizer {
       );
     }
 
+    // FK constraints are intentionally excluded from the transaction below.
+    // They run as best-effort after the commit so that a type mismatch between
+    // referencing and referenced columns doesn't roll back all other DDL work.
+    const fkAddStatements: string[] = [];
     for (const { tableName, constraint } of diff.constraintsToAdd) {
-      statements.push(
-        `ALTER TABLE ${escapeIdentifier(tableName)} ADD ${this.buildConstraintDef(constraint, tableName)};`
-      );
+      const stmt = `ALTER TABLE ${escapeIdentifier(tableName)} ADD ${this.buildConstraintDef(constraint, tableName)};`;
+      if (constraint.type === 'FOREIGN KEY') {
+        fkAddStatements.push(stmt);
+      } else {
+        statements.push(stmt);
+      }
     }
 
     for (const tableName of diff.tablesToDrop) {
       statements.push(`DROP TABLE IF EXISTS ${escapeIdentifier(tableName)};`);
     }
 
-    if (statements.length === 0) return;
-
-    const client = await connection.getClient();
-    try {
-      await client.query('BEGIN');
-      for (const stmt of statements) {
-        await client.query(stmt);
+    if (statements.length > 0) {
+      const client = await connection.getClient();
+      try {
+        await client.query('BEGIN');
+        for (const stmt of statements) {
+          await client.query(stmt);
+        }
+        await client.query('COMMIT');
+      } catch (err) {
+        try { await client.query('ROLLBACK'); } catch { /* ignore rollback errors */ }
+        const message = err instanceof Error ? err.message : String(err);
+        throw new SchemaSyncError(`Schema sync failed: ${message}`);
+      } finally {
+        client.release();
       }
-      await client.query('COMMIT');
-    } catch (err) {
-      try { await client.query('ROLLBACK'); } catch { /* ignore rollback errors */ }
-      const message = err instanceof Error ? err.message : String(err);
-      throw new SchemaSyncError(`Schema sync failed: ${message}`);
-    } finally {
-      client.release();
+    }
+
+    // FK additions are best-effort: the destination may have column type differences
+    // that make a FK incompatible even when the data is otherwise migratable.
+    for (const stmt of fkAddStatements) {
+      try {
+        await connection.query(stmt);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(`WARN: Skipped FK constraint addition (incompatible columns): ${message}\n  Statement: ${stmt}`);
+      }
     }
   }
 
