@@ -1,19 +1,23 @@
 import { IDataMigrator, MigrationProgressCallback } from '../../domain/ports/data-migrator.port';
 import { ConnectionConfig } from '../../domain/types/connection.types';
-import { MigrationResult, TableMigrationResult } from '../../domain/types/migration.types';
+import {
+  MigrationResult,
+  TableMigrationPlan,
+  TableMigrationResult,
+} from '../../domain/types/migration.types';
 import { MysqlConnection } from '../database/mysql/mysql-connection.adapter';
 
 const BATCH_SIZE = 500;
 
 /**
  * Migrates data between two MySQL databases using batched SELECT + INSERT.
- * Does not use worker threads — processes tables sequentially for simplicity.
+ * Uses a single destination session so FK checks can be controlled reliably.
  */
 export class MysqlDataMigrator implements IDataMigrator {
   async migrate(
     sourceConfig: ConnectionConfig,
     destConfig: ConnectionConfig,
-    tables: string[],
+    plan: TableMigrationPlan,
     _workerCount: number,
     rowEstimates?: Map<string, number>,
     onProgress?: MigrationProgressCallback
@@ -25,50 +29,69 @@ export class MysqlDataMigrator implements IDataMigrator {
     try {
       await source.connect();
       await dest.connect();
+      const destClient = await dest.getClient();
 
-      const results: TableMigrationResult[] = [];
+      try {
+        await destClient.query('SET SESSION FOREIGN_KEY_CHECKS = 0');
 
-      for (const table of tables) {
-        const tableStart = Date.now();
-        const estimated = rowEstimates?.get(table) ?? 0;
-        let rowsCopied = 0;
-        let success = true;
-        let error: string | undefined;
-
-        try {
-          rowsCopied = await this.copyTable(source, dest, table, estimated, (done, total) => {
-            onProgress?.(table, done, total);
-          });
-          onProgress?.(table, rowsCopied, rowsCopied);
-        } catch (err) {
-          success = false;
-          error = err instanceof Error ? err.message : String(err);
+        for (const table of plan.cleanupOrder) {
+          await this.clearDestinationTable(destClient, table);
         }
 
-        results.push({ tableName: table, rowsCopied, durationMs: Date.now() - tableStart, success, error });
-      }
+        const results: TableMigrationResult[] = [];
 
-      return {
-        tables: results,
-        totalDurationMs: Date.now() - start,
-        success: results.every((r) => r.success),
-      };
+        for (const table of plan.loadOrder) {
+          const tableStart = Date.now();
+          const estimated = rowEstimates?.get(table) ?? 0;
+          let rowsCopied = 0;
+          let success = true;
+          let error: string | undefined;
+
+          try {
+            rowsCopied = await this.copyTable(source, destClient, table, estimated, (done, total) => {
+              onProgress?.(table, done, total);
+            });
+            onProgress?.(table, rowsCopied, rowsCopied);
+          } catch (err) {
+            success = false;
+            error = err instanceof Error ? err.message : String(err);
+          }
+
+          results.push({ tableName: table, rowsCopied, durationMs: Date.now() - tableStart, success, error });
+        }
+
+        return {
+          tables: results,
+          totalDurationMs: Date.now() - start,
+          success: results.every((r) => r.success),
+        };
+      } finally {
+        await destClient.query('SET SESSION FOREIGN_KEY_CHECKS = 1');
+        destClient.release();
+      }
     } finally {
       await Promise.allSettled([source.end(), dest.end()]);
     }
   }
 
+  private async clearDestinationTable(destClient: Awaited<ReturnType<MysqlConnection['getClient']>>, table: string): Promise<void> {
+    const safeTable = '`' + table.replace(/`/g, '``') + '`';
+
+    try {
+      await destClient.query(`TRUNCATE TABLE ${safeTable}`);
+    } catch {
+      await destClient.query(`DELETE FROM ${safeTable}`);
+    }
+  }
+
   private async copyTable(
     source: MysqlConnection,
-    dest: MysqlConnection,
+    destClient: Awaited<ReturnType<MysqlConnection['getClient']>>,
     table: string,
     estimatedRows: number,
     onProgress: (done: number, total: number) => void
   ): Promise<number> {
     const safeTable = '`' + table.replace(/`/g, '``') + '`';
-
-    // Truncate destination table
-    await dest.query(`TRUNCATE TABLE ${safeTable}`);
 
     // Fetch column names from source
     const columns = await this.getColumnNames(source, table);
@@ -96,7 +119,7 @@ export class MysqlDataMigrator implements IDataMigrator {
         for (const col of columns) values.push(row[col] ?? null);
       }
 
-      await dest.query(
+      await destClient.query(
         `INSERT INTO ${safeTable} (${colList}) VALUES ${rowPlaceholders.join(', ')}`,
         values
       );

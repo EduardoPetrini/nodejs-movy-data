@@ -33,3 +33,10 @@ export interface MigrationResult {
   totalDurationMs: number;
   success: boolean;
 }
+
+export interface TableMigrationPlan {
+  loadOrder: string[];
+  cleanupOrder: string[];
+  levels: string[][];
+  cyclicTables: string[];
+}

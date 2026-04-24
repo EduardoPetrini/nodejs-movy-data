@@ -1,31 +1,46 @@
 import { IDataMigrator } from '../../domain/ports/data-migrator.port';
 import { ILogger } from '../../domain/ports/logger.port';
-import { ConnectionConfig } from '../../domain/types/connection.types';
+import { ConnectionConfig, DatabaseType } from '../../domain/types/connection.types';
 import { MigrationResult, TableMigrationResult } from '../../domain/types/migration.types';
+import { TableSchema } from '../../domain/types/schema.types';
 import { formatDuration } from '../../shared/utils';
+import { TableMigrationPlanner } from '../services/table-migration-planner.service';
 
 const MAX_WORKERS = 4;
 
 export class MigrateDataUseCase {
+  private readonly planner: TableMigrationPlanner;
+
   constructor(
     private readonly migrator: IDataMigrator,
-    private readonly logger: ILogger
-  ) {}
+    private readonly logger: ILogger,
+    planner?: TableMigrationPlanner
+  ) {
+    this.planner = planner ?? new TableMigrationPlanner();
+  }
 
   async execute(
     sourceConfig: ConnectionConfig,
     destConfig: ConnectionConfig,
-    tables: string[],
+    tables: TableSchema[],
     rowEstimates: Map<string, number>
   ): Promise<MigrationResult> {
-    const sorted = [...tables].sort((a, b) => {
-      return (rowEstimates.get(b) ?? 0) - (rowEstimates.get(a) ?? 0);
-    });
+    const plan = this.planner.plan(tables, rowEstimates);
 
-    this.printMigrationPlan(sorted, rowEstimates);
+    this.printMigrationPlan(plan.loadOrder, rowEstimates);
+    if (plan.cyclicTables.length > 0) {
+      this.logger.warn(
+        `Detected cyclic/self-referencing foreign key dependencies: ${plan.cyclicTables.join(', ')}. ` +
+          'Ordering will be best-effort and MySQL destination sessions must disable FK checks during copy.'
+      );
+    }
 
-    const workerCount = Math.min(MAX_WORKERS, sorted.length || 1);
-    this.logger.info(`Starting migration with ${workerCount} parallel worker(s)...`);
+    const workerCount =
+      sourceConfig.type === DatabaseType.POSTGRES && destConfig.type === DatabaseType.POSTGRES
+        ? Math.min(MAX_WORKERS, plan.loadOrder.length || 1)
+        : 1;
+    const workerLabel = workerCount === 1 ? 'worker' : 'workers';
+    this.logger.info(`Starting migration with ${workerCount} ${workerLabel}...`);
 
     const rowsDoneByTable = new Map<string, number>();
     const completedTables = new Map<string, number>(); // tableName -> actual rows copied
@@ -33,7 +48,7 @@ export class MigrateDataUseCase {
     const result = await this.migrator.migrate(
       sourceConfig,
       destConfig,
-      sorted,
+      plan,
       workerCount,
       rowEstimates,
       (tableName, rowsDone, rowsTotal) => {
@@ -55,10 +70,10 @@ export class MigrateDataUseCase {
         const overallDone = completedActual + inProgressDone;
 
         // Overall denominator: actual for completed + max(estimate, actual) for in-progress + estimate for not-yet-started
-        const inProgressTotal = sorted
+        const inProgressTotal = plan.loadOrder
           .filter((t) => rowsDoneByTable.has(t))
           .reduce((s, t) => s + Math.max(rowEstimates.get(t) ?? 0, rowsDoneByTable.get(t) ?? 0), 0);
-        const pendingEstimate = sorted
+        const pendingEstimate = plan.loadOrder
           .filter((t) => !completedTables.has(t) && !rowsDoneByTable.has(t))
           .reduce((s, t) => s + (rowEstimates.get(t) ?? 0), 0);
         const overallTotal = completedActual + inProgressTotal + pendingEstimate;

@@ -81,7 +81,7 @@ export class MigrationOrchestrator {
       const rowEstimates = await inspector.getTableRowEstimates(sourceConnection);
       const dataMigrator = this.registry.getDataMigrator(sourceConfig.type, destConfig.type);
       const migrateData = new MigrateDataUseCase(dataMigrator, this.logger);
-      const result = await migrateData.execute(sourceConfig, destConfig, tableNames, rowEstimates);
+      const result = await migrateData.execute(sourceConfig, destConfig, sourceSchema.tables, rowEstimates);
 
       // Step 6: Re-enable triggers
       await synchronizer.enableTriggers(destConnection, tableNames);

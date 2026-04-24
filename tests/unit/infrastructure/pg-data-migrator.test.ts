@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { PgDataMigrator } from '../../../src/infrastructure/migration/pg-data-migrator.adapter';
 import { WorkerPool } from '../../../src/infrastructure/migration/worker-pool';
 import { DatabaseType, ConnectionConfig } from '../../../src/domain/types/connection.types';
-import { TableMigrationResult } from '../../../src/domain/types/migration.types';
+import { TableMigrationPlan, TableMigrationResult } from '../../../src/domain/types/migration.types';
 
 function makeConfig(db = 'src'): ConnectionConfig {
   return { type: DatabaseType.POSTGRES, host: 'localhost', port: 5432, user: 'u', password: 'p', database: db };
@@ -10,6 +10,15 @@ function makeConfig(db = 'src'): ConnectionConfig {
 
 function makeTableResult(tableName: string, success = true): TableMigrationResult {
   return { tableName, rowsCopied: 10, durationMs: 5, success };
+}
+
+function makePlan(): TableMigrationPlan {
+  return {
+    loadOrder: ['users'],
+    cleanupOrder: ['users'],
+    levels: [['users']],
+    cyclicTables: [],
+  };
 }
 
 describe('PgDataMigrator', () => {
@@ -22,7 +31,7 @@ describe('PgDataMigrator', () => {
   });
 
   it('delegates to WorkerPool.run', async () => {
-    await migrator.migrate(makeConfig(), makeConfig('dst'), ['users'], 2);
+    await migrator.migrate(makeConfig(), makeConfig('dst'), makePlan(), 2);
     expect(pool.run).toHaveBeenCalledWith(
       makeConfig(),
       makeConfig('dst'),
@@ -34,7 +43,7 @@ describe('PgDataMigrator', () => {
   });
 
   it('returns success=true when all tables succeed', async () => {
-    const result = await migrator.migrate(makeConfig(), makeConfig('dst'), ['users'], 1);
+    const result = await migrator.migrate(makeConfig(), makeConfig('dst'), makePlan(), 1);
     expect(result.success).toBe(true);
   });
 
@@ -43,12 +52,17 @@ describe('PgDataMigrator', () => {
       makeTableResult('users', true),
       makeTableResult('orders', false),
     ]);
-    const result = await migrator.migrate(makeConfig(), makeConfig('dst'), ['users', 'orders'], 1);
+    const result = await migrator.migrate(
+      makeConfig(),
+      makeConfig('dst'),
+      { loadOrder: ['users', 'orders'], cleanupOrder: ['orders', 'users'], levels: [['users'], ['orders']], cyclicTables: [] },
+      1
+    );
     expect(result.success).toBe(false);
   });
 
   it('includes totalDurationMs in result', async () => {
-    const result = await migrator.migrate(makeConfig(), makeConfig('dst'), ['users'], 1);
+    const result = await migrator.migrate(makeConfig(), makeConfig('dst'), makePlan(), 1);
     expect(result.totalDurationMs).toBeGreaterThanOrEqual(0);
   });
 });

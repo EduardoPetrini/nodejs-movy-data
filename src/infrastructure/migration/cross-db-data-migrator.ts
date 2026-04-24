@@ -3,7 +3,11 @@ import { from as copyFrom, to as copyTo } from 'pg-copy-streams';
 import mysql from 'mysql2/promise';
 import { IDataMigrator, MigrationProgressCallback } from '../../domain/ports/data-migrator.port';
 import { ConnectionConfig, DatabaseType } from '../../domain/types/connection.types';
-import { MigrationResult, TableMigrationResult } from '../../domain/types/migration.types';
+import {
+  MigrationResult,
+  TableMigrationPlan,
+  TableMigrationResult,
+} from '../../domain/types/migration.types';
 import { DataMigrationError } from '../../domain/errors/migration.errors';
 import { MysqlConnection } from '../database/mysql/mysql-connection.adapter';
 import { PgConnection } from '../database/pg/pg-connection.adapter';
@@ -23,7 +27,7 @@ export class CrossDbDataMigrator implements IDataMigrator {
   async migrate(
     sourceConfig: ConnectionConfig,
     destConfig: ConnectionConfig,
-    tables: string[],
+    plan: TableMigrationPlan,
     _workerCount: number,
     rowEstimates?: Map<string, number>,
     onProgress?: MigrationProgressCallback
@@ -32,34 +36,55 @@ export class CrossDbDataMigrator implements IDataMigrator {
 
     const start = Date.now();
     const results: TableMigrationResult[] = [];
+    const mysqlDest =
+      isPgToMysql(sourceConfig.type, destConfig.type) ? new MysqlConnection(destConfig) : null;
 
-    for (const table of tables) {
-      const tableStart = Date.now();
-      const estimated = rowEstimates?.get(table) ?? 0;
-      let rowsCopied = 0;
-      let success = true;
-      let error: string | undefined;
+    try {
+      const mysqlDestClient = mysqlDest ? await this.prepareMysqlDestination(mysqlDest, plan.cleanupOrder) : null;
 
       try {
-        if (isMysqlToPg(sourceConfig.type, destConfig.type)) {
-          rowsCopied = await this.copyMysqlToPg(sourceConfig, destConfig, table, estimated, onProgress);
-        } else {
-          rowsCopied = await this.copyPgToMysql(sourceConfig, destConfig, table, estimated, onProgress);
+        for (const table of plan.loadOrder) {
+          const tableStart = Date.now();
+          const estimated = rowEstimates?.get(table) ?? 0;
+          let rowsCopied = 0;
+          let success = true;
+          let error: string | undefined;
+
+          try {
+            if (isMysqlToPg(sourceConfig.type, destConfig.type)) {
+              rowsCopied = await this.copyMysqlToPg(sourceConfig, destConfig, table, estimated, onProgress);
+            } else {
+              rowsCopied = await this.copyPgToMysql(
+                sourceConfig,
+                table,
+                estimated,
+                mysqlDestClient!,
+                onProgress
+              );
+            }
+            onProgress?.(table, rowsCopied, rowsCopied);
+          } catch (err) {
+            success = false;
+            error = err instanceof Error ? err.message : String(err);
+          }
+
+          results.push({ tableName: table, rowsCopied, durationMs: Date.now() - tableStart, success, error });
         }
-        onProgress?.(table, rowsCopied, rowsCopied);
-      } catch (err) {
-        success = false;
-        error = err instanceof Error ? err.message : String(err);
+
+        return {
+          tables: results,
+          totalDurationMs: Date.now() - start,
+          success: results.every((r) => r.success),
+        };
+      } finally {
+        if (mysqlDestClient) {
+          await mysqlDestClient.query('SET SESSION FOREIGN_KEY_CHECKS = 1');
+          mysqlDestClient.release();
+        }
       }
-
-      results.push({ tableName: table, rowsCopied, durationMs: Date.now() - tableStart, success, error });
+    } finally {
+      if (mysqlDest) await mysqlDest.end();
     }
-
-    return {
-      tables: results,
-      totalDurationMs: Date.now() - start,
-      success: results.every((r) => r.success),
-    };
   }
 
   // ---------------------------------------------------------------------------
@@ -143,20 +168,13 @@ export class CrossDbDataMigrator implements IDataMigrator {
 
   private async copyPgToMysql(
     sourceConfig: ConnectionConfig,
-    destConfig: ConnectionConfig,
     table: string,
     estimatedRows: number,
+    destClient: Awaited<ReturnType<MysqlConnection['getClient']>>,
     onProgress?: MigrationProgressCallback
   ): Promise<number> {
     const pgConn = new PgConnection(sourceConfig);
     await pgConn.connect();
-    const mysqlPool = mysql.createPool({
-      host: destConfig.host,
-      port: destConfig.port,
-      user: destConfig.user,
-      password: destConfig.password,
-      database: destConfig.database,
-    });
 
     try {
       const safePgTable = `"${table.replace(/"/g, '""')}"`;
@@ -174,9 +192,6 @@ export class CrossDbDataMigrator implements IDataMigrator {
 
       const mysqlColList = columns.map((c) => '`' + c.replace(/`/g, '``') + '`').join(', ');
       const placeholders = columns.map(() => '?').join(', ');
-
-      // Truncate MySQL table
-      await mysqlPool.execute(`TRUNCATE TABLE ${safeMysqlTable}`);
 
       let offset = 0;
       let totalCopied = 0;
@@ -198,7 +213,7 @@ export class CrossDbDataMigrator implements IDataMigrator {
         }
 
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        await mysqlPool.execute(
+        await destClient.query(
           `INSERT INTO ${safeMysqlTable} (${mysqlColList}) VALUES ${rowPlaceholders}`,
           values as any
         );
@@ -219,8 +234,28 @@ export class CrossDbDataMigrator implements IDataMigrator {
 
       return totalCopied;
     } finally {
-      await Promise.allSettled([pgConn.end(), mysqlPool.end()]);
+      await pgConn.end();
     }
+  }
+
+  private async prepareMysqlDestination(
+    dest: MysqlConnection,
+    cleanupOrder: string[]
+  ): Promise<Awaited<ReturnType<MysqlConnection['getClient']>>> {
+    await dest.connect();
+    const client = await dest.getClient();
+    await client.query('SET SESSION FOREIGN_KEY_CHECKS = 0');
+
+    for (const table of cleanupOrder) {
+      const safeTable = '`' + table.replace(/`/g, '``') + '`';
+      try {
+        await client.query(`TRUNCATE TABLE ${safeTable}`);
+      } catch {
+        await client.query(`DELETE FROM ${safeTable}`);
+      }
+    }
+
+    return client;
   }
 
   private assertSupportedPair(source: DatabaseType, dest: DatabaseType): void {
@@ -239,4 +274,8 @@ export class CrossDbDataMigrator implements IDataMigrator {
 
 function isMysqlToPg(source: DatabaseType, dest: DatabaseType): boolean {
   return source === DatabaseType.MYSQL && dest === DatabaseType.POSTGRES;
+}
+
+function isPgToMysql(source: DatabaseType, dest: DatabaseType): boolean {
+  return source === DatabaseType.POSTGRES && dest === DatabaseType.MYSQL;
 }

@@ -1,6 +1,6 @@
 import { IDataMigrator, MigrationProgressCallback } from '../../domain/ports/data-migrator.port';
 import { ConnectionConfig } from '../../domain/types/connection.types';
-import { MigrationResult } from '../../domain/types/migration.types';
+import { MigrationResult, TableMigrationPlan } from '../../domain/types/migration.types';
 import { WorkerPool } from './worker-pool';
 
 export class PgDataMigrator implements IDataMigrator {
@@ -13,7 +13,7 @@ export class PgDataMigrator implements IDataMigrator {
   async migrate(
     sourceConfig: ConnectionConfig,
     destConfig: ConnectionConfig,
-    tables: string[],
+    plan: TableMigrationPlan,
     workerCount: number,
     rowEstimates?: Map<string, number>,
     onProgress?: MigrationProgressCallback
@@ -23,7 +23,7 @@ export class PgDataMigrator implements IDataMigrator {
     const tableResults = await this.pool.run(
       sourceConfig,
       destConfig,
-      tables,
+      plan.loadOrder,
       workerCount,
       rowEstimates,
       onProgress
