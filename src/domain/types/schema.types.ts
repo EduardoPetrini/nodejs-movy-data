@@ -6,6 +6,9 @@ export interface ColumnSchema {
   characterMaxLength: number | null;
   numericPrecision: number | null;
   numericScale: number | null;
+  autoIncrement?: boolean;
+  characterSet?: string | null;
+  collation?: string | null;
 }
 
 export interface ConstraintSchema {
@@ -33,6 +36,10 @@ export interface TableSchema {
   columns: ColumnSchema[];
   constraints: ConstraintSchema[];
   indexes: IndexSchema[];
+  engine?: string | null;
+  characterSet?: string | null;
+  collation?: string | null;
+  autoIncrement?: number | null;
 }
 
 export interface SequenceSchema {

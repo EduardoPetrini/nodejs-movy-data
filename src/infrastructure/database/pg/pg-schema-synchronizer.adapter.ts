@@ -208,7 +208,8 @@ export class PgSchemaSynchronizer implements ISchemaSynchronizer {
   async resetSequences(
     source: IDatabaseConnection,
     dest: IDatabaseConnection,
-    sequences: SequenceSchema[]
+    sequences: SequenceSchema[],
+    _tables?: unknown
   ): Promise<void> {
     for (const seq of sequences) {
       try {

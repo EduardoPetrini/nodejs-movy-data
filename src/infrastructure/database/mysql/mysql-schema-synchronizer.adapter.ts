@@ -5,9 +5,7 @@ import {
   TableSchema,
   ColumnSchema,
   ConstraintSchema,
-  IndexSchema,
   SequenceSchema,
-  EnumSchema,
 } from '../../../domain/types/schema.types';
 import { SchemaDiff } from '../../../domain/types/migration.types';
 import { SchemaSyncError } from '../../../domain/errors/migration.errors';
@@ -53,6 +51,21 @@ export class MysqlSchemaSynchronizer implements ISchemaSynchronizer {
       const targetTable = targetTableMap.get(sourceTable.name);
       if (!targetTable) {
         tablesToCreate.push(sourceTable);
+        // Foreign keys are added post-CREATE (see apply()): PK/UNIQUE are inlined
+        // into CREATE TABLE but FKs are deferred so cyclic dependencies between
+        // tables don't fail at create time. Secondary (non-constraint) indexes are
+        // created in step 7 via createIndexes().
+        const columnTypes: Record<string, string> = Object.fromEntries(
+          sourceTable.columns.map((c) => [c.name, c.dataType])
+        );
+        for (const constraint of sourceTable.constraints) {
+          if (constraint.type === 'FOREIGN KEY') {
+            constraintsToAdd.push({ tableName: sourceTable.name, constraint, columnTypes });
+          }
+        }
+        for (const index of sourceTable.indexes) {
+          indexesToCreate.push({ tableName: sourceTable.name, index });
+        }
         continue;
       }
       this.diffColumns(sourceTable, targetTable, columnsToAdd, columnsToDrop, columnsToAlter);
@@ -220,13 +233,28 @@ export class MysqlSchemaSynchronizer implements ISchemaSynchronizer {
     }
   }
 
-  /** MySQL AUTO_INCREMENT is managed per-table; sequences are a no-op. */
+  /**
+   * Re-align the destination per-table AUTO_INCREMENT counters to the source
+   * values so that new inserts continue from the same id space as the source.
+   * MySQL refuses to set AUTO_INCREMENT below MAX(id)+1, so we clamp; going
+   * higher than the current counter is always allowed.
+   */
   async resetSequences(
     _source: IDatabaseConnection,
-    _dest: IDatabaseConnection,
-    _sequences: SequenceSchema[]
+    dest: IDatabaseConnection,
+    _sequences: SequenceSchema[],
+    tables: TableSchema[] = []
   ): Promise<void> {
-    // No-op: MySQL does not have standalone sequences.
+    for (const table of tables) {
+      if (!table.autoIncrement || table.autoIncrement <= 1) continue;
+      const stmt = `ALTER TABLE ${escapeId(table.name)} AUTO_INCREMENT = ${table.autoIncrement};`;
+      try {
+        await dest.query(stmt);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(`WARN: Failed to set AUTO_INCREMENT for ${table.name}: ${message}`);
+      }
+    }
   }
 
   async ensureDatabase(adminConnection: IDatabaseConnection, dbName: string): Promise<boolean> {
@@ -326,7 +354,8 @@ export class MysqlSchemaSynchronizer implements ISchemaSynchronizer {
   }
 
   private buildCreateTable(table: TableSchema): string {
-    const colDefs = table.columns.map((c) => `  ${this.buildColumnDef(c)}`);
+    const tableCollation = table.collation ?? null;
+    const colDefs = table.columns.map((c) => `  ${this.buildColumnDef(c, tableCollation)}`);
     const colTypeMap = new Map(table.columns.map((c) => [c.name, c.dataType]));
     const inlineConstraints = table.constraints
       .filter((c) => c.type === 'PRIMARY KEY' || c.type === 'UNIQUE')
@@ -337,13 +366,22 @@ export class MysqlSchemaSynchronizer implements ISchemaSynchronizer {
       .filter((x): x is string => x !== null);
 
     const lines = [...colDefs, ...inlineConstraints];
+    const engine = table.engine || 'InnoDB';
+    const charset = table.characterSet || (tableCollation ? tableCollation.split('_')[0] : 'utf8mb4');
+    const collation = tableCollation || 'utf8mb4_unicode_ci';
+    const tableOptions = [
+      `ENGINE=${engine}`,
+      table.autoIncrement && table.autoIncrement > 1 ? `AUTO_INCREMENT=${table.autoIncrement}` : null,
+      `DEFAULT CHARSET=${charset}`,
+      `COLLATE=${collation}`,
+    ].filter((x): x is string => x !== null);
     return (
       `CREATE TABLE IF NOT EXISTS ${escapeId(table.name)} (\n${lines.join(',\n')}\n)` +
-      ` ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`
+      ` ${tableOptions.join(' ')};`
     );
   }
 
-  private buildColumnDef(col: ColumnSchema): string {
+  private buildColumnDef(col: ColumnSchema, tableCollation: string | null = null): string {
     let typePart = col.dataType;
 
     // Preserve char/varchar length if available
@@ -352,8 +390,15 @@ export class MysqlSchemaSynchronizer implements ISchemaSynchronizer {
     }
 
     let def = `${escapeId(col.name)} ${typePart}`;
+    // Emit column-level CHARACTER SET / COLLATE only when it differs from the table's
+    // default collation. This mirrors MySQL's own SHOW CREATE TABLE output.
+    if (col.collation && col.collation !== tableCollation) {
+      if (col.characterSet) def += ` CHARACTER SET ${col.characterSet}`;
+      def += ` COLLATE ${col.collation}`;
+    }
     if (!col.isNullable) def += ' NOT NULL';
     if (col.defaultValue !== null) def += ` DEFAULT ${quoteDefault(col.defaultValue)}`;
+    if (col.autoIncrement) def += ' AUTO_INCREMENT';
     return def;
   }
 

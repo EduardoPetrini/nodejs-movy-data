@@ -20,6 +20,15 @@ interface ColumnRow {
   numeric_precision: number | null;
   numeric_scale: number | null;
   extra: string;
+  character_set_name: string | null;
+  collation_name: string | null;
+}
+
+interface TableRow {
+  table_name: string;
+  engine: string | null;
+  table_collation: string | null;
+  auto_increment: number | string | null;
 }
 
 interface ConstraintRow {
@@ -50,13 +59,14 @@ export class MysqlSchemaInspector implements ISchemaInspector {
   async inspect(connection: IDatabaseConnection, schemaName?: string): Promise<DatabaseSchema> {
     try {
       const db = schemaName ?? await this.resolveDatabase(connection);
-      const [columnRows, constraintRows, indexRows] = await Promise.all([
+      const [columnRows, constraintRows, indexRows, tableRows] = await Promise.all([
         connection.query<ColumnRow>(COLUMNS_QUERY, [db, db]),
         connection.query<ConstraintRow>(CONSTRAINTS_QUERY, [db, db, db]),
         connection.query<IndexRow>(INDEXES_QUERY, [db]),
+        connection.query<TableRow>(TABLES_QUERY, [db]),
       ]);
 
-      const tables = this.buildTables(columnRows, constraintRows, indexRows);
+      const tables = this.buildTables(columnRows, constraintRows, indexRows, tableRows);
       return { tables, sequences: [], enums: [] };
     } catch (err) {
       if (err instanceof SchemaInspectionError) throw err;
@@ -111,7 +121,8 @@ export class MysqlSchemaInspector implements ISchemaInspector {
   private buildTables(
     columnRows: ColumnRow[],
     constraintRows: ConstraintRow[],
-    indexRows: IndexRow[]
+    indexRows: IndexRow[],
+    tableRows: TableRow[]
   ): TableSchema[] {
     const tableColumns = new Map<string, ColumnSchema[]>();
     for (const row of columnRows) {
@@ -128,14 +139,23 @@ export class MysqlSchemaInspector implements ISchemaInspector {
       constraintNamesByTable.set(tableName, new Set(constraints.map((c) => c.name)));
     }
     const tableIndexes = this.buildIndexes(indexRows, constraintNamesByTable);
+    const tableMeta = new Map(tableRows.map((r) => [r.table_name, r]));
 
     const tableNames = [...tableColumns.keys()];
-    return tableNames.map((name) => ({
-      name,
-      columns: tableColumns.get(name) ?? [],
-      constraints: tableConstraints.get(name) ?? [],
-      indexes: tableIndexes.get(name) ?? [],
-    }));
+    return tableNames.map((name) => {
+      const meta = tableMeta.get(name);
+      const collation = meta?.table_collation ?? null;
+      return {
+        name,
+        columns: tableColumns.get(name) ?? [],
+        constraints: tableConstraints.get(name) ?? [],
+        indexes: tableIndexes.get(name) ?? [],
+        engine: meta?.engine ?? null,
+        collation,
+        characterSet: collation ? collation.split('_')[0] : null,
+        autoIncrement: meta?.auto_increment != null ? Number(meta.auto_increment) : null,
+      };
+    });
   }
 
   private mapColumn(row: ColumnRow): ColumnSchema {
@@ -149,6 +169,9 @@ export class MysqlSchemaInspector implements ISchemaInspector {
       characterMaxLength: row.character_maximum_length,
       numericPrecision: row.numeric_precision,
       numericScale: row.numeric_scale,
+      autoIncrement: /auto_increment/i.test(row.extra ?? ''),
+      characterSet: row.character_set_name,
+      collation: row.collation_name,
     };
   }
 
@@ -285,7 +308,9 @@ SELECT
   c.CHARACTER_MAXIMUM_LENGTH AS character_maximum_length,
   c.NUMERIC_PRECISION  AS numeric_precision,
   c.NUMERIC_SCALE      AS numeric_scale,
-  c.EXTRA              AS extra
+  c.EXTRA              AS extra,
+  c.CHARACTER_SET_NAME AS character_set_name,
+  c.COLLATION_NAME     AS collation_name
 FROM information_schema.COLUMNS c
 JOIN information_schema.TABLES t
   ON c.TABLE_SCHEMA = t.TABLE_SCHEMA AND c.TABLE_NAME = t.TABLE_NAME
@@ -293,6 +318,17 @@ WHERE c.TABLE_SCHEMA = ?
   AND t.TABLE_TYPE = 'BASE TABLE'
   AND t.TABLE_SCHEMA = ?
 ORDER BY c.TABLE_NAME, c.ORDINAL_POSITION
+`;
+
+const TABLES_QUERY = `
+SELECT
+  TABLE_NAME       AS table_name,
+  ENGINE           AS engine,
+  TABLE_COLLATION  AS table_collation,
+  AUTO_INCREMENT   AS auto_increment
+FROM information_schema.TABLES
+WHERE TABLE_SCHEMA = ?
+  AND TABLE_TYPE = 'BASE TABLE'
 `;
 
 const CONSTRAINTS_QUERY = `

@@ -7,19 +7,21 @@ function makeInspector() {
   return new MysqlSchemaInspector();
 }
 
-/** Shorthand for building the 4-query sequence expected by inspect(). */
+/** Shorthand for building the 5-query sequence expected by inspect(). */
 function mockInspectorQueries(
   connection: IDatabaseConnection,
   dbRow: unknown[],
   columnRows: unknown[],
   constraintRows: unknown[],
-  indexRows: unknown[]
+  indexRows: unknown[],
+  tableRows: unknown[] = []
 ) {
   mockQuerySequence(connection, [
-    dbRow,        // SELECT DATABASE()
-    columnRows,   // columns query (parallel)
+    dbRow,          // SELECT DATABASE()
+    columnRows,     // columns query (parallel)
     constraintRows, // constraints query (parallel)
-    indexRows,    // indexes query (parallel)
+    indexRows,      // indexes query (parallel)
+    tableRows,      // tables query (parallel)
   ]);
 }
 
@@ -228,11 +230,11 @@ describe('MysqlSchemaInspector', () => {
     });
 
     it('uses schemaName argument when provided', async () => {
-      mockQuerySequence(connection, [[], [], []]);
+      mockQuerySequence(connection, [[], [], [], []]);
       await inspector.inspect(connection, 'myschema');
       // Should not call SELECT DATABASE() — queries should use 'myschema' directly
-      // We verify there's no extra query beyond the 3 parallel ones
-      expect((connection.query as ReturnType<typeof vi.fn>).mock.calls.length).toBe(3);
+      // We verify there's no extra query beyond the 4 parallel ones
+      expect((connection.query as ReturnType<typeof vi.fn>).mock.calls.length).toBe(4);
     });
   });
 

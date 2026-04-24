@@ -89,8 +89,13 @@ export class MigrationOrchestrator {
       // Step 7: Create indexes
       await synchronizer.createIndexes(destConnection, diff);
 
-      // Step 8: Reset sequences
-      await synchronizer.resetSequences(sourceConnection, destConnection, sourceSchema.sequences);
+      // Step 8: Reset sequences / per-table AUTO_INCREMENT counters
+      await synchronizer.resetSequences(
+        sourceConnection,
+        destConnection,
+        sourceSchema.sequences,
+        sourceSchema.tables
+      );
 
       return result;
     } finally {
