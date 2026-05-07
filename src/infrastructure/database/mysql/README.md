@@ -1,14 +1,32 @@
-# MySQL Adapter (v2)
+# MySQL Adapter
 
-Planned for v2. Implement the following interfaces to add MySQL support:
+Fully implemented. Registered in `src/presentation/cli/cli.ts` alongside the PostgreSQL adapter.
 
-- `IDatabaseConnection` → `mysql-connection.adapter.ts` using `mysql2`
-- `ISchemaInspector` → `mysql-schema-inspector.adapter.ts` using `information_schema`
-- `ISchemaSynchronizer` → `mysql-schema-synchronizer.adapter.ts`
-- `ISchemaTranslator` → `mysql-schema-translator.adapter.ts` (MySQL ↔ Postgres type mappings)
-- `IDataMigrator` → `../../migration/mysql-data-migrator.adapter.ts` (batched INSERT, optional LOAD DATA LOCAL INFILE)
-- Wire all into `mysql-adapter-set.ts` and register in `src/index.ts`
+## Files
 
-Add `mysql2` to `dependencies` in `package.json`.
+| File | Purpose |
+|------|---------|
+| `mysql-connection.adapter.ts` | `IDatabaseConnection` — pool-based connection using `mysql2/promise` |
+| `mysql-schema-inspector.adapter.ts` | `ISchemaInspector` — introspects via `information_schema` + `SHOW INDEXES` |
+| `mysql-schema-synchronizer.adapter.ts` | `ISchemaSynchronizer` — DDL apply, FK checks, AUTO_INCREMENT reset |
+| `mysql-query-analyzer.adapter.ts` | `IQueryAnalyzer` — infers column types via `DESCRIBE` on a temp view |
+| `mysql-to-postgres-translator.adapter.ts` | `ISchemaTranslator` — delegates to `MysqlToPostgresTranslator` |
+| `mysql-adapter-set.ts` | `DatabaseAdapterSet` — wires all adapters together |
 
-See `docs/implementation-plan.md` → "v2: MySQL" for full type mappings and FK handling notes.
+## Type translation
+
+MySQL → PostgreSQL translation uses `MYSQL_TO_POSTGRES_TYPE_MAP` via `CrossDbSchemaTranslator`.
+PostgreSQL → MySQL translation uses `POSTGRES_TO_MYSQL_TYPE_MAP` via `PostgresToMysqlTranslator`.
+
+See `src/infrastructure/database/translation/` for the type maps and base translator.
+
+## FK handling
+
+FK checks are disabled via `SET SESSION FOREIGN_KEY_CHECKS = 0` before data copy and
+re-enabled with `SET SESSION FOREIGN_KEY_CHECKS = 1` after. `disableTriggers` /
+`enableTriggers` on `MysqlSchemaSynchronizer` wrap these statements.
+
+## AUTO_INCREMENT reset
+
+`resetSequences()` reads the current max value per table from the source and issues
+`ALTER TABLE ... AUTO_INCREMENT = <value>` on the destination.

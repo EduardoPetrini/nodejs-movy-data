@@ -170,7 +170,8 @@ src/
 │   │   ├── migrate-query.use-case.ts   # Custom SQL → new table
 │   │   └── validate-counts.use-case.ts # Row-count comparison
 │   └── services/
-│       └── migration-orchestrator.service.ts
+│       ├── migration-orchestrator.service.ts
+│       └── table-migration-planner.service.ts  # Topological FK sort → TableMigrationPlan
 ├── infrastructure/
 │   ├── database/
 │   │   ├── registry.ts                 # DatabaseAdapterRegistry + PassthroughSchemaTranslator
@@ -215,8 +216,34 @@ src/
 tests/
 ├── unit/
 │   ├── domain/
+│   │   └── errors.test.ts
 │   ├── application/
+│   │   ├── compare-schemas.use-case.test.ts
+│   │   ├── create-database.use-case.test.ts
+│   │   ├── migrate-data.use-case.test.ts
+│   │   ├── migration-orchestrator.service.test.ts
+│   │   ├── sync-schema.use-case.test.ts
+│   │   ├── table-migration-planner.service.test.ts
+│   │   └── validate-counts.use-case.test.ts
 │   └── infrastructure/
+│       ├── database-adapter-registry.test.ts
+│       ├── mysql-data-migrator.test.ts
+│       ├── pg-data-migrator.test.ts
+│       ├── pg-schema-inspector.test.ts
+│       ├── pg-schema-synchronizer.test.ts
+│       ├── pg-schema-translator.test.ts
+│       ├── worker-pool.test.ts
+│       ├── mysql/
+│       │   ├── mysql-schema-inspector.test.ts
+│       │   ├── mysql-schema-synchronizer.test.ts
+│       │   └── mysql-to-postgres-translator.test.ts
+│       ├── translation/
+│       │   ├── cross-db-schema-translator.test.ts
+│       │   ├── default-value-translator.test.ts
+│       │   ├── mysql-to-postgres-type-map.test.ts
+│       │   └── postgres-to-mysql-type-map.test.ts
+│       └── presentation/
+│           └── prompt.test.ts
 ├── integration/
 │   └── README.md
 └── helpers/
@@ -234,13 +261,18 @@ tests/
 5. **Inspect & diff schemas** — source inspector + dest inspector; `synchronizer.diff()`
 6. **Apply schema diff** — tables, columns, constraints (no indexes yet); types run through `ISchemaTranslator`
 7. **Disable FK checks / triggers** — `synchronizer.disableTriggers()` (PG: `DISABLE TRIGGER ALL`; MySQL: `SET FOREIGN_KEY_CHECKS=0`)
-8. **Migrate data** — `registry.getDataMigrator(source, dest)` selects the right migrator:
+8. **Plan table migration order** — `TableMigrationPlanner.plan(tables, rowEstimates)` performs a topological sort on FK dependencies, producing a `TableMigrationPlan` with:
+   - `loadOrder` — tables in dependency-safe copy order, ties broken by row count desc (largest tables first)
+   - `cleanupOrder` — reverse of loadOrder, used for destination truncation
+   - `levels` — topological levels (tables in the same level have no mutual dependencies)
+   - `cyclicTables` — tables involved in FK cycles, appended at the end with a warning
+9. **Migrate data** — `registry.getDataMigrator(source, dest)` selects the right migrator, called with the `TableMigrationPlan`:
    - PG→PG: `WorkerPool` + `pg-copy-streams` (parallel, up to 4 workers)
    - MySQL→MySQL: `MysqlDataMigrator` (sequential, batched SELECT/INSERT)
    - MySQL↔PG: `CrossDbDataMigrator` (sequential, batched SELECT/INSERT, batch size 500)
-9. **Re-enable FK checks / triggers** — `synchronizer.enableTriggers()`
-10. **Create indexes** — deferred from step 6 for bulk-load performance
-11. **Reset sequences** — PG only; query source `last_value`, call `setval()` on destination
+10. **Re-enable FK checks / triggers** — `synchronizer.enableTriggers()`
+11. **Create indexes** — deferred from step 6 for bulk-load performance
+12. **Reset sequences** — PG: query source `last_value`, call `setval()` on destination. MySQL: `ALTER TABLE … AUTO_INCREMENT = <value>`.
 
 ### Error handling
 
@@ -266,6 +298,18 @@ After a `migrate` run, the user is optionally prompted to run row-count validati
 
 ## Key Interfaces
 
+### `TableMigrationPlan`
+```ts
+interface TableMigrationPlan {
+  loadOrder: string[];      // tables in safe FK dependency order, largest first within each level
+  cleanupOrder: string[];   // reverse of loadOrder — used to truncate destination tables
+  levels: string[][];       // topological levels; tables in the same level have no mutual FK deps
+  cyclicTables: string[];   // tables in FK cycles; appended at end of loadOrder with a warning
+}
+```
+
+Produced by `TableMigrationPlanner.plan(tables, rowEstimates)` and consumed by all `IDataMigrator` implementations.
+
 ### `IDatabaseConnection`
 ```ts
 connect(): Promise<void>
@@ -287,7 +331,7 @@ apply(connection: IDatabaseConnection, diff: SchemaDiff): Promise<void>
 disableTriggers(connection: IDatabaseConnection, tables: string[]): Promise<void>
 enableTriggers(connection: IDatabaseConnection, tables: string[]): Promise<void>
 createIndexes(connection: IDatabaseConnection, diff: SchemaDiff): Promise<void>
-resetSequences(source: IDatabaseConnection, dest: IDatabaseConnection, sequences: SequenceSchema[]): Promise<void>
+resetSequences(source: IDatabaseConnection, dest: IDatabaseConnection, sequences: SequenceSchema[], tables?: TableSchema[]): Promise<void>
 ensureDatabase(adminConnection: IDatabaseConnection, dbName: string): Promise<boolean>
 ```
 
@@ -296,7 +340,7 @@ ensureDatabase(adminConnection: IDatabaseConnection, dbName: string): Promise<bo
 migrate(
   sourceConfig: ConnectionConfig,
   destConfig: ConnectionConfig,
-  tables: string[],
+  plan: TableMigrationPlan,       // load/cleanup order computed by TableMigrationPlanner
   workerCount: number,
   rowEstimates?: Map<string, number>,
   onProgress?: MigrationProgressCallback

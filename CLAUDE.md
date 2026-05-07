@@ -66,6 +66,15 @@ registry.registerDataMigrator(POSTGRES, MYSQL, () => new CrossDbDataMigrator())
 
 To add a new database, implement `DatabaseAdapterSet` and register it plus any cross-DB translators/migrators in `cli.ts`.
 
+### Application services
+
+| Service | Purpose |
+|---------|---------|
+| `MigrationOrchestrator` | Orchestrates the full migration flow (9 steps) |
+| `TableMigrationPlanner` | Topologically sorts tables by FK dependency; produces `TableMigrationPlan` with `loadOrder`, `cleanupOrder`, `levels`, and `cyclicTables` |
+
+`MigrateDataUseCase` creates a `TableMigrationPlanner` internally and calls `planner.plan(tables, rowEstimates)` to determine the correct copy order before invoking the data migrator.
+
 ### CLI app modes
 
 The CLI prompts the user to choose an app mode at startup:
@@ -82,10 +91,11 @@ Logs are written to both the console and a timestamped file under `logs/` (`movy
 2. Inspect source schema and diff against destination schema
 3. Apply schema diff (tables, columns, constraints — but not indexes yet); types run through `ISchemaTranslator`
 4. Disable FK checks / triggers on destination
-5. Migrate data using the appropriate migrator for the source↔dest pair
-6. Re-enable FK checks / triggers
-7. Create indexes
-8. Reset sequences
+5. Fetch row estimates from source; `TableMigrationPlanner` topologically sorts tables by FK dependency to produce a `TableMigrationPlan`
+6. Migrate data using the appropriate migrator for the source↔dest pair (plan determines load order)
+7. Re-enable FK checks / triggers
+8. Create indexes
+9. Reset sequences (PG: `setval()`; MySQL: `ALTER TABLE … AUTO_INCREMENT`)
 
 ### Data migration — migrator selection
 
