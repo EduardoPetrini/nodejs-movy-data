@@ -22,8 +22,44 @@ CLI-based data migration platform that moves schema and data between databases. 
 | Row-count validation mode | ✅ Done |
 | File + console logging (TeeLogger) | ✅ Done |
 | Connection retry with backoff | ✅ Done |
-| MSSQL support | ⬜ Planned (v3) |
+| MSSQL support (all 5 pairs) | ✅ Done |
 | Snowflake support | ⬜ Planned (v3) |
+
+### Status by Pair
+
+A **Pair** is one directional migration route, and is the unit of completion. A Pair is
+**Done** when implemented and covered by automated tests against mocks — running against a
+live database instance is not required (see `CONTEXT.md`).
+
+| Source ↓ / Destination → | PostgreSQL | MySQL | MSSQL | Snowflake |
+|--------------------------|-----------|-------|-------|-----------|
+| **PostgreSQL**           | ✅ Done   | ✅ Done | ✅ Done | ⬜ Planned |
+| **MySQL**                | ✅ Done   | ✅ Done | ✅ Done | ⬜ Planned |
+| **MSSQL**                | ✅ Done   | ✅ Done | ✅ Done | ⬜ Planned |
+| **Snowflake**            | ⬜ Planned | ⬜ Planned | ⬜ Planned | ⬜ Planned |
+
+Nine Pairs Done, seven Planned.
+
+### Test coverage
+
+`npm run test:coverage`. Thresholds in `vitest.config.ts` are pinned to the measured floor
+so the build stays green and ratchets upward; the target is 80%.
+
+| Area | Statements | Note |
+|------|-----------|------|
+| Translation layer (base + type maps) | 98.0% | Every type map at 100% |
+| MSSQL surface (all files across its 5 Pairs) | 81.0% | Clears the 80% target |
+| Application use cases + services | 74.6% | `migrate-query.use-case.ts` at 0% |
+| MySQL surface | 68.6% | |
+| Data migration | 68.4% | `cross-db-data-migrator.ts`, `table-copy.worker.ts` at 0% |
+| PostgreSQL surface | 63.7% | |
+| **`presentation/cli`** | **4.5%** | `cli.ts` 0%, `prompt.ts` 6.6% — the dominant global drag |
+| **Global** | **55.8%** | |
+
+The lowest-coverage files are those that wrap real I/O — connection adapters, the worker
+thread, and the interactive CLI — which mocks cover poorly. Raising the global figure
+means either testing `prompt.ts` directly (419 uncovered statements between it and
+`cli.ts`, the single biggest win available) or accepting these as excluded.
 
 ---
 
@@ -40,6 +76,12 @@ CLI-based data migration platform that moves schema and data between databases. 
 | Table distribution | Sort by row count desc, round-robin across workers | Spreads large tables evenly |
 | FK handling (PG) | Disable/re-enable triggers (`DISABLE TRIGGER ALL`) | Avoids topological sort, standard pg bulk-load approach |
 | FK handling (MySQL) | `SET FOREIGN_KEY_CHECKS = 0/1` | MySQL equivalent of trigger disabling |
+| Schema introspection (MSSQL) | `INFORMATION_SCHEMA` + `sys.*` catalog views | `sys.indexes/index_columns` for indexes; `COLUMNPROPERTY` for IDENTITY flag; `sys.partitions` for row estimates |
+| FK handling (MSSQL) | `ALTER TABLE [t] NOCHECK CONSTRAINT ALL` / `WITH CHECK CHECK CONSTRAINT ALL` | MSSQL equivalent of trigger disabling; applies per table |
+| Data transfer (MSSQL→MSSQL) | Batched SELECT + INSERT (`BATCH_SIZE=500`) with IDENTITY_INSERT | MSSQL OFFSET/FETCH pagination; IDENTITY_INSERT ON/OFF per table |
+| Data transfer (MSSQL cross-DB) | `MssqlCrossDbDataMigrator` — batched SELECT + INSERT | Handles MSSQL↔PG and MSSQL↔MySQL; IDENTITY detection for MSSQL destinations |
+| Identifier quoting (MSSQL) | `[bracketed]` syntax | MSSQL standard; avoids conflicts with reserved keywords |
+| MSSQL sequence reset | `DBCC CHECKIDENT ('[t]', RESEED, value)` | MSSQL equivalent of PG `setval()` / MySQL `AUTO_INCREMENT` |
 | Transactions | Per-table (not global) | Global tx impractical for multi-GB, would hold locks too long |
 | Cross-DB translation | `CrossDbSchemaTranslator` base class + subclasses | Normalised type lookup with precision-suffix propagation |
 | CLI prompts | `readline/promises` (built-in) | No extra dependency needed |
@@ -105,6 +147,10 @@ registry.registerDataMigrator(POSTGRES, MYSQL, () => new CrossDbDataMigrator())
 Concrete subclasses:
 - `MysqlToPostgresTranslator` — uses `MYSQL_TO_POSTGRES_TYPE_MAP`
 - `PostgresToMysqlTranslator` — uses `POSTGRES_TO_MYSQL_TYPE_MAP`
+- `MssqlToPostgresTranslator` — uses `MSSQL_TO_POSTGRES_TYPE_MAP`
+- `MssqlToMysqlTranslator` — uses `MSSQL_TO_MYSQL_TYPE_MAP`
+- `PostgresToMssqlTranslator` — uses `POSTGRES_TO_MSSQL_TYPE_MAP`
+- `MysqlToMssqlTranslator` — uses `MYSQL_TO_MSSQL_TYPE_MAP`
 
 Default-value translation is handled by `DefaultValueTranslator` (injected into each subclass).
 
@@ -117,7 +163,8 @@ Default-value translation is handled by `DefaultValueTranslator` (injected into 
   "dependencies": {
     "pg": "^8.x",
     "pg-copy-streams": "^7.x",
-    "mysql2": "^3.x"
+    "mysql2": "^3.x",
+    "mssql": "^12.x"
   },
   "devDependencies": {
     "typescript": "^6.x",
@@ -135,8 +182,9 @@ Default-value translation is handled by `DefaultValueTranslator` (injected into 
 
 | Database | Driver |
 |----------|--------|
-| MSSQL | `mssql` (wraps `tedious`) |
 | Snowflake | `snowflake-sdk` |
+
+`@vitest/coverage-v8` is installed as a devDependency for `npm run test:coverage`.
 
 ---
 
@@ -182,6 +230,7 @@ src/
 │   │   │   ├── pg-schema-translator.adapter.ts  # Passthrough (PG→PG)
 │   │   │   ├── pg-query-analyzer.adapter.ts
 │   │   │   ├── postgres-to-mysql-translator.adapter.ts
+│   │   │   ├── postgres-to-mssql-translator.adapter.ts
 │   │   │   └── pg-adapter-set.ts
 │   │   ├── mysql/
 │   │   │   ├── mysql-connection.adapter.ts
@@ -189,17 +238,32 @@ src/
 │   │   │   ├── mysql-schema-synchronizer.adapter.ts
 │   │   │   ├── mysql-query-analyzer.adapter.ts
 │   │   │   ├── mysql-to-postgres-translator.adapter.ts
+│   │   │   ├── mysql-to-mssql-translator.adapter.ts
 │   │   │   └── mysql-adapter-set.ts
+│   │   ├── mssql/
+│   │   │   ├── mssql-connection.adapter.ts
+│   │   │   ├── mssql-schema-inspector.adapter.ts
+│   │   │   ├── mssql-schema-synchronizer.adapter.ts
+│   │   │   ├── mssql-query-analyzer.adapter.ts
+│   │   │   ├── mssql-to-postgres-translator.adapter.ts
+│   │   │   ├── mssql-to-mysql-translator.adapter.ts
+│   │   │   └── mssql-adapter-set.ts
 │   │   └── translation/
 │   │       ├── cross-db-schema-translator.ts   # Abstract base class
 │   │       ├── default-value.translator.ts
 │   │       └── type-maps/
 │   │           ├── mysql-to-postgres.type-map.ts
-│   │           └── postgres-to-mysql.type-map.ts
+│   │           ├── postgres-to-mysql.type-map.ts
+│   │           ├── mssql-to-postgres.type-map.ts
+│   │           ├── mssql-to-mysql.type-map.ts
+│   │           ├── postgres-to-mssql.type-map.ts
+│   │           └── mysql-to-mssql.type-map.ts
 │   ├── migration/
-│   │   ├── pg-data-migrator.adapter.ts     # PG→PG via pg-copy-streams workers
-│   │   ├── mysql-data-migrator.adapter.ts  # MySQL→MySQL via batched SELECT/INSERT
-│   │   ├── cross-db-data-migrator.ts       # MySQL↔PG via batched SELECT/INSERT
+│   │   ├── pg-data-migrator.adapter.ts          # PG→PG via pg-copy-streams workers
+│   │   ├── mysql-data-migrator.adapter.ts        # MySQL→MySQL via batched SELECT/INSERT
+│   │   ├── cross-db-data-migrator.ts             # MySQL↔PG via batched SELECT/INSERT
+│   │   ├── mssql-data-migrator.adapter.ts        # MSSQL→MSSQL via batched SELECT/INSERT
+│   │   ├── mssql-cross-db-data-migrator.ts       # All MSSQL↔PG and MSSQL↔MySQL pairs
 │   │   ├── worker-pool.ts
 │   │   └── table-copy.worker.ts
 │   └── logging/
@@ -236,12 +300,27 @@ tests/
 │       ├── mysql/
 │       │   ├── mysql-schema-inspector.test.ts
 │       │   ├── mysql-schema-synchronizer.test.ts
-│       │   └── mysql-to-postgres-translator.test.ts
+│       │   ├── mysql-to-postgres-translator.test.ts
+│       │   └── mysql-to-mssql-translator.test.ts
+│       ├── mssql/
+│       │   ├── mssql-connection.test.ts
+│       │   ├── mssql-schema-inspector.test.ts
+│       │   ├── mssql-schema-synchronizer.test.ts
+│       │   ├── mssql-to-postgres-translator.test.ts
+│       │   └── mssql-to-mysql-translator.test.ts
+│       ├── pg/
+│       │   └── postgres-to-mssql-translator.test.ts
 │       ├── translation/
 │       │   ├── cross-db-schema-translator.test.ts
 │       │   ├── default-value-translator.test.ts
 │       │   ├── mysql-to-postgres-type-map.test.ts
-│       │   └── postgres-to-mysql-type-map.test.ts
+│       │   ├── postgres-to-mysql-type-map.test.ts
+│       │   ├── mssql-to-postgres-type-map.test.ts
+│       │   ├── mssql-to-mysql-type-map.test.ts
+│       │   ├── postgres-to-mssql-type-map.test.ts
+│       │   └── mysql-to-mssql-type-map.test.ts
+│       ├── mssql-data-migrator.test.ts
+│       ├── mssql-cross-db-data-migrator.test.ts
 │       └── presentation/
 │           └── prompt.test.ts
 ├── integration/
@@ -270,6 +349,8 @@ tests/
    - PG→PG: `WorkerPool` + `pg-copy-streams` (parallel, up to 4 workers)
    - MySQL→MySQL: `MysqlDataMigrator` (sequential, batched SELECT/INSERT)
    - MySQL↔PG: `CrossDbDataMigrator` (sequential, batched SELECT/INSERT, batch size 500)
+   - MSSQL→MSSQL: `MssqlDataMigrator` (sequential, batched SELECT/INSERT, NOCHECK/CHECK constraints)
+   - MSSQL↔PG / MSSQL↔MySQL: `MssqlCrossDbDataMigrator` (sequential, batched, IDENTITY_INSERT handling)
 10. **Re-enable FK checks / triggers** — `synchronizer.enableTriggers()`
 11. **Create indexes** — deferred from step 6 for bulk-load performance
 12. **Reset sequences** — PG: query source `last_value`, call `setval()` on destination. MySQL: `ALTER TABLE … AUTO_INCREMENT = <value>`.
@@ -401,52 +482,193 @@ listTypes(): DatabaseType[]
 
 Reverse mappings defined in `postgres-to-mysql.type-map.ts`.
 
+### MSSQL → PostgreSQL
+
+| MSSQL | PostgreSQL |
+|-------|-----------|
+| `nvarchar` | `varchar` (length preserved) |
+| `nvarchar(max)` / `ntext` | `text` |
+| `nchar` | `char` |
+| `bit` | `boolean` |
+| `int` | `integer` |
+| `bigint` | `bigint` |
+| `smallint` | `smallint` |
+| `tinyint` | `smallint` |
+| `decimal` / `numeric` | `numeric` (precision preserved) |
+| `money` / `smallmoney` | `numeric(19,4)` |
+| `float` | `double precision` |
+| `real` | `real` |
+| `datetime` / `datetime2` / `smalldatetime` | `timestamp without time zone` |
+| `datetimeoffset` | `timestamp with time zone` |
+| `date` | `date` |
+| `time` | `time` |
+| `timestamp` / `rowversion` | `bytea` (binary row-version, not a datetime) |
+| `uniqueidentifier` | `uuid` |
+| `varbinary(max)` / `image` | `bytea` |
+| `xml` | `xml` |
+| `char` | `char` |
+| `varchar` | `varchar` |
+
+### MSSQL → MySQL
+
+| MSSQL | MySQL |
+|-------|-------|
+| `nvarchar` | `varchar` (length preserved) |
+| `nvarchar(max)` / `ntext` | `longtext` |
+| `nchar` | `char` |
+| `bit` | `tinyint(1)` |
+| `int` | `int` |
+| `bigint` | `bigint` |
+| `smallint` | `smallint` |
+| `tinyint` | `tinyint` |
+| `decimal` / `numeric` | `decimal` (precision preserved) |
+| `money` / `smallmoney` | `decimal(19,4)` |
+| `float` | `double` |
+| `real` | `float` |
+| `datetime` / `smalldatetime` | `datetime` |
+| `datetime2` | `datetime` |
+| `datetimeoffset` | `datetime` |
+| `date` | `date` |
+| `time` | `time` |
+| `timestamp` / `rowversion` | `binary(8)` |
+| `uniqueidentifier` | `char(36)` |
+| `varbinary(max)` / `image` | `longblob` |
+| `xml` | `longtext` |
+
+### PostgreSQL → MSSQL
+
+| PostgreSQL | MSSQL |
+|-----------|-------|
+| `boolean` | `bit` |
+| `integer` / `int4` | `int` |
+| `bigint` / `int8` | `bigint` |
+| `smallint` / `int2` | `smallint` |
+| `numeric` / `decimal` | `decimal` (precision preserved) |
+| `double precision` | `float` |
+| `real` | `real` |
+| `varchar` / `character varying` | `nvarchar` (length preserved) |
+| `text` | `nvarchar(max)` |
+| `char` / `character` | `nchar` |
+| `bytea` | `varbinary(max)` |
+| `timestamp` / `timestamp without time zone` | `datetime2` |
+| `timestamp with time zone` | `datetimeoffset` |
+| `date` | `date` |
+| `time` | `time` |
+| `uuid` | `uniqueidentifier` |
+| `jsonb` / `json` | `nvarchar(max)` |
+| `xml` | `xml` |
+| `serial` | `int` |
+| `bigserial` | `bigint` |
+
+### MySQL → MSSQL
+
+| MySQL | MSSQL |
+|-------|-------|
+| `tinyint(1)` | `bit` |
+| `tinyint` | `tinyint` |
+| `smallint` | `smallint` |
+| `mediumint` / `int` / `integer` | `int` |
+| `bigint` | `bigint` |
+| `float` | `float` |
+| `double` | `float` |
+| `decimal` / `numeric` | `decimal` (precision preserved) |
+| `char` | `nchar` |
+| `varchar` | `nvarchar` (length preserved) |
+| `tinytext` / `text` / `mediumtext` / `longtext` | `nvarchar(max)` |
+| `binary` / `varbinary` | `varbinary` |
+| `tinyblob` / `blob` / `mediumblob` / `longblob` | `varbinary(max)` |
+| `date` | `date` |
+| `time` | `time` |
+| `datetime` | `datetime2` |
+| `timestamp` | `datetimeoffset` |
+| `year` | `int` |
+| `json` | `nvarchar(max)` |
+| `enum` / `set` | `nvarchar(255)` |
+
 ---
 
 ## Future Database Support Roadmap
 
-### v3: MSSQL
+### Snowflake — current state and remaining work
 
-**Driver**: `mssql` (wraps `tedious`; supports Windows auth, Azure AD)
+Snowflake is engine #4. It is built on the existing **direct-pair** design — see
+[ADR-0001](adr/0001-direct-pair-type-translation.md) — so it costs six new type maps and
+six new translators, not two.
 
-**Schema introspection**: `sys.tables`, `sys.columns`, `sys.indexes`, `sys.foreign_keys` + `INFORMATION_SCHEMA` views.
+#### What exists today
 
-**Data transfer**: BCP via `mssql`'s bulk insert API; fallback to batched INSERT with `IDENTITY_INSERT ON`.
+| Item | State |
+|------|-------|
+| `DatabaseType.SNOWFLAKE` in `domain/types/connection.types.ts` | ✅ present |
+| CLI env-type parsing (`snowflake` → `DatabaseType.SNOWFLAKE`, `prompt.ts`) | ✅ present |
+| "Planned for v3" message in `UnsupportedDatabaseError` | ✅ present — selecting Snowflake fails cleanly, no crash |
+| `src/infrastructure/database/snowflake/README.md` | ✅ stub only |
+| Everything else | ⬜ nothing — no adapters, no type maps, no tests, no `snowflake-sdk` dependency |
 
-**Type map (MSSQL → PostgreSQL)**:
+#### Pairs to deliver — 7
 
-| MSSQL | PostgreSQL |
-|-------|-----------|
-| `NVARCHAR(n)` | `VARCHAR(n)` |
-| `NTEXT` | `TEXT` |
-| `BIT` | `BOOLEAN` |
-| `DATETIME2` | `TIMESTAMP WITHOUT TIME ZONE` |
-| `DATETIMEOFFSET` | `TIMESTAMP WITH TIME ZONE` |
-| `MONEY` | `NUMERIC(19,4)` |
-| `UNIQUEIDENTIFIER` | `UUID` |
-| `IMAGE` | `BYTEA` |
-| `IDENTITY(1,1)` | `GENERATED ALWAYS AS IDENTITY` |
+One same-engine plus six cross-engine:
 
-**Special considerations**: `[bracketed]` identifiers; multi-schema support may be needed (`dbo` is default).
+`SF→SF`, `SF→PG`, `PG→SF`, `SF→MySQL`, `MySQL→SF`, `SF→MSSQL`, `MSSQL→SF`
 
-**Adapters to implement**:
-- `infrastructure/database/mssql/mssql-connection.adapter.ts`
-- `infrastructure/database/mssql/mssql-schema-inspector.adapter.ts`
-- `infrastructure/database/mssql/mssql-schema-synchronizer.adapter.ts`
-- `infrastructure/database/mssql/mssql-to-postgres-translator.adapter.ts`
-- `infrastructure/database/mssql/mssql-adapter-set.ts`
-- `infrastructure/migration/mssql-data-migrator.adapter.ts`
-- `infrastructure/database/translation/type-maps/mssql-to-postgres.type-map.ts`
+#### Blocking design gaps
 
-### v3: Snowflake
+These must be resolved before adapter work starts — each one breaks an assumption the
+other three engines share.
 
-**Driver**: `snowflake-sdk` (official Snowflake Node.js driver)
+1. **`ConnectionConfig` has no Snowflake fields.** Snowflake connects by `account`,
+   `warehouse`, `role` and optional `schema` — none of which exist on the current shape:
 
-**Schema introspection**: `INFORMATION_SCHEMA.TABLES/COLUMNS` + `SHOW PRIMARY KEYS` / `SHOW IMPORTED KEYS`.
+   ```ts
+   interface ConnectionConfig {
+     type: DatabaseType; host: string; port: number;
+     user: string; password: string; database: string;
+   }
+   ```
 
-**Data transfer**: `PUT` staged CSV + `COPY INTO` (only performant bulk-load path for Snowflake).
+   This is a **domain type change affecting every engine**, plus the CLI prompt flow and
+   the `{ROLE}_{DBTYPE}_{FIELD}` env convention. Decide the shape first — an optional
+   engine-specific bag versus widening the interface — because every adapter reads it.
 
-**Type map (Snowflake → PostgreSQL)**:
+2. **No enforced foreign keys.** Snowflake accepts FK syntax but does not enforce it, so
+   `disableTriggers()` / `enableTriggers()` become no-ops. `TableMigrationPlanner`'s
+   topological sort still matters for a Snowflake *source* (the destination may enforce),
+   but is inert for a Snowflake destination.
+
+3. **No indexes.** `createIndexes()` is a no-op — micro-partitions, not indexes. Index
+   metadata inspected from a source engine has nowhere to land.
+
+4. **No sequences.** `AUTOINCREMENT`/`IDENTITY` exist but there is no `setval()` or
+   `DBCC CHECKIDENT` equivalent; reseeding requires recreating the column's sequence.
+   `resetSequences()` is effectively a no-op, which means round-tripping a PG source
+   through Snowflake and back loses sequence position.
+
+5. **Bulk load is staged, not batched.** The only performant path is `PUT` a local CSV to
+   an internal stage then `COPY INTO`. Batched `INSERT` works but is an order of magnitude
+   slower and is not viable at the 10GB target. This does not fit the
+   `CrossDbDataMigrator` batched SELECT/INSERT shape, so Snowflake destinations need their
+   own migrator that materialises to CSV first.
+
+#### Checklist
+
+- [ ] Resolve the `ConnectionConfig` shape for `account` / `warehouse` / `role` (blocks everything below)
+- [ ] Add `snowflake-sdk` to `dependencies`
+- [ ] Extend CLI prompts and `.env.example` for the new connection fields
+- [ ] `snowflake-connection.adapter.ts` — `IDatabaseConnection`
+- [ ] `snowflake-schema-inspector.adapter.ts` — `INFORMATION_SCHEMA` + `SHOW PRIMARY KEYS` / `SHOW IMPORTED KEYS`
+- [ ] `snowflake-schema-synchronizer.adapter.ts` — no-op `createIndexes` / `resetSequences` / trigger control, documented as deliberate
+- [ ] `snowflake-query-analyzer.adapter.ts` — `IQueryAnalyzer`
+- [ ] 6 type maps: `snowflake-to-{postgres,mysql,mssql}` and `{postgres,mysql,mssql}-to-snowflake`
+- [ ] 6 translators extending `CrossDbSchemaTranslator`
+- [ ] `snowflake-data-migrator.adapter.ts` — `PUT` + `COPY INTO` staged load (SF→SF)
+- [ ] Cross-engine migrator handling staged load for Snowflake destinations
+- [ ] `snowflake-adapter-set.ts`
+- [ ] Register all of the above in `cli.ts`
+- [ ] Unit tests for every adapter and type map — a Pair is not Done without them
+- [ ] Remove the `SNOWFLAKE: 'v3'` entry from `UnsupportedDatabaseError`'s `versionMap` once registered
+- [ ] Update `README.md`, `CLAUDE.md`, `CONTEXT.md` and the Status-by-Pair table
+
+#### Type map (Snowflake → PostgreSQL) — starting point
 
 | Snowflake | PostgreSQL |
 |-----------|-----------|
@@ -458,15 +680,7 @@ Reverse mappings defined in `postgres-to-mysql.type-map.ts`.
 | `TIMESTAMP_TZ` / `TIMESTAMP_LTZ` | `TIMESTAMP WITH TIME ZONE` |
 | `BINARY` | `BYTEA` |
 
-**Special considerations**: No traditional indexes (micro-partitions); `createIndexes()` is a no-op. No standalone sequences; `resetSequences()` is a no-op.
-
-**Adapters to implement**:
-- `infrastructure/database/snowflake/snowflake-connection.adapter.ts`
-- `infrastructure/database/snowflake/snowflake-schema-inspector.adapter.ts`
-- `infrastructure/database/snowflake/snowflake-schema-synchronizer.adapter.ts`
-- `infrastructure/database/snowflake/snowflake-to-postgres-translator.adapter.ts`
-- `infrastructure/database/snowflake/snowflake-adapter-set.ts`
-- `infrastructure/migration/snowflake-data-migrator.adapter.ts`
+The remaining five maps are unwritten.
 
 ### Adding a new database: checklist
 
@@ -491,11 +705,22 @@ Reverse mappings defined in `postgres-to-mysql.type-map.ts`.
 
 - **Public schema only (PostgreSQL)**: Targets `public` schema. Other schemas are ignored.
 - **MySQL enums**: Migrated as `text`; enum values are not preserved as PostgreSQL `ENUM` types.
-- **MySQL sequences**: MySQL has no standalone sequences; `resetSequences()` is a no-op for MySQL destinations.
-- **Custom query migration**: PostgreSQL source only.
+- **MySQL sequences**: MySQL has no standalone sequences, so the `SequenceSchema[]` argument is ignored. `resetSequences()` is *not* a no-op — it replays each table's `AUTO_INCREMENT` value via `ALTER TABLE … AUTO_INCREMENT`.
+- **Custom query migration**: PostgreSQL source **and** destination only. `MigrateQueryUseCase` streams via `COPY … TO STDOUT` / `COPY … FROM STDIN` and casts both connections to `PgConnection`; there is no portable equivalent for MySQL or MSSQL. `MssqlQueryAnalyzer` and `MysqlQueryAnalyzer` are therefore unreachable dead code (see issue #4).
+- **MSSQL schema**: Only `dbo` schema is supported. Tables in other schemas are not introspected.
+- **MSSQL `timestamp`/`rowversion`**: These are binary row-version counters (not datetime); mapped to `bytea`/`binary(8)` in cross-DB migrations.
 - **Same-engine worker parallelism**: Only PG→PG uses worker threads. MySQL→MySQL and cross-engine migrations process tables sequentially.
 - **No resume/retry**: Partial migration state is reported but not automatically recovered.
 - **No dry-run mode**: All changes are applied directly. Use a staging destination to preview.
+
+### Open bugs
+
+- **[#4](https://github.com/EduardoPetrini/nodejs-movy-data/issues/4) — `MssqlQueryAnalyzer` and `MysqlQueryAnalyzer` are unreachable.** Both are implemented and wired into their adapter sets, but query migration is PostgreSQL-only by construction, so neither can run. Open question: implement portable query migration, or delete them. `needs-triage`.
+
+### Fixed in this pass
+
+- **[#3](https://github.com/EduardoPetrini/nodejs-movy-data/issues/3) — MSSQL reseed assumed an identity column named `id`.** `resetSequences()` now queries `MAX()` on the column found via `column.autoIncrement` instead of a hardcoded `[id]`. Regression tests added.
+- **[#5](https://github.com/EduardoPetrini/nodejs-movy-data/issues/5) — query migration crashed on a non-PostgreSQL destination.** The CLI guard checked only the source while `streamData()` casts both connections; it now rejects any non-PostgreSQL source *or* destination. The guard itself is still untested — `cli.ts` sits at 0% coverage.
 
 ---
 
@@ -509,5 +734,8 @@ Reverse mappings defined in `postgres-to-mysql.type-map.ts`.
 - **Index creation deferred**: Apply table/column/constraint DDL first; create indexes after data load.
 - **MySQL DDL auto-commits**: MySQL DDL statements (`CREATE TABLE`, `ALTER TABLE`) implicitly commit. Statements are applied sequentially, not in a transaction.
 - **MySQL TEXT/BLOB in indexes**: Require a prefix length (e.g., `col(255)`). `MysqlSchemaSynchronizer.buildConstraintDef()` handles this automatically.
+- **MSSQL IDENTITY_INSERT**: Only one table can have `SET IDENTITY_INSERT ON` at a time. All migrators process tables sequentially, so this is safe.
+- **MSSQL `nvarchar(max)` type maps**: The precision propagation regex only matches digits, so `(max)` requires an explicit exact-match entry in the type map.
+- **MSSQL positional params**: The `mssql` driver uses named params (`@p0`, `@p1`). `MssqlConnection.query()` automatically converts positional `?` placeholders to named inputs.
 - **Vitest + CommonJS**: Set `pool: 'forks'` in `vitest.config.ts`.
 - **Registry initialisation order**: All adapter sets must be registered before the orchestrator is constructed.

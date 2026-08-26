@@ -1,0 +1,1 @@
+/Users/eduardocastro/workspace/personal/coderlm/plugin//skills/coderlm/scripts/coderlm_cli.py

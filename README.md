@@ -2,7 +2,7 @@
 
 # Movy Data
 
-A database-agnostic CLI migration tool. Migrates schema and data between PostgreSQL and MySQL databases, including cross-engine pairs.
+A database-agnostic CLI migration tool. Migrates schema and data between PostgreSQL, MySQL and MSSQL databases, including every cross-engine pair.
 
 <p align="center">
     <img src="docs/hero-logo.png" alt="Movy Data" width="720" />
@@ -11,8 +11,8 @@ A database-agnostic CLI migration tool. Migrates schema and data between Postgre
 ## Features
 
 - Full schema migration (tables, columns, constraints, indexes, sequences/enums)
-- Same-engine migrations: PostgreSQL → PostgreSQL, MySQL → MySQL
-- Cross-engine migrations: PostgreSQL ↔ MySQL
+- Same-engine migrations: PostgreSQL → PostgreSQL, MySQL → MySQL, MSSQL → MSSQL
+- Cross-engine migrations: PostgreSQL ↔ MySQL, MSSQL ↔ PostgreSQL, MSSQL ↔ MySQL
 - Schema diff — only applies changes missing on the destination
 - Custom query migration: run a SQL query on the source and land results as a new table on the destination
 - Row-count validation to verify migration completeness
@@ -46,7 +46,7 @@ Connection credentials follow the pattern `{ROLE}_{DBTYPE}_{FIELD}`:
 | Part | Values |
 |------|--------|
 | `ROLE` | `SOURCE` or `TARGET` |
-| `DBTYPE` | `POSTGRES` or `MYSQL` |
+| `DBTYPE` | `POSTGRES`, `MYSQL` or `MSSQL` |
 | `FIELD` | `HOSTNAME`, `PORT`, `USERNAME`, `PASSWORD`, `DATABASE` |
 
 **Example — MySQL source, PostgreSQL target:**
@@ -64,6 +64,25 @@ TARGET_POSTGRES_USERNAME=postgres
 TARGET_POSTGRES_PASSWORD=secret
 TARGET_POSTGRES_DATABASE=myapp_migrated
 ```
+
+**Example — MSSQL source, PostgreSQL target:**
+
+```env
+SOURCE_MSSQL_HOSTNAME=localhost
+SOURCE_MSSQL_PORT=1433
+SOURCE_MSSQL_USERNAME=sa
+SOURCE_MSSQL_PASSWORD=secret
+SOURCE_MSSQL_DATABASE=myapp
+
+TARGET_POSTGRES_HOSTNAME=localhost
+TARGET_POSTGRES_PORT=5432
+TARGET_POSTGRES_USERNAME=postgres
+TARGET_POSTGRES_PASSWORD=secret
+TARGET_POSTGRES_DATABASE=myapp_migrated
+```
+
+`SQLSERVER` is accepted as an alias for `MSSQL`. Default ports are filled in per engine
+when omitted: PostgreSQL `5432`, MySQL `3306`, MSSQL `1433`.
 
 When at least one `{ROLE}_{DBTYPE}_*` variable is present, the CLI auto-detects the database type for that role and pre-fills any matching fields. Fields not covered by env vars fall back to an interactive prompt. The confirmation summary labels every env-sourced field with `(env)` so you can verify what was loaded automatically.
 
@@ -91,7 +110,7 @@ The CLI will prompt for:
 1. **App mode** — `migrate` or `validate`
 2. **Source connection** — load from env or enter manually: database type, host, port, credentials, database name
 3. **Destination connection** — same fields (defaults to source database name)
-4. **Migration mode** (migrate only) — `full` (entire database) or `query` (custom SQL → new table)
+4. **Migration mode** (migrate only) — `full` (entire database) or `query` (custom SQL → new table; PostgreSQL source **and** destination only)
 5. **Execution review** — confirm before running, optionally run row-count validation afterward
 
 ## Supported databases
@@ -100,10 +119,20 @@ The CLI will prompt for:
 |------------|--------|-------------|
 | PostgreSQL | ✅     | ✅          |
 | MySQL      | ✅     | ✅          |
-| MSSQL      | ⬜ Planned | ⬜ Planned |
+| MSSQL      | ✅     | ✅          |
 | Snowflake  | ⬜ Planned | ⬜ Planned |
 
-All four cross-engine pairs between PostgreSQL and MySQL are supported.
+All nine pairs between PostgreSQL, MySQL and MSSQL are supported — three same-engine and
+six cross-engine.
+
+| Source ↓ / Destination → | PostgreSQL | MySQL | MSSQL |
+|--------------------------|-----------|-------|-------|
+| **PostgreSQL**           | ✅        | ✅    | ✅    |
+| **MySQL**                | ✅        | ✅    | ✅    |
+| **MSSQL**                | ✅        | ✅    | ✅    |
+
+Selecting Snowflake is accepted by the CLI and fails with a clear "not yet implemented"
+message rather than an unhandled error.
 
 ## Commands
 
@@ -113,6 +142,7 @@ npm run dev        # run with hot reload (ts-node-dev)
 npm run build      # compile TypeScript to dist/
 npm test           # run all unit tests (vitest)
 npm run test:watch # vitest in watch mode
+npm run test:coverage  # run tests with a coverage report
 npx tsc --noEmit   # type-check without emitting
 ```
 
@@ -124,7 +154,7 @@ Built with **hexagonal architecture** — domain logic is pure TypeScript with n
 src/
 ├── domain/           # Types, ports (interfaces), errors — no I/O
 ├── application/      # Use cases and MigrationOrchestrator
-├── infrastructure/   # Concrete adapters (pg, mysql, translators, migrators)
+├── infrastructure/   # Concrete adapters (pg, mysql, mssql, translators, migrators)
 └── presentation/     # CLI prompts and entry point
 ```
 
@@ -137,10 +167,12 @@ src/
 5. Migrate data:
    - **PG→PG**: parallel `pg-copy-streams` workers (up to 4 threads), largest tables first
    - **MySQL→MySQL**: sequential batched SELECT + INSERT (batch size 500)
+   - **MSSQL→MSSQL**: sequential batched SELECT + INSERT, with `IDENTITY_INSERT` toggled per table
    - **MySQL↔PG**: sequential batched SELECT + INSERT via `CrossDbDataMigrator`
+   - **MSSQL↔PG / MSSQL↔MySQL**: sequential batched SELECT + INSERT via `MssqlCrossDbDataMigrator`
 6. Re-enable FK checks / triggers
 7. Create indexes (deferred from step 3 for bulk-load performance)
-8. Reset sequences (PostgreSQL destinations only)
+8. Reset auto-increment state — PostgreSQL `setval()`, MySQL `ALTER TABLE … AUTO_INCREMENT`, MSSQL `DBCC CHECKIDENT … RESEED`
 
 ### Adding a new database
 
@@ -154,7 +186,11 @@ src/
    registry.registerDataMigrator(DatabaseType.X, DatabaseType.POSTGRES, () => new CrossDbDataMigrator())
    ```
 
-See `docs/implementation-plan.md` for the full checklist.
+Adding engine `n + 1` requires `2n` new type maps and `2n` new translators — one per
+direction against each existing engine. See
+[ADR-0001](docs/adr/0001-direct-pair-type-translation.md) for why translation is
+per-pair rather than routed through a canonical type model, and
+`docs/implementation-plan.md` for the full checklist.
 
 ## Logs
 
@@ -162,9 +198,16 @@ Each run writes a log file to `logs/movy_YYYY-MM-DD_HH-MM-SS_<src>_to_<dst>.log`
 
 ## Tests
 
-Unit tests live in `tests/unit/`. Integration tests (`tests/integration/`) require real database connections and are not automated.
+Unit tests live in `tests/unit/` and are mock-driven — the whole suite runs without a
+database. Integration tests (`tests/integration/`) require real database connections and
+are not automated.
 
 ```bash
-npm test
+npm test                # full suite
+npm run test:coverage   # with coverage report
 npx vitest run tests/unit/application/migration-orchestrator.service.test.ts
 ```
+
+Coverage thresholds in `vitest.config.ts` are set to the current measured floor and
+ratchet upward; the target is 80%. See `docs/implementation-plan.md` for the current
+per-area breakdown.

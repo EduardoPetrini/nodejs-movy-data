@@ -17,10 +17,16 @@ import { FileLogger } from '../../infrastructure/logging/file-logger.adapter';
 import { TeeLogger } from '../../infrastructure/logging/tee-logger.adapter';
 import { PgAdapterSet } from '../../infrastructure/database/pg/pg-adapter-set';
 import { MysqlAdapterSet } from '../../infrastructure/database/mysql/mysql-adapter-set';
+import { MssqlAdapterSet } from '../../infrastructure/database/mssql/mssql-adapter-set';
 import { PgQueryAnalyzer } from '../../infrastructure/database/pg/pg-query-analyzer.adapter';
 import { MysqlToPostgresTranslator } from '../../infrastructure/database/mysql/mysql-to-postgres-translator.adapter';
 import { PostgresToMysqlTranslator } from '../../infrastructure/database/pg/postgres-to-mysql-translator.adapter';
+import { MssqlToPostgresTranslator } from '../../infrastructure/database/mssql/mssql-to-postgres-translator.adapter';
+import { MssqlToMysqlTranslator } from '../../infrastructure/database/mssql/mssql-to-mysql-translator.adapter';
+import { PostgresToMssqlTranslator } from '../../infrastructure/database/pg/postgres-to-mssql-translator.adapter';
+import { MysqlToMssqlTranslator } from '../../infrastructure/database/mysql/mysql-to-mssql-translator.adapter';
 import { CrossDbDataMigrator } from '../../infrastructure/migration/cross-db-data-migrator';
+import { MssqlCrossDbDataMigrator } from '../../infrastructure/migration/mssql-cross-db-data-migrator';
 import { MigrationOrchestrator } from '../../application/services/migration-orchestrator.service';
 import { MigrateQueryUseCase } from '../../application/use-cases/migrate-query.use-case';
 import { ValidateCountsUseCase } from '../../application/use-cases/validate-counts.use-case';
@@ -37,28 +43,27 @@ function buildRegistry(): DatabaseAdapterRegistry {
 
   registry.register(DatabaseType.POSTGRES, new PgAdapterSet());
   registry.register(DatabaseType.MYSQL, new MysqlAdapterSet());
+  registry.register(DatabaseType.MSSQL, new MssqlAdapterSet());
 
-  registry.registerTranslator(
-    DatabaseType.MYSQL,
-    DatabaseType.POSTGRES,
-    () => new MysqlToPostgresTranslator()
-  );
-  registry.registerTranslator(
-    DatabaseType.POSTGRES,
-    DatabaseType.MYSQL,
-    () => new PostgresToMysqlTranslator()
-  );
+  // MySQL ↔ PostgreSQL
+  registry.registerTranslator(DatabaseType.MYSQL, DatabaseType.POSTGRES, () => new MysqlToPostgresTranslator());
+  registry.registerTranslator(DatabaseType.POSTGRES, DatabaseType.MYSQL, () => new PostgresToMysqlTranslator());
 
-  registry.registerDataMigrator(
-    DatabaseType.MYSQL,
-    DatabaseType.POSTGRES,
-    () => new CrossDbDataMigrator()
-  );
-  registry.registerDataMigrator(
-    DatabaseType.POSTGRES,
-    DatabaseType.MYSQL,
-    () => new CrossDbDataMigrator()
-  );
+  // MSSQL ↔ PostgreSQL
+  registry.registerTranslator(DatabaseType.MSSQL, DatabaseType.POSTGRES, () => new MssqlToPostgresTranslator());
+  registry.registerTranslator(DatabaseType.POSTGRES, DatabaseType.MSSQL, () => new PostgresToMssqlTranslator());
+
+  // MSSQL ↔ MySQL
+  registry.registerTranslator(DatabaseType.MSSQL, DatabaseType.MYSQL, () => new MssqlToMysqlTranslator());
+  registry.registerTranslator(DatabaseType.MYSQL, DatabaseType.MSSQL, () => new MysqlToMssqlTranslator());
+
+  // Data migrators
+  registry.registerDataMigrator(DatabaseType.MYSQL, DatabaseType.POSTGRES, () => new CrossDbDataMigrator());
+  registry.registerDataMigrator(DatabaseType.POSTGRES, DatabaseType.MYSQL, () => new CrossDbDataMigrator());
+  registry.registerDataMigrator(DatabaseType.MSSQL, DatabaseType.POSTGRES, () => new MssqlCrossDbDataMigrator());
+  registry.registerDataMigrator(DatabaseType.POSTGRES, DatabaseType.MSSQL, () => new MssqlCrossDbDataMigrator());
+  registry.registerDataMigrator(DatabaseType.MSSQL, DatabaseType.MYSQL, () => new MssqlCrossDbDataMigrator());
+  registry.registerDataMigrator(DatabaseType.MYSQL, DatabaseType.MSSQL, () => new MssqlCrossDbDataMigrator());
 
   return registry;
 }
@@ -179,8 +184,13 @@ export async function runCli(): Promise<void> {
     if (mode === 'query') {
       const { query, targetTableName } = await promptQueryMigration(rl);
 
-      if (sourceConfig.type !== DatabaseType.POSTGRES) {
-        logger.error('Custom query migration currently supports PostgreSQL source databases only.');
+      // MigrateQueryUseCase streams via PostgreSQL COPY and casts BOTH connections
+      // to PgConnection, so destination must be PostgreSQL too — not just source.
+      if (sourceConfig.type !== DatabaseType.POSTGRES || destConfig.type !== DatabaseType.POSTGRES) {
+        logger.error(
+          'Custom query migration currently supports PostgreSQL sources and destinations only. ' +
+            `Got source=${sourceConfig.type}, destination=${destConfig.type}.`
+        );
         process.exit(1);
       }
 

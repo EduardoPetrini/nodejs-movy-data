@@ -22,9 +22,11 @@ export function extractPrecisionSuffix(sourceType: string): string {
 
 /**
  * Types that support precision/scale suffix propagation from source to mapped target.
+ * Includes MSSQL unicode / binary types so nvarchar(255) and varbinary(100) survive translation.
  */
 const PRECISION_PROPAGATING_TARGETS = new Set([
   'numeric', 'decimal', 'char', 'varchar', 'character varying', 'bit',
+  'nvarchar', 'nchar', 'binary', 'varbinary',
 ]);
 
 /**
