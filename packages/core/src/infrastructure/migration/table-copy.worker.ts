@@ -15,8 +15,9 @@ async function copyTable(
   const destClient = await destPool.connect();
 
   try {
-    await destClient.query(`TRUNCATE ${JSON.stringify(tableName)} RESTRICT`);
-
+    // The destination is cleared once by PgDataMigrator before any worker
+    // runs. It cannot happen here: PostgreSQL refuses to clear an FK-referenced
+    // table one at a time, and doing it in parallel with copies would race.
     const sourceStream = sourceClient.query(
       copyTo(`COPY ${JSON.stringify(tableName)} TO STDOUT`)
     );

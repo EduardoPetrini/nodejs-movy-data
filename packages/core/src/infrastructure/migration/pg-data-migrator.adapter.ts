@@ -2,12 +2,20 @@ import { IDataMigrator, MigrationProgressCallback } from '../../domain/ports/dat
 import { ConnectionConfig } from '../../domain/types/connection.types';
 import { MigrationResult, TableMigrationPlan } from '../../domain/types/migration.types';
 import { WorkerPool } from './worker-pool';
+import { PgConnection } from '../database/pg/pg-connection.adapter';
+import { IDatabaseConnection } from '../../domain/ports/database.port';
+import { truncatePgTables } from './pg-truncate';
+
+/** Injectable so tests can drive this without opening a real connection. */
+export type DestConnectionFactory = (config: ConnectionConfig) => IDatabaseConnection;
 
 export class PgDataMigrator implements IDataMigrator {
   private pool: WorkerPool;
+  private createDestConnection: DestConnectionFactory;
 
-  constructor(pool?: WorkerPool) {
+  constructor(pool?: WorkerPool, createDestConnection?: DestConnectionFactory) {
     this.pool = pool ?? new WorkerPool();
+    this.createDestConnection = createDestConnection ?? ((config) => new PgConnection(config));
   }
 
   async migrate(
@@ -19,6 +27,18 @@ export class PgDataMigrator implements IDataMigrator {
     onProgress?: MigrationProgressCallback
   ): Promise<MigrationResult> {
     const start = Date.now();
+
+    // Clear the destination in one statement before any worker starts.
+    // Per-table clearing inside the workers failed for every FK-parent on a
+    // re-run, and racing it against parallel copies was unsound anyway: one
+    // worker could empty a table another was mid-copy into.
+    const dest = this.createDestConnection(destConfig);
+    try {
+      await dest.connect();
+      await truncatePgTables(dest, plan.loadOrder);
+    } finally {
+      await dest.end();
+    }
 
     const tableResults = await this.pool.run(
       sourceConfig,

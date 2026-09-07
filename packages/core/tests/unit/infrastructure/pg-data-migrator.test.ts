@@ -24,10 +24,24 @@ function makePlan(): TableMigrationPlan {
 describe('PgDataMigrator', () => {
   let pool: WorkerPool;
   let migrator: PgDataMigrator;
+  let destQuery: ReturnType<typeof vi.fn>;
+  let destEnd: ReturnType<typeof vi.fn>;
+
+  function stubDestConnection() {
+    destQuery = vi.fn().mockResolvedValue([]);
+    destEnd = vi.fn().mockResolvedValue(undefined);
+    return () =>
+      ({
+        connect: vi.fn().mockResolvedValue(undefined),
+        query: destQuery,
+        getClient: vi.fn(),
+        end: destEnd,
+      }) as never;
+  }
 
   beforeEach(() => {
     pool = { run: vi.fn().mockResolvedValue([makeTableResult('users')]) } as unknown as WorkerPool;
-    migrator = new PgDataMigrator(pool);
+    migrator = new PgDataMigrator(pool, stubDestConnection());
   });
 
   it('delegates to WorkerPool.run', async () => {
@@ -64,5 +78,52 @@ describe('PgDataMigrator', () => {
   it('includes totalDurationMs in result', async () => {
     const result = await migrator.migrate(makeConfig(), makeConfig('dst'), makePlan(), 1);
     expect(result.totalDurationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  describe('destination clearing', () => {
+    // Regression: the worker used to run "TRUNCATE <table> RESTRICT" per table.
+    // PostgreSQL refuses that for any table another table references — a
+    // structural check that DISABLE TRIGGER does not lift — so every FK-parent
+    // failed on a re-run into a populated destination.
+    it('clears the whole load set in a single statement before copying', async () => {
+      await migrator.migrate(
+        makeConfig(),
+        makeConfig('dst'),
+        { loadOrder: ['customers', 'orders'], cleanupOrder: ['orders', 'customers'], levels: [['customers'], ['orders']], cyclicTables: [] },
+        2
+      );
+
+      const statements = destQuery.mock.calls.map(([sql]) => sql as string);
+      expect(statements).toHaveLength(1);
+      expect(statements[0]).toBe('TRUNCATE "customers", "orders"');
+    });
+
+    it('clears before the workers start, never in parallel with them', async () => {
+      const order: string[] = [];
+      destQuery.mockImplementation(async () => { order.push('clear'); return []; });
+      (pool.run as ReturnType<typeof vi.fn>).mockImplementation(async () => { order.push('copy'); return []; });
+
+      await migrator.migrate(makeConfig(), makeConfig('dst'), makePlan(), 1);
+
+      expect(order).toEqual(['clear', 'copy']);
+    });
+
+    it('closes the destination connection even when clearing fails', async () => {
+      destQuery.mockRejectedValue(new Error('permission denied'));
+      await expect(
+        migrator.migrate(makeConfig(), makeConfig('dst'), makePlan(), 1)
+      ).rejects.toThrow();
+      expect(destEnd).toHaveBeenCalled();
+    });
+
+    it('does nothing when the plan is empty', async () => {
+      await migrator.migrate(
+        makeConfig(),
+        makeConfig('dst'),
+        { loadOrder: [], cleanupOrder: [], levels: [], cyclicTables: [] },
+        1
+      );
+      expect(destQuery).not.toHaveBeenCalled();
+    });
   });
 });

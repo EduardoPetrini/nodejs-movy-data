@@ -11,6 +11,7 @@ import {
 import { DataMigrationError } from '../../domain/errors/migration.errors';
 import { MysqlConnection } from '../database/mysql/mysql-connection.adapter';
 import { PgConnection } from '../database/pg/pg-connection.adapter';
+import { truncatePgTables } from './pg-truncate';
 
 const BATCH_SIZE = 500;
 
@@ -41,6 +42,19 @@ export class CrossDbDataMigrator implements IDataMigrator {
 
     try {
       const mysqlDestClient = mysqlDest ? await this.prepareMysqlDestination(mysqlDest, plan.cleanupOrder) : null;
+
+      // PostgreSQL destination: clear the whole load set in one statement.
+      // Doing it per table failed for every FK-parent on a re-run, because
+      // PostgreSQL will not clear a table another table references.
+      if (isMysqlToPg(sourceConfig.type, destConfig.type)) {
+        const pgDest = new PgConnection(destConfig);
+        try {
+          await pgDest.connect();
+          await truncatePgTables(pgDest, plan.loadOrder);
+        } finally {
+          await pgDest.end();
+        }
+      }
 
       try {
         for (const table of plan.loadOrder) {
@@ -118,9 +132,6 @@ export class CrossDbDataMigrator implements IDataMigrator {
 
       const pgColList = columns.map((c) => `"${c.replace(/"/g, '""')}"`).join(', ');
       const placeholders = columns.map((_, i) => `$${i + 1}`).join(', ');
-
-      // Truncate PG table
-      await pgConn.query(`TRUNCATE TABLE "${table.replace(/"/g, '""')}"`);
 
       let offset = 0;
       let totalCopied = 0;

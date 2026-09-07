@@ -149,6 +149,23 @@ viewers.
 - **MySQL↔PG**: `CrossDbDataMigrator` — batched SELECT + INSERT, sequential, handles both directions
 - **MSSQL↔PG / MSSQL↔MySQL**: `MssqlCrossDbDataMigrator` — batched SELECT + INSERT, sequential, IDENTITY detection for MSSQL destinations
 
+### Clearing the destination
+
+Every migrator empties the destination tables before loading, but PostgreSQL
+needs the whole load set cleared in **one** statement: it refuses
+`TRUNCATE parent` whenever another table references it, and that is a
+structural check which step 4's `DISABLE TRIGGER ALL` does **not** lift.
+Clearing per table meant every FK-parent failed on a re-run into a populated
+destination. `truncatePgTables()`
+(`packages/core/src/infrastructure/migration/pg-truncate.ts`) handles this for
+both PG-destination Pairs; it is grouped rather than `CASCADE` so that a
+table outside the migration set is never silently emptied.
+
+For PG->PG this happens once in `PgDataMigrator` before the WorkerPool starts —
+never inside a worker, where it would also race parallel copies. MySQL
+destinations rely on `FOREIGN_KEY_CHECKS = 0` and MSSQL on a row-removal
+fallback, both of which already worked.
+
 ### Cross-database schema translation
 
 `CrossDbSchemaTranslator` (`packages/core/src/infrastructure/database/translation/cross-db-schema-translator.ts`) is the abstract base class. It does normalised type lookup with precision-suffix propagation. Concrete subclasses:
