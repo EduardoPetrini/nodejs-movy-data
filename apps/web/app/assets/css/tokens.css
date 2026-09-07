@@ -1,0 +1,172 @@
+/**
+ * Movy design tokens — technical console, dark-first.
+ *
+ * Three-state theming: :root carries the dark base, a guarded prefers-color-scheme
+ * block covers system-light, and [data-theme] wins over both so an explicit
+ * toggle works in either direction. Never define a colour only inside a media
+ * query — a page rendered under an unexpected theme must still be legible.
+ */
+
+:root {
+  color-scheme: dark;
+
+  /* Surfaces — cool near-black in five steps. Never #000: it flattens depth. */
+  --mv-bg-sunken: oklch(13.5% 0.012 260);
+  --mv-bg-base: oklch(17% 0.012 260);
+  --mv-bg-raised: oklch(21% 0.013 260);
+  --mv-bg-overlay: oklch(25% 0.014 260);
+  --mv-line: oklch(30% 0.012 260);
+  --mv-line-strong: oklch(38% 0.014 260);
+
+  /* Foreground */
+  --mv-fg: oklch(94% 0.008 260);
+  --mv-fg-muted: oklch(72% 0.01 260);
+  --mv-fg-subtle: oklch(56% 0.01 260);
+
+  /* Status — the only saturated colours in the interface */
+  --mv-accent: oklch(72% 0.15 200);
+  --mv-accent-fg: oklch(15% 0.02 200);
+  --mv-ok: oklch(74% 0.16 150);
+  --mv-warn: oklch(80% 0.15 85);
+  --mv-danger: oklch(65% 0.2 25);
+  --mv-accent-dim: oklch(72% 0.15 200 / 0.14);
+  --mv-ok-dim: oklch(74% 0.16 150 / 0.14);
+  --mv-warn-dim: oklch(80% 0.15 85 / 0.14);
+  --mv-danger-dim: oklch(65% 0.2 25 / 0.14);
+
+  /* Engine identity — used ONLY in a PairChip, never as interface chrome */
+  --mv-engine-postgres: oklch(70% 0.12 240);
+  --mv-engine-mysql: oklch(78% 0.13 70);
+  --mv-engine-mssql: oklch(66% 0.17 25);
+  --mv-engine-planned: var(--mv-fg-subtle);
+
+  /* Type. The rule: anything the DATABASE said is mono; anything MOVY said is sans. */
+  --mv-font-sans: 'Inter var', 'Inter', system-ui, -apple-system, sans-serif;
+  --mv-font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+  --mv-fs-micro: 0.6875rem; /* 11px — uppercase labels */
+  --mv-fs-xs: 0.75rem; /* 12px — table body, log lines */
+  --mv-fs-sm: 0.8125rem; /* 13px — interface default */
+  --mv-fs-md: 0.9375rem; /* 15px — section headings */
+  --mv-fs-lg: 1.25rem; /* 20px — page title */
+  --mv-fs-hero: 2rem; /* 32px — exactly one per screen */
+
+  --mv-lh-tight: 1.2;
+  --mv-lh-body: 1.5;
+  --mv-lh-log: 1.45;
+  --mv-track-label: 0.06em;
+
+  --mv-fw-regular: 400;
+  --mv-fw-medium: 500;
+  --mv-fw-semibold: 600;
+
+  /* Every changing number gets this, so digits do not jitter as they tick. */
+  --mv-numeric: tabular-nums lining-nums;
+
+  /* Spacing — 4px base, weighted to the dense end */
+  --mv-s-1: 4px;
+  --mv-s-2: 8px;
+  --mv-s-3: 12px;
+  --mv-s-4: 16px;
+  --mv-s-5: 24px;
+  --mv-s-6: 32px;
+  --mv-s-7: 48px;
+  --mv-s-8: 64px;
+
+  /* Radius — small. Large radii read as "consumer app". */
+  --mv-r-sm: 3px;
+  --mv-r-md: 5px;
+  --mv-r-lg: 8px;
+  --mv-r-pill: 999px;
+
+  /* Depth from 1px lines and inset light, not drop shadows */
+  --mv-elev-1: inset 0 1px 0 oklch(100% 0 0 / 0.04);
+  --mv-elev-2: 0 1px 2px oklch(0% 0 0 / 0.5), inset 0 1px 0 oklch(100% 0 0 / 0.05);
+  --mv-elev-3: 0 8px 24px -8px oklch(0% 0 0 / 0.7), inset 0 1px 0 oklch(100% 0 0 / 0.06);
+  --mv-focus: 0 0 0 1px var(--mv-bg-base), 0 0 0 3px oklch(72% 0.15 200 / 0.55);
+
+  /* Motion — functional only. The complete inventory; anything else is a bug. */
+  --mv-dur-1: 90ms; /* hover, press */
+  --mv-dur-2: 160ms; /* number tick, row enter */
+  --mv-dur-3: 280ms; /* step transition, rail draw */
+  --mv-dur-4: 2000ms; /* the running-node breathing loop */
+  --mv-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --mv-ease-inout: cubic-bezier(0.65, 0, 0.35, 1);
+
+  /* Timeline geometry — shared by the rail, nodes and rows */
+  --mv-rail-x: 22px;
+  --mv-rail-w: 1px;
+  --mv-node: 11px;
+  --mv-row-h: 28px;
+}
+
+/* System light, only when no explicit choice has been stamped. */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme='dark']) {
+    color-scheme: light;
+
+    --mv-bg-sunken: oklch(96.5% 0.004 260);
+    --mv-bg-base: oklch(99% 0.002 260);
+    --mv-bg-raised: oklch(100% 0 0);
+    --mv-bg-overlay: oklch(100% 0 0);
+    --mv-line: oklch(90% 0.006 260);
+    --mv-line-strong: oklch(80% 0.008 260);
+
+    --mv-fg: oklch(22% 0.012 260);
+    --mv-fg-muted: oklch(44% 0.012 260);
+    --mv-fg-subtle: oklch(58% 0.01 260);
+
+    --mv-accent: oklch(52% 0.15 200);
+    --mv-accent-fg: oklch(99% 0.005 200);
+    --mv-ok: oklch(50% 0.14 150);
+    --mv-warn: oklch(58% 0.13 75);
+    --mv-danger: oklch(52% 0.19 25);
+
+    --mv-engine-postgres: oklch(48% 0.13 240);
+    --mv-engine-mysql: oklch(55% 0.12 70);
+    --mv-engine-mssql: oklch(50% 0.17 25);
+
+    --mv-elev-1: inset 0 1px 0 oklch(100% 0 0 / 0.6);
+    --mv-elev-2: 0 1px 2px oklch(0% 0 0 / 0.08);
+    --mv-elev-3: 0 8px 24px -8px oklch(0% 0 0 / 0.18);
+  }
+}
+
+/* An explicit choice wins over the system, in both directions. */
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  --mv-bg-sunken: oklch(96.5% 0.004 260);
+  --mv-bg-base: oklch(99% 0.002 260);
+  --mv-bg-raised: oklch(100% 0 0);
+  --mv-bg-overlay: oklch(100% 0 0);
+  --mv-line: oklch(90% 0.006 260);
+  --mv-line-strong: oklch(80% 0.008 260);
+
+  --mv-fg: oklch(22% 0.012 260);
+  --mv-fg-muted: oklch(44% 0.012 260);
+  --mv-fg-subtle: oklch(58% 0.01 260);
+
+  --mv-accent: oklch(52% 0.15 200);
+  --mv-accent-fg: oklch(99% 0.005 200);
+  --mv-ok: oklch(50% 0.14 150);
+  --mv-warn: oklch(58% 0.13 75);
+  --mv-danger: oklch(52% 0.19 25);
+
+  --mv-engine-postgres: oklch(48% 0.13 240);
+  --mv-engine-mysql: oklch(55% 0.12 70);
+  --mv-engine-mssql: oklch(50% 0.17 25);
+
+  --mv-elev-1: inset 0 1px 0 oklch(100% 0 0 / 0.6);
+  --mv-elev-2: 0 1px 2px oklch(0% 0 0 / 0.08);
+  --mv-elev-3: 0 8px 24px -8px oklch(0% 0 0 / 0.18);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --mv-dur-1: 0ms;
+    --mv-dur-2: 0ms;
+    --mv-dur-3: 0ms;
+    --mv-dur-4: 0ms;
+  }
+}

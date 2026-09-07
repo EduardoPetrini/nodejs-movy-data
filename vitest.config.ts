@@ -23,6 +23,17 @@ export default defineConfig({
       {
         resolve: { alias },
         test: {
+          name: 'web',
+          root: path.resolve(__dirname, 'apps/web'),
+          globals: true,
+          environment: 'node',
+          include: ['tests/**/*.test.ts'],
+          pool: 'forks',
+        },
+      },
+      {
+        resolve: { alias },
+        test: {
           name: 'cli',
           root: path.resolve(__dirname, 'apps/cli'),
           globals: true,
