@@ -13,6 +13,7 @@ export class PgConnection implements IDatabaseConnection {
       user: config.user,
       password: config.password,
       database: config.database,
+      ...(config.ssl === undefined ? {} : { ssl: config.ssl }),
       max: 10,
       idleTimeoutMillis: 30000,
       connectionTimeoutMillis: 5000,

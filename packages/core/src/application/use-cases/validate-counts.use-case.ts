@@ -46,6 +46,16 @@ function getDialect(target: ValidateCountsTarget): DbDialect {
         listTablesParam: target.database,
         quoteIdent: (name) => `\`${name.replace(/`/g, '``')}\``,
       };
+    case DatabaseType.MSSQL:
+      // MssqlConnection.query() rewrites ? to @pN via replacePositionalParams,
+      // so positional placeholders work here as they do for MySQL.
+      return {
+        listTablesSql:
+          `SELECT TABLE_NAME AS table_name FROM INFORMATION_SCHEMA.TABLES ` +
+          `WHERE TABLE_SCHEMA = ? AND TABLE_TYPE = 'BASE TABLE' ORDER BY TABLE_NAME`,
+        listTablesParam: 'dbo',
+        quoteIdent: (name) => `[${name.replace(/]/g, ']]')}]`,
+      };
     default:
       throw new Error(`Unsupported database type for row count validation: ${target.type}`);
   }

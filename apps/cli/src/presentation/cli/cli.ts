@@ -1,4 +1,5 @@
 import * as path from 'path';
+import { randomUUID } from 'crypto';
 import * as readline from 'readline/promises';
 import { stdin as input, stdout as output } from 'process';
 import {
@@ -10,6 +11,7 @@ import {
   promptQueryMigration,
   renderCliWelcome,
 } from './prompt';
+import { createEventJournal, parseJsonEventsFlag } from './event-journal';
 import {
   MigrationOrchestrator,
   CreateDatabaseUseCase,
@@ -20,65 +22,17 @@ import {
   ConsoleLogger,
   FileLogger,
   TeeLogger,
-  PgAdapterSet,
-  MysqlAdapterSet,
-  MssqlAdapterSet,
+  SinkLogger,
   PgQueryAnalyzer,
-  MysqlToPostgresTranslator,
-  MysqlToMssqlTranslator,
-  PostgresToMysqlTranslator,
-  PostgresToMssqlTranslator,
-  MssqlToPostgresTranslator,
-  MssqlToMysqlTranslator,
-  CrossDbDataMigrator,
-  MssqlCrossDbDataMigrator,
   DatabaseType,
+  buildRegistry,
+  buildLogFilePath,
   retryWithBackoff,
 } from '@movy/core';
 import type { ConnectionConfig, ILogger } from '@movy/core';
 
 const MAX_CONNECT_RETRIES = 3;
 const CONNECT_BASE_DELAY_MS = 1000;
-
-function buildRegistry(): DatabaseAdapterRegistry {
-  const registry = new DatabaseAdapterRegistry();
-
-  registry.register(DatabaseType.POSTGRES, new PgAdapterSet());
-  registry.register(DatabaseType.MYSQL, new MysqlAdapterSet());
-  registry.register(DatabaseType.MSSQL, new MssqlAdapterSet());
-
-  // MySQL ↔ PostgreSQL
-  registry.registerTranslator(DatabaseType.MYSQL, DatabaseType.POSTGRES, () => new MysqlToPostgresTranslator());
-  registry.registerTranslator(DatabaseType.POSTGRES, DatabaseType.MYSQL, () => new PostgresToMysqlTranslator());
-
-  // MSSQL ↔ PostgreSQL
-  registry.registerTranslator(DatabaseType.MSSQL, DatabaseType.POSTGRES, () => new MssqlToPostgresTranslator());
-  registry.registerTranslator(DatabaseType.POSTGRES, DatabaseType.MSSQL, () => new PostgresToMssqlTranslator());
-
-  // MSSQL ↔ MySQL
-  registry.registerTranslator(DatabaseType.MSSQL, DatabaseType.MYSQL, () => new MssqlToMysqlTranslator());
-  registry.registerTranslator(DatabaseType.MYSQL, DatabaseType.MSSQL, () => new MysqlToMssqlTranslator());
-
-  // Data migrators
-  registry.registerDataMigrator(DatabaseType.MYSQL, DatabaseType.POSTGRES, () => new CrossDbDataMigrator());
-  registry.registerDataMigrator(DatabaseType.POSTGRES, DatabaseType.MYSQL, () => new CrossDbDataMigrator());
-  registry.registerDataMigrator(DatabaseType.MSSQL, DatabaseType.POSTGRES, () => new MssqlCrossDbDataMigrator());
-  registry.registerDataMigrator(DatabaseType.POSTGRES, DatabaseType.MSSQL, () => new MssqlCrossDbDataMigrator());
-  registry.registerDataMigrator(DatabaseType.MSSQL, DatabaseType.MYSQL, () => new MssqlCrossDbDataMigrator());
-  registry.registerDataMigrator(DatabaseType.MYSQL, DatabaseType.MSSQL, () => new MssqlCrossDbDataMigrator());
-
-  return registry;
-}
-
-function buildLogFilePath(sourceDb: string, destDb: string): string {
-  const now = new Date();
-  const datePart = now.toISOString().slice(0, 10);
-  const timePart = now.toISOString().slice(11, 19).replace(/:/g, '-');
-  const safeSrc = sourceDb.replace(/[^a-z0-9_-]/gi, '_');
-  const safeDst = destDb.replace(/[^a-z0-9_-]/gi, '_');
-  const filename = `movy_${datePart}_${timePart}_${safeSrc}_to_${safeDst}.log`;
-  return path.join('logs', filename);
-}
 
 async function runValidation(
   _rl: readline.Interface,
@@ -249,9 +203,24 @@ export async function runCli(): Promise<void> {
         ]);
       }
     } else {
-      const orchestrator = new MigrationOrchestrator(registry, logger);
-      const result = await orchestrator.run(sourceConfig, destConfig);
-      success = result.success;
+      const journalPath = parseJsonEventsFlag(process.argv.slice(2), logFilePath);
+      const journal = journalPath ? createEventJournal(journalPath, randomUUID()) : null;
+
+      // SinkLogger puts every existing logger.* line onto the event stream too,
+      // so the journal carries narration as well as structured state.
+      const runLogger = journal
+        ? new TeeLogger([logger, new SinkLogger(journal.context.emit)])
+        : logger;
+
+      if (journal) logger.info(`Event journal: ${path.resolve(journal.path)}`);
+
+      try {
+        const orchestrator = new MigrationOrchestrator(registry, runLogger);
+        const result = await orchestrator.run(sourceConfig, destConfig, journal?.context);
+        success = result.success;
+      } finally {
+        await journal?.close();
+      }
     }
 
     if (success) {

@@ -13,6 +13,9 @@ export class MysqlConnection implements IDatabaseConnection {
       user: config.user,
       password: config.password,
       database: config.database || undefined,
+      ...(config.ssl === undefined
+        ? {}
+        : { ssl: config.ssl === true ? {} : config.ssl === false ? undefined : config.ssl }),
       waitForConnections: true,
       connectionLimit: 10,
       connectTimeout: 5000,

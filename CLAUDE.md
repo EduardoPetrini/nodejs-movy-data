@@ -34,6 +34,7 @@ packages/core/          # @movy/core — the hexagon. No I/O entry points.
 ├── src/domain/         # Pure types, ports (interfaces), and errors — no I/O
 ├── src/application/    # Use cases and orchestration service
 ├── src/infrastructure/ # Concrete adapter implementations (pg, mysql, mssql, translators, migrators)
+├── src/composition/    # buildRegistry() + Pair descriptors — the composition root
 ├── src/index.ts        # Public barrel — apps import ONLY from '@movy/core'
 └── tests/              # Mock-driven unit tests
 
@@ -57,7 +58,7 @@ All database interactions are behind interfaces in `packages/core/src/domain/por
 
 ### Adapter registration
 
-`DatabaseAdapterRegistry` (`packages/core/src/infrastructure/database/registry.ts`) maps a `DatabaseType` to a `DatabaseAdapterSet`. **PostgreSQL**, **MySQL** and **MSSQL** are fully registered. Cross-DB translator and migrator pairs are registered separately via `registerTranslator()` and `registerDataMigrator()`.
+`buildRegistry()` (`packages/core/src/composition/build-registry.ts`) is the composition root — the one module naming every concrete Adapter Set, translator and migrator. Every delivery surface calls it; none duplicates the wiring. `DatabaseAdapterRegistry` (`packages/core/src/infrastructure/database/registry.ts`) maps a `DatabaseType` to a `DatabaseAdapterSet`. **PostgreSQL**, **MySQL** and **MSSQL** are fully registered. Cross-DB translator and migrator pairs are registered separately via `registerTranslator()` and `registerDataMigrator()`.
 
 ```
 registry.register(DatabaseType.POSTGRES, new PgAdapterSet())
@@ -111,6 +112,33 @@ Logs are written to both the console and a timestamped file under `logs/` (`movy
 7. Re-enable FK checks / triggers
 8. Create indexes
 9. Reset auto-increment state (PG: `setval()`; MySQL: `ALTER TABLE … AUTO_INCREMENT`; MSSQL: `DBCC CHECKIDENT … RESEED`)
+
+### Run events (the observable contract)
+
+`MigrationOrchestrator.run()` and `MigrateDataUseCase.execute()` take an **optional
+trailing** `ctx?: MigrationRunContext` (`{ runId, emit, signal }`). Optional is deliberate:
+adding it broke no call site and no test mock. With a context supplied, the nine steps in
+`MIGRATION_STEP_ORDER` are reported as typed `MigrationEvent`s
+(`packages/core/src/domain/types/events.types.ts`) alongside per-table and overall progress.
+
+Pipe events through `composeSink(runId, target)`, which is
+`safe(seq(throttled(target)))`:
+
+- `ThrottledSink` coalesces `table_progress`/`overall_progress` to one per key per 250ms.
+  Necessary because `CrossDbDataMigrator` fires per 500-row batch.
+- `SeqSink` sits **outside** the throttle so coalesced events never consume a `seq`,
+  keeping the replay cursor gapless. It also runs in the producing process, never the
+  consumer, so a consumer restart cannot reset the counter.
+- `SafeSink` swallows consumer exceptions: telemetry must not abort a migration.
+
+`SinkLogger` composed into `TeeLogger` puts every existing `logger.*` call onto the same
+stream without touching those call sites.
+
+**Events describe progress, never configuration.** `SafeEndpoint` carries engine and
+database only — no host, port or credentials — because events are broadcast to read-only
+viewers.
+
+`--json-events[=<path>]` on the CLI records the stream as NDJSON beside the log file.
 
 ### Data migration — migrator selection
 

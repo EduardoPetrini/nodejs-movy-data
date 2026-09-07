@@ -5,6 +5,7 @@ import { MigrationResult, TableMigrationResult } from '../../domain/types/migrat
 import { TableSchema } from '../../domain/types/schema.types';
 import { formatDuration } from '../../shared/utils';
 import { TableMigrationPlanner } from '../services/table-migration-planner.service';
+import { MigrationRunContext } from '../../domain/ports/event-sink.port';
 
 const MAX_WORKERS = 4;
 
@@ -23,7 +24,8 @@ export class MigrateDataUseCase {
     sourceConfig: ConnectionConfig,
     destConfig: ConnectionConfig,
     tables: TableSchema[],
-    rowEstimates: Map<string, number>
+    rowEstimates: Map<string, number>,
+    ctx?: MigrationRunContext
   ): Promise<MigrationResult> {
     const plan = this.planner.plan(tables, rowEstimates);
 
@@ -42,8 +44,18 @@ export class MigrateDataUseCase {
     const workerLabel = workerCount === 1 ? 'worker' : 'workers';
     this.logger.info(`Starting migration with ${workerCount} ${workerLabel}...`);
 
+    ctx?.emit({
+      type: 'plan_ready',
+      plan,
+      // Map is not JSON-serialisable and this crosses IPC and socket boundaries.
+      rowEstimates: Object.fromEntries(rowEstimates),
+      workerCount,
+    });
+
     const rowsDoneByTable = new Map<string, number>();
     const completedTables = new Map<string, number>(); // tableName -> actual rows copied
+    const tableStartedAt = new Map<string, number>();
+    const emittedFinished = new Set<string>();
 
     const result = await this.migrator.migrate(
       sourceConfig,
@@ -52,6 +64,7 @@ export class MigrateDataUseCase {
       workerCount,
       rowEstimates,
       (tableName, rowsDone, rowsTotal) => {
+        if (!tableStartedAt.has(tableName)) tableStartedAt.set(tableName, Date.now());
         // Completion signal: worker-pool sends (actual, actual) on table_done
         const isCompletion = rowsTotal > 0 && rowsDone === rowsTotal;
         if (isCompletion) {
@@ -78,18 +91,51 @@ export class MigrateDataUseCase {
           .reduce((s, t) => s + (rowEstimates.get(t) ?? 0), 0);
         const overallTotal = completedActual + inProgressTotal + pendingEstimate;
 
-        const overallPct =
-          overallTotal > 0
-            ? Math.min(100, (overallDone / overallTotal) * 100).toFixed(1)
-            : '?';
+        const overallPctValue =
+          overallTotal > 0 ? Math.min(100, (overallDone / overallTotal) * 100) : 0;
+        const overallPct = overallTotal > 0 ? overallPctValue.toFixed(1) : '?';
 
-        if (!isCompletion) {
+        if (isCompletion) {
+          // Emitted as it happens so a long run's timeline stays live; the
+          // authoritative duration is whatever the migrator reports, but that
+          // only arrives once every table is done.
+          emittedFinished.add(tableName);
+          ctx?.emit({
+            type: 'table_finished',
+            tableName,
+            rowsCopied: rowsDone,
+            durationMs: Date.now() - (tableStartedAt.get(tableName) ?? Date.now()),
+            success: true,
+          });
+        } else {
+          ctx?.emit({ type: 'table_progress', tableName, rowsDone, rowsTotal, pct });
           this.logger.info(
             `  [${tableName}] ${rowsDone.toLocaleString()} / ~${rowsTotal.toLocaleString()} rows  ${pct}%  (overall: ${overallPct}%)`
           );
         }
+
+        ctx?.emit({
+          type: 'overall_progress',
+          rowsDone: overallDone,
+          rowsTotal: overallTotal,
+          pct: overallPctValue,
+          tablesDone: completedTables.size,
+          tablesTotal: plan.loadOrder.length,
+        });
       }
     );
+
+    for (const table of result.tables) {
+      if (emittedFinished.has(table.tableName)) continue;
+      ctx?.emit({
+        type: 'table_finished',
+        tableName: table.tableName,
+        rowsCopied: table.rowsCopied,
+        durationMs: table.durationMs,
+        success: table.success,
+        error: table.error,
+      });
+    }
 
     this.printReport(result, rowEstimates);
     return result;

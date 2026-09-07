@@ -176,4 +176,60 @@ describe('ValidateCountsUseCase', () => {
     expect(tablesCall?.[1]).toEqual(['public']);
     expect(countCall?.[0]).toContain('"users"');
   });
+describe('MSSQL support', () => {
+    // Before this branch existed, getDialect() threw for MSSQL, so row-count
+    // validation was unavailable for a third of the engines.
+    const MSSQL_TARGET = { type: DatabaseType.MSSQL, database: 'appdb' };
+
+    function mssqlQueryFn(tables: string[], counts: Record<string, number>) {
+      return async (sql: string): Promise<unknown[]> => {
+        if (/INFORMATION_SCHEMA\.TABLES/i.test(sql)) {
+          return tables.map((t) => ({ table_name: t }));
+        }
+        if (COUNT_SQL.test(sql)) {
+          const match = sql.match(/\[([^\]]+)\]/);
+          return [{ count: String(counts[match ? match[1] : ''] ?? 0) }];
+        }
+        return [];
+      };
+    }
+
+    it('no longer throws for MSSQL targets', async () => {
+      const source = createMockConnection(mssqlQueryFn(['Orders'], { Orders: 5 }));
+      const dest = createMockConnection(mssqlQueryFn(['Orders'], { Orders: 5 }));
+
+      await expect(
+        useCase.execute(source, dest, MSSQL_TARGET, MSSQL_TARGET)
+      ).resolves.toMatchObject({ allMatch: true, totalSource: 5, totalDest: 5 });
+    });
+
+    it('uses ? placeholders, the dbo schema and [bracket] quoting', async () => {
+      const sourceQueryFn = vi.fn(mssqlQueryFn(['Orders'], { Orders: 5 }));
+      const source = createMockConnection(sourceQueryFn);
+      const dest = createMockConnection(mssqlQueryFn(['Orders'], { Orders: 5 }));
+
+      await useCase.execute(source, dest, MSSQL_TARGET, MSSQL_TARGET);
+
+      const calls = sourceQueryFn.mock.calls;
+      const tablesCall = calls.find(([sql]) => /INFORMATION_SCHEMA\.TABLES/i.test(sql as string));
+      const countCall = calls.find(([sql]) => COUNT_SQL.test(sql as string));
+
+      // MssqlConnection rewrites ? to @pN, so positional params are correct here.
+      expect(tablesCall?.[0]).toContain('?');
+      expect(tablesCall?.[0]).not.toContain('$1');
+      expect(tablesCall?.[1]).toEqual(['dbo']);
+      expect(countCall?.[0]).toContain('[Orders]');
+    });
+
+    it('detects drift across a cross-engine Pair (PG source, MSSQL target)', async () => {
+      const source = createMockConnection(makeQueryFn(['users'], { users: 100 }));
+      const dest = createMockConnection(mssqlQueryFn(['users'], { users: 60 }));
+
+      const result = await useCase.execute(source, dest, PG_TARGET, MSSQL_TARGET);
+
+      expect(result.allMatch).toBe(false);
+      expect(result.tables[0]).toMatchObject({ tableName: 'users', sourceCount: 100, destCount: 60 });
+      expect(result.tables[0].matchPct).toBeCloseTo(60);
+    });
+  });
 });

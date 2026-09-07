@@ -1,7 +1,7 @@
 import sql from 'mssql';
 import { IDatabaseConnection, IDbClient } from '../../../domain/ports/database.port';
-import { ConnectionConfig } from '../../../domain/types/connection.types';
 import { ConnectionError } from '../../../domain/errors/migration.errors';
+import { ConnectionConfig, SslConfig } from '../../../domain/types/connection.types';
 
 function buildPoolConfig(config: ConnectionConfig): sql.config {
   return {
@@ -11,7 +11,10 @@ function buildPoolConfig(config: ConnectionConfig): sql.config {
     password: config.password,
     database: config.database || undefined,
     options: {
-      trustServerCertificate: true,
+      // Default (ssl undefined) preserves the long-standing CLI behaviour of
+      // trusting the server certificate. A server-hosted console should set
+      // ssl: true so the certificate is actually verified.
+      ...mssqlTlsOptions(config.ssl),
       enableArithAbort: true,
     },
     connectionTimeout: 15000,
@@ -88,4 +91,15 @@ export class MssqlConnection implements IDatabaseConnection {
   async end(): Promise<void> {
     await this.pool.close();
   }
+}
+
+/** Map Movy's engine-neutral ssl setting onto tedious' encrypt/trust options. */
+function mssqlTlsOptions(ssl: SslConfig | undefined): {
+  encrypt?: boolean;
+  trustServerCertificate: boolean;
+} {
+  if (ssl === undefined) return { trustServerCertificate: true };
+  if (ssl === true) return { encrypt: true, trustServerCertificate: false };
+  if (ssl === false) return { encrypt: false, trustServerCertificate: true };
+  return { encrypt: true, trustServerCertificate: !ssl.rejectUnauthorized };
 }

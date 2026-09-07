@@ -62,3 +62,17 @@ export class UnsupportedDatabaseError extends MigrationError {
     this.name = 'UnsupportedDatabaseError';
   }
 }
+
+/**
+ * Thrown when a run is aborted via MigrationRunContext.signal.
+ *
+ * Cancellation is cooperative and checked at step, table and batch boundaries.
+ * It does NOT roll back: the destination is left with whatever schema and rows
+ * had already been written. Callers surfacing this to a user must say so.
+ */
+export class MigrationCancelledError extends MigrationError {
+  constructor(message = 'Migration cancelled') {
+    super(message);
+    this.name = 'MigrationCancelledError';
+  }
+}

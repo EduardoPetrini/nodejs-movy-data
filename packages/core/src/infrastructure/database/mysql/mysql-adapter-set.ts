@@ -1,4 +1,4 @@
-import { DatabaseAdapterSet } from '../registry';
+import { DatabaseAdapterSet, ListTablesOptions } from '../registry';
 import { ConnectionConfig } from '../../../domain/types/connection.types';
 import { IDatabaseConnection } from '../../../domain/ports/database.port';
 import { ISchemaInspector } from '../../../domain/ports/schema-inspector.port';
@@ -39,4 +39,32 @@ export class MysqlAdapterSet implements DatabaseAdapterSet {
     );
     return true;
   }
+
+  async listDatabases(adminConnection: IDatabaseConnection): Promise<string[]> {
+    const rows = await adminConnection.query<{ name: string }>(
+      `SELECT SCHEMA_NAME AS name FROM information_schema.SCHEMATA
+        WHERE SCHEMA_NAME NOT IN ('mysql', 'information_schema', 'performance_schema', 'sys')
+        ORDER BY SCHEMA_NAME`
+    );
+    return rows.map((row) => row.name);
+  }
+
+  async listTables(
+    connection: IDatabaseConnection,
+    opts: ListTablesOptions = {}
+  ): Promise<string[]> {
+    // MySQL has no schema layer: the database IS the schema.
+    const rows = await connection.query<{ table_name: string }>(
+      `SELECT table_name AS table_name FROM information_schema.tables
+        WHERE table_schema = COALESCE(?, DATABASE()) AND table_type = 'BASE TABLE'
+        ORDER BY table_name`,
+      [opts.database ?? null]
+    );
+    return rows.map((row) => row.table_name);
+  }
+
+  quoteIdentifier(name: string): string {
+    return `\`${name.replace(/`/g, '``')}\``;
+  }
+
 }

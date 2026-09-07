@@ -1,4 +1,4 @@
-import { DatabaseAdapterSet } from '../registry';
+import { DatabaseAdapterSet, ListTablesOptions } from '../registry';
 import { ConnectionConfig } from '../../../domain/types/connection.types';
 import { IDatabaseConnection } from '../../../domain/ports/database.port';
 import { ISchemaInspector } from '../../../domain/ports/schema-inspector.port';
@@ -44,4 +44,31 @@ export class PgAdapterSet implements DatabaseAdapterSet {
     await adminConnection.query(`CREATE DATABASE "${dbName.replace(/"/g, '""')}"`);
     return true;
   }
+
+  async listDatabases(adminConnection: IDatabaseConnection): Promise<string[]> {
+    const rows = await adminConnection.query<{ datname: string }>(
+      `SELECT datname FROM pg_database
+        WHERE datistemplate = false AND datallowconn = true
+        ORDER BY datname`
+    );
+    return rows.map((row) => row.datname);
+  }
+
+  async listTables(
+    connection: IDatabaseConnection,
+    opts: ListTablesOptions = {}
+  ): Promise<string[]> {
+    const rows = await connection.query<{ table_name: string }>(
+      `SELECT table_name FROM information_schema.tables
+        WHERE table_schema = $1 AND table_type = 'BASE TABLE'
+        ORDER BY table_name`,
+      [opts.schema ?? 'public']
+    );
+    return rows.map((row) => row.table_name);
+  }
+
+  quoteIdentifier(name: string): string {
+    return `"${name.replace(/"/g, '""')}"`;
+  }
+
 }

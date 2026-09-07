@@ -4,13 +4,13 @@
  * Delivery surfaces (apps/cli, apps/runner, apps/web) import from here and never
  * reach into deep paths, so the internal layout stays free to move.
  *
- * Phase 0 exports what the CLI needs. Phase 1 adds the event contract, the
- * registry composition root and the Pair descriptors.
+ * Includes the event contract, the registry composition root and the Pair
+ * descriptors a UI needs to render capability without hardcoding it.
  */
 
 // ---- Domain: types ----
 export { DatabaseType } from './domain/types/connection.types';
-export type { ConnectionConfig } from './domain/types/connection.types';
+export type { ConnectionConfig, SslConfig } from './domain/types/connection.types';
 export type {
   DatabaseSchema, TableSchema, ColumnSchema, ConstraintSchema,
   IndexSchema, SequenceSchema, EnumSchema,
@@ -20,6 +20,18 @@ export type {
   SchemaDiff, ColumnDiff,
 } from './domain/types/migration.types';
 export type { WorkerMessage, WorkerMessageType } from './domain/types/worker.types';
+
+// ---- Domain: the event contract ----
+export { MIGRATION_STEP_ORDER } from './domain/types/events.types';
+export type {
+  MigrationEvent, MigrationEventInput, MigrationEventType, MigrationStepId,
+  StepStatus, StepDetail, SchemaDiffSummary, SafeEndpoint, SerialisedError,
+  LogLevel, RunTerminalStatus,
+} from './domain/types/events.types';
+export type {
+  MigrationEventSink, SequencedEventSink, MigrationRunContext,
+} from './domain/ports/event-sink.port';
+export { composeSink, createSeqSink, createThrottledSink, createSafeSink } from './application/events';
 
 // ---- Domain: ports ----
 export type { ILogger } from './domain/ports/logger.port';
@@ -46,9 +58,14 @@ export type {
   ValidateCountsResult, TableCountResult, ValidateCountsTarget,
 } from './application/use-cases/validate-counts.use-case';
 
+// ---- Composition root ----
+export { buildRegistry } from './composition/build-registry';
+export { listSupportedPairs } from './composition/pairs';
+export type { PairDescriptor } from './composition/pairs';
+
 // ---- Infrastructure: registry and Adapter Sets ----
 export { DatabaseAdapterRegistry, PassthroughSchemaTranslator } from './infrastructure/database/registry';
-export type { DatabaseAdapterSet } from './infrastructure/database/registry';
+export type { DatabaseAdapterSet, ListTablesOptions } from './infrastructure/database/registry';
 export { PgAdapterSet } from './infrastructure/database/pg/pg-adapter-set';
 export { MysqlAdapterSet } from './infrastructure/database/mysql/mysql-adapter-set';
 export { MssqlAdapterSet } from './infrastructure/database/mssql/mssql-adapter-set';
@@ -72,6 +89,8 @@ export { MssqlCrossDbDataMigrator } from './infrastructure/migration/mssql-cross
 export { ConsoleLogger } from './infrastructure/logging/console-logger.adapter';
 export { FileLogger } from './infrastructure/logging/file-logger.adapter';
 export { TeeLogger } from './infrastructure/logging/tee-logger.adapter';
+export { SinkLogger } from './infrastructure/logging/sink-logger.adapter';
 
 // ---- Shared ----
 export { formatDuration, loadEnvFile, retryWithBackoff, resolveWorkerPath } from './shared/utils';
+export { buildLogFilePath, resolveLogDir } from './shared/log-path';

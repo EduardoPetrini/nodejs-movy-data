@@ -1,4 +1,4 @@
-import { DatabaseAdapterSet } from '../registry';
+import { DatabaseAdapterSet, ListTablesOptions } from '../registry';
 import { ConnectionConfig } from '../../../domain/types/connection.types';
 import { IDatabaseConnection } from '../../../domain/ports/database.port';
 import { ISchemaInspector } from '../../../domain/ports/schema-inspector.port';
@@ -39,4 +39,31 @@ export class MssqlAdapterSet implements DatabaseAdapterSet {
     );
     return true;
   }
+
+  async listDatabases(adminConnection: IDatabaseConnection): Promise<string[]> {
+    // database_id > 4 skips master, tempdb, model and msdb.
+    const rows = await adminConnection.query<{ name: string }>(
+      `SELECT name FROM sys.databases WHERE database_id > 4 ORDER BY name`
+    );
+    return rows.map((row) => row.name);
+  }
+
+  async listTables(
+    connection: IDatabaseConnection,
+    opts: ListTablesOptions = {}
+  ): Promise<string[]> {
+    // MssqlConnection rewrites ? to @pN, so positional params are fine here.
+    const rows = await connection.query<{ table_name: string }>(
+      `SELECT TABLE_NAME AS table_name FROM INFORMATION_SCHEMA.TABLES
+        WHERE TABLE_SCHEMA = ? AND TABLE_TYPE = 'BASE TABLE'
+        ORDER BY TABLE_NAME`,
+      [opts.schema ?? 'dbo']
+    );
+    return rows.map((row) => row.table_name);
+  }
+
+  quoteIdentifier(name: string): string {
+    return `[${name.replace(/]/g, ']]')}]`;
+  }
+
 }

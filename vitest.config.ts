@@ -49,10 +49,10 @@ export default defineConfig({
       // can only improve. Goal is 80% (see docs/implementation-plan.md); raise
       // these numbers as coverage climbs, never lower them.
       thresholds: {
-        lines: 57,
-        functions: 56,
-        branches: 39,
-        statements: 56,
+        lines: 60,
+        functions: 64,
+        branches: 41,
+        statements: 59,
       },
     },
   },

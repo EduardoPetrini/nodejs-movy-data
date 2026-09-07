@@ -23,8 +23,26 @@ export interface DatabaseAdapterSet {
    */
   ensureDatabase(adminConnection: IDatabaseConnection, dbName: string): Promise<boolean>;
 
+  /**
+   * List the user databases visible to this (admin) connection.
+   * Optional: callers must handle its absence for engines that cannot do this.
+   */
+  listDatabases?(adminConnection: IDatabaseConnection): Promise<string[]>;
+
+  /** List base tables in the current database/schema. */
+  listTables?(connection: IDatabaseConnection, opts?: ListTablesOptions): Promise<string[]>;
+
+  /** Engine-correct identifier quoting, for table and column names. */
+  quoteIdentifier?(name: string): string;
+
   /** @deprecated Use DatabaseAdapterRegistry.registerTranslator() instead. */
   createSchemaTranslator?(): ISchemaTranslator;
+}
+
+export interface ListTablesOptions {
+  /** MySQL treats a database as a schema; PG and MSSQL take a real schema name. */
+  database?: string;
+  schema?: string;
 }
 
 export class PassthroughSchemaTranslator implements ISchemaTranslator {
