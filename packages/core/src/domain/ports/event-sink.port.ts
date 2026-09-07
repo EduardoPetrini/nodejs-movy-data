@@ -1,4 +1,4 @@
-import { MigrationEvent, MigrationEventInput } from '../types/events.types';
+import { MigrationEvent, MigrationEventInput } from '../types/events.types.js';
 
 /**
  * Fire-and-forget event sink.

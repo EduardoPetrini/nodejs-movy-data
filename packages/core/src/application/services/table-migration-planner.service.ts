@@ -1,5 +1,5 @@
-import { TableMigrationPlan } from '../../domain/types/migration.types';
-import { TableSchema } from '../../domain/types/schema.types';
+import { TableMigrationPlan } from '../../domain/types/migration.types.js';
+import { TableSchema } from '../../domain/types/schema.types.js';
 
 export class TableMigrationPlanner {
   plan(tables: TableSchema[], rowEstimates?: Map<string, number>): TableMigrationPlan {

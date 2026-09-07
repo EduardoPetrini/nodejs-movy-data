@@ -1,7 +1,7 @@
 import sql from 'mssql';
-import { IDatabaseConnection, IDbClient } from '../../../domain/ports/database.port';
-import { ConnectionError } from '../../../domain/errors/migration.errors';
-import { ConnectionConfig, SslConfig } from '../../../domain/types/connection.types';
+import { IDatabaseConnection, IDbClient } from '../../../domain/ports/database.port.js';
+import { ConnectionError } from '../../../domain/errors/migration.errors.js';
+import { ConnectionConfig, SslConfig } from '../../../domain/types/connection.types.js';
 
 function buildPoolConfig(config: ConnectionConfig): sql.config {
   return {

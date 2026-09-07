@@ -1,7 +1,7 @@
 import mysql from 'mysql2/promise';
-import { IDatabaseConnection, IDbClient } from '../../../domain/ports/database.port';
-import { ConnectionConfig } from '../../../domain/types/connection.types';
-import { ConnectionError } from '../../../domain/errors/migration.errors';
+import { IDatabaseConnection, IDbClient } from '../../../domain/ports/database.port.js';
+import { ConnectionConfig } from '../../../domain/types/connection.types.js';
+import { ConnectionError } from '../../../domain/errors/migration.errors.js';
 
 export class MysqlConnection implements IDatabaseConnection {
   private pool: mysql.Pool;

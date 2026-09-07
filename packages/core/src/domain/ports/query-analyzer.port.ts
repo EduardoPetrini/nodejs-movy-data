@@ -1,4 +1,4 @@
-import { IDatabaseConnection } from './database.port';
+import { IDatabaseConnection } from './database.port.js';
 
 export interface QueryColumn {
   name: string;

@@ -1,4 +1,4 @@
-import { ILogger } from '../../domain/ports/logger.port';
+import { ILogger } from '../../domain/ports/logger.port.js';
 
 export class ConsoleLogger implements ILogger {
   private prefix: string;

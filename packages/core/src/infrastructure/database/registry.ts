@@ -1,12 +1,12 @@
-import { DatabaseType } from '../../domain/types/connection.types';
-import { ConnectionConfig } from '../../domain/types/connection.types';
-import { IDatabaseConnection } from '../../domain/ports/database.port';
-import { ISchemaInspector } from '../../domain/ports/schema-inspector.port';
-import { ISchemaSynchronizer } from '../../domain/ports/schema-synchronizer.port';
-import { ISchemaTranslator } from '../../domain/ports/schema-translator.port';
-import { IDataMigrator } from '../../domain/ports/data-migrator.port';
-import { ConstraintSchema } from '../../domain/types/schema.types';
-import { UnsupportedDatabaseError } from '../../domain/errors/migration.errors';
+import { DatabaseType } from '../../domain/types/connection.types.js';
+import { ConnectionConfig } from '../../domain/types/connection.types.js';
+import { IDatabaseConnection } from '../../domain/ports/database.port.js';
+import { ISchemaInspector } from '../../domain/ports/schema-inspector.port.js';
+import { ISchemaSynchronizer } from '../../domain/ports/schema-synchronizer.port.js';
+import { ISchemaTranslator } from '../../domain/ports/schema-translator.port.js';
+import { IDataMigrator } from '../../domain/ports/data-migrator.port.js';
+import { ConstraintSchema } from '../../domain/types/schema.types.js';
+import { UnsupportedDatabaseError } from '../../domain/errors/migration.errors.js';
 
 export interface DatabaseAdapterSet {
   /** System database name used for admin connections (e.g. 'postgres', 'mysql'). */

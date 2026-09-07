@@ -1,10 +1,10 @@
-import { ISchemaSynchronizer } from '../../domain/ports/schema-synchronizer.port';
-import { ISchemaTranslator } from '../../domain/ports/schema-translator.port';
-import { IDatabaseConnection } from '../../domain/ports/database.port';
-import { ILogger } from '../../domain/ports/logger.port';
-import { SchemaDiff } from '../../domain/types/migration.types';
-import { DatabaseType } from '../../domain/types/connection.types';
-import { ColumnSchema, ConstraintSchema } from '../../domain/types/schema.types';
+import { ISchemaSynchronizer } from '../../domain/ports/schema-synchronizer.port.js';
+import { ISchemaTranslator } from '../../domain/ports/schema-translator.port.js';
+import { IDatabaseConnection } from '../../domain/ports/database.port.js';
+import { ILogger } from '../../domain/ports/logger.port.js';
+import { SchemaDiff } from '../../domain/types/migration.types.js';
+import { DatabaseType } from '../../domain/types/connection.types.js';
+import { ColumnSchema, ConstraintSchema } from '../../domain/types/schema.types.js';
 
 export class SyncSchemaUseCase {
   constructor(

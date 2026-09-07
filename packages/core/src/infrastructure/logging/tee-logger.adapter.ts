@@ -1,4 +1,4 @@
-import { ILogger } from '../../domain/ports/logger.port';
+import { ILogger } from '../../domain/ports/logger.port.js';
 
 export class TeeLogger implements ILogger {
   constructor(private readonly loggers: ILogger[]) {}

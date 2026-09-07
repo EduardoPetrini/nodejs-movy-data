@@ -1,20 +1,20 @@
-import { DatabaseAdapterRegistry } from '../../infrastructure/database/registry';
-import { ConnectionConfig } from '../../domain/types/connection.types';
-import { ILogger } from '../../domain/ports/logger.port';
-import { MigrationRunContext } from '../../domain/ports/event-sink.port';
+import { DatabaseAdapterRegistry } from '../../infrastructure/database/registry.js';
+import { ConnectionConfig } from '../../domain/types/connection.types.js';
+import { ILogger } from '../../domain/ports/logger.port.js';
+import { MigrationRunContext } from '../../domain/ports/event-sink.port.js';
 import {
   MigrationStepId,
   MIGRATION_STEP_ORDER,
   SchemaDiffSummary,
   StepDetail,
-} from '../../domain/types/events.types';
-import { MigrationCancelledError } from '../../domain/errors/migration.errors';
-import { CreateDatabaseUseCase } from '../use-cases/create-database.use-case';
-import { CompareSchemasUseCase } from '../use-cases/compare-schemas.use-case';
-import { SyncSchemaUseCase } from '../use-cases/sync-schema.use-case';
-import { MigrateDataUseCase } from '../use-cases/migrate-data.use-case';
-import { MigrationResult, SchemaDiff } from '../../domain/types/migration.types';
-import { retryWithBackoff } from '../../shared/utils';
+} from '../../domain/types/events.types.js';
+import { MigrationCancelledError } from '../../domain/errors/migration.errors.js';
+import { CreateDatabaseUseCase } from '../use-cases/create-database.use-case.js';
+import { CompareSchemasUseCase } from '../use-cases/compare-schemas.use-case.js';
+import { SyncSchemaUseCase } from '../use-cases/sync-schema.use-case.js';
+import { MigrateDataUseCase } from '../use-cases/migrate-data.use-case.js';
+import { MigrationResult, SchemaDiff } from '../../domain/types/migration.types.js';
+import { retryWithBackoff } from '../../shared/utils.js';
 
 const MAX_CONNECT_RETRIES = 3;
 const CONNECT_BASE_DELAY_MS = 1000;

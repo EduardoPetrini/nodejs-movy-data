@@ -1,6 +1,6 @@
-import { IDatabaseConnection } from '../../domain/ports/database.port';
-import { ILogger } from '../../domain/ports/logger.port';
-import { DatabaseAdapterSet } from '../../infrastructure/database/registry';
+import { IDatabaseConnection } from '../../domain/ports/database.port.js';
+import { ILogger } from '../../domain/ports/logger.port.js';
+import { DatabaseAdapterSet } from '../../infrastructure/database/registry.js';
 
 export class CreateDatabaseUseCase {
   constructor(

@@ -1,5 +1,5 @@
-import { ConnectionConfig } from '../types/connection.types';
-import { MigrationResult, TableMigrationPlan } from '../types/migration.types';
+import { ConnectionConfig } from '../types/connection.types.js';
+import { MigrationResult, TableMigrationPlan } from '../types/migration.types.js';
 
 export type MigrationProgressCallback = (tableName: string, rowsDone: number, rowsTotal: number) => void;
 

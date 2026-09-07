@@ -1,8 +1,8 @@
 import { Worker } from 'worker_threads';
-import { ConnectionConfig } from '../../domain/types/connection.types';
-import { WorkerPayload, WorkerMessage } from '../../domain/types/worker.types';
-import { TableMigrationResult } from '../../domain/types/migration.types';
-import { resolveWorkerPath, chunkArray } from '../../shared/utils';
+import { ConnectionConfig } from '../../domain/types/connection.types.js';
+import { WorkerPayload, WorkerMessage } from '../../domain/types/worker.types.js';
+import { TableMigrationResult } from '../../domain/types/migration.types.js';
+import { resolveWorkerPath, chunkArray } from '../../shared/utils.js';
 
 export type ProgressCallback = (tableName: string, rowsDone: number, rowsTotal: number) => void;
 

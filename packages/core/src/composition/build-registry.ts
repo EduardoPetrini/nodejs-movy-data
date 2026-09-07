@@ -1,16 +1,16 @@
-import { DatabaseType } from '../domain/types/connection.types';
-import { DatabaseAdapterRegistry } from '../infrastructure/database/registry';
-import { PgAdapterSet } from '../infrastructure/database/pg/pg-adapter-set';
-import { MysqlAdapterSet } from '../infrastructure/database/mysql/mysql-adapter-set';
-import { MssqlAdapterSet } from '../infrastructure/database/mssql/mssql-adapter-set';
-import { MysqlToPostgresTranslator } from '../infrastructure/database/mysql/mysql-to-postgres-translator.adapter';
-import { MysqlToMssqlTranslator } from '../infrastructure/database/mysql/mysql-to-mssql-translator.adapter';
-import { PostgresToMysqlTranslator } from '../infrastructure/database/pg/postgres-to-mysql-translator.adapter';
-import { PostgresToMssqlTranslator } from '../infrastructure/database/pg/postgres-to-mssql-translator.adapter';
-import { MssqlToPostgresTranslator } from '../infrastructure/database/mssql/mssql-to-postgres-translator.adapter';
-import { MssqlToMysqlTranslator } from '../infrastructure/database/mssql/mssql-to-mysql-translator.adapter';
-import { CrossDbDataMigrator } from '../infrastructure/migration/cross-db-data-migrator';
-import { MssqlCrossDbDataMigrator } from '../infrastructure/migration/mssql-cross-db-data-migrator';
+import { DatabaseType } from '../domain/types/connection.types.js';
+import { DatabaseAdapterRegistry } from '../infrastructure/database/registry.js';
+import { PgAdapterSet } from '../infrastructure/database/pg/pg-adapter-set.js';
+import { MysqlAdapterSet } from '../infrastructure/database/mysql/mysql-adapter-set.js';
+import { MssqlAdapterSet } from '../infrastructure/database/mssql/mssql-adapter-set.js';
+import { MysqlToPostgresTranslator } from '../infrastructure/database/mysql/mysql-to-postgres-translator.adapter.js';
+import { MysqlToMssqlTranslator } from '../infrastructure/database/mysql/mysql-to-mssql-translator.adapter.js';
+import { PostgresToMysqlTranslator } from '../infrastructure/database/pg/postgres-to-mysql-translator.adapter.js';
+import { PostgresToMssqlTranslator } from '../infrastructure/database/pg/postgres-to-mssql-translator.adapter.js';
+import { MssqlToPostgresTranslator } from '../infrastructure/database/mssql/mssql-to-postgres-translator.adapter.js';
+import { MssqlToMysqlTranslator } from '../infrastructure/database/mssql/mssql-to-mysql-translator.adapter.js';
+import { CrossDbDataMigrator } from '../infrastructure/migration/cross-db-data-migrator.js';
+import { MssqlCrossDbDataMigrator } from '../infrastructure/migration/mssql-cross-db-data-migrator.js';
 
 /**
  * The composition root: the one module that names every concrete Adapter Set,

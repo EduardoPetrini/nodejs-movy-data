@@ -1,13 +1,13 @@
 import { pipeline } from 'stream/promises';
 import { from as copyFrom, to as copyTo } from 'pg-copy-streams';
 import type { PoolClient } from 'pg';
-import { IQueryAnalyzer, QueryColumn } from '../../domain/ports/query-analyzer.port';
-import { ISchemaSynchronizer } from '../../domain/ports/schema-synchronizer.port';
-import { IDatabaseConnection } from '../../domain/ports/database.port';
-import { ILogger } from '../../domain/ports/logger.port';
-import { TableSchema, ColumnSchema } from '../../domain/types/schema.types';
-import { SchemaDiff, MigrationResult } from '../../domain/types/migration.types';
-import { PgConnection } from '../../infrastructure/database/pg/pg-connection.adapter';
+import { IQueryAnalyzer, QueryColumn } from '../../domain/ports/query-analyzer.port.js';
+import { ISchemaSynchronizer } from '../../domain/ports/schema-synchronizer.port.js';
+import { IDatabaseConnection } from '../../domain/ports/database.port.js';
+import { ILogger } from '../../domain/ports/logger.port.js';
+import { TableSchema, ColumnSchema } from '../../domain/types/schema.types.js';
+import { SchemaDiff, MigrationResult } from '../../domain/types/migration.types.js';
+import { PgConnection } from '../../infrastructure/database/pg/pg-connection.adapter.js';
 
 // Map analyzed type names to valid PostgreSQL DDL type names
 function toDdlType(typeName: string): string {

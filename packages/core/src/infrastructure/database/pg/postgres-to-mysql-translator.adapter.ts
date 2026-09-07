@@ -1,6 +1,6 @@
-import { CrossDbSchemaTranslator } from '../translation/cross-db-schema-translator';
-import { DefaultValueTranslator, POSTGRES_TO_MYSQL_DEFAULT_MAP, POSTGRES_TO_MYSQL_DEFAULT_RULES } from '../translation/default-value.translator';
-import { POSTGRES_TO_MYSQL_TYPE_MAP } from '../translation/type-maps/postgres-to-mysql.type-map';
+import { CrossDbSchemaTranslator } from '../translation/cross-db-schema-translator.js';
+import { DefaultValueTranslator, POSTGRES_TO_MYSQL_DEFAULT_MAP, POSTGRES_TO_MYSQL_DEFAULT_RULES } from '../translation/default-value.translator.js';
+import { POSTGRES_TO_MYSQL_TYPE_MAP } from '../translation/type-maps/postgres-to-mysql.type-map.js';
 
 /**
  * Translates PostgreSQL schema elements to their MySQL equivalents.

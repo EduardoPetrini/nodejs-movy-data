@@ -1,6 +1,6 @@
-import { IDatabaseConnection } from '../../domain/ports/database.port';
-import { ILogger } from '../../domain/ports/logger.port';
-import { DatabaseType } from '../../domain/types/connection.types';
+import { IDatabaseConnection } from '../../domain/ports/database.port.js';
+import { ILogger } from '../../domain/ports/logger.port.js';
+import { DatabaseType } from '../../domain/types/connection.types.js';
 
 export interface TableCountResult {
   tableName: string;

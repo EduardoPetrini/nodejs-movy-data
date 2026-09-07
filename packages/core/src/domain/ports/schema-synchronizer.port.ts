@@ -1,6 +1,6 @@
-import { IDatabaseConnection } from './database.port';
-import { DatabaseSchema, SequenceSchema, TableSchema } from '../types/schema.types';
-import { SchemaDiff } from '../types/migration.types';
+import { IDatabaseConnection } from './database.port.js';
+import { DatabaseSchema, SequenceSchema, TableSchema } from '../types/schema.types.js';
+import { SchemaDiff } from '../types/migration.types.js';
 
 export interface ISchemaSynchronizer {
   diff(source: DatabaseSchema, target: DatabaseSchema): SchemaDiff;

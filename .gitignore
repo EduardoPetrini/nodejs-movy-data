@@ -10,3 +10,4 @@ coverage/
 .nuxt/
 .output/
 .data/
+package-lock.json

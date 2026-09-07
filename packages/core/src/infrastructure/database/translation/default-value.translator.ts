@@ -1,4 +1,4 @@
-import { DatabaseType } from '../../../domain/types/connection.types';
+import { DatabaseType } from '../../../domain/types/connection.types.js';
 
 export interface DefaultValueRule {
   /** Pattern matched against the trimmed, lowercased expression. */

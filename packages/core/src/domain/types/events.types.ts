@@ -1,5 +1,5 @@
-import { DatabaseType } from './connection.types';
-import { MigrationResult, TableMigrationPlan } from './migration.types';
+import { DatabaseType } from './connection.types.js';
+import { MigrationResult, TableMigrationPlan } from './migration.types.js';
 
 /**
  * The nine timeline nodes: connection validation plus the eight numbered steps

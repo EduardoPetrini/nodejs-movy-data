@@ -1,6 +1,6 @@
-import { ILogger } from '../../domain/ports/logger.port';
-import { MigrationEventSink } from '../../domain/ports/event-sink.port';
-import { LogLevel, MigrationStepId } from '../../domain/types/events.types';
+import { ILogger } from '../../domain/ports/logger.port.js';
+import { MigrationEventSink } from '../../domain/ports/event-sink.port.js';
+import { LogLevel, MigrationStepId } from '../../domain/types/events.types.js';
 
 /**
  * An ILogger that emits its lines as `log` events.

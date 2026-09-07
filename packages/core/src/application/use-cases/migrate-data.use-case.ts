@@ -1,11 +1,11 @@
-import { IDataMigrator } from '../../domain/ports/data-migrator.port';
-import { ILogger } from '../../domain/ports/logger.port';
-import { ConnectionConfig, DatabaseType } from '../../domain/types/connection.types';
-import { MigrationResult, TableMigrationResult } from '../../domain/types/migration.types';
-import { TableSchema } from '../../domain/types/schema.types';
-import { formatDuration } from '../../shared/utils';
-import { TableMigrationPlanner } from '../services/table-migration-planner.service';
-import { MigrationRunContext } from '../../domain/ports/event-sink.port';
+import { IDataMigrator } from '../../domain/ports/data-migrator.port.js';
+import { ILogger } from '../../domain/ports/logger.port.js';
+import { ConnectionConfig, DatabaseType } from '../../domain/types/connection.types.js';
+import { MigrationResult, TableMigrationResult } from '../../domain/types/migration.types.js';
+import { TableSchema } from '../../domain/types/schema.types.js';
+import { formatDuration } from '../../shared/utils.js';
+import { TableMigrationPlanner } from '../services/table-migration-planner.service.js';
+import { MigrationRunContext } from '../../domain/ports/event-sink.port.js';
 
 const MAX_WORKERS = 4;
 

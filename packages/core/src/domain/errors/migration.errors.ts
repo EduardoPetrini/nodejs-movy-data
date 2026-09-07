@@ -1,4 +1,4 @@
-import { DatabaseType } from '../types/connection.types';
+import { DatabaseType } from '../types/connection.types.js';
 
 export class MigrationError extends Error {
   constructor(message: string) {

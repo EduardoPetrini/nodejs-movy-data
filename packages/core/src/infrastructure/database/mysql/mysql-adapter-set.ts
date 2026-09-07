@@ -1,13 +1,13 @@
-import { DatabaseAdapterSet, ListTablesOptions } from '../registry';
-import { ConnectionConfig } from '../../../domain/types/connection.types';
-import { IDatabaseConnection } from '../../../domain/ports/database.port';
-import { ISchemaInspector } from '../../../domain/ports/schema-inspector.port';
-import { ISchemaSynchronizer } from '../../../domain/ports/schema-synchronizer.port';
-import { IDataMigrator } from '../../../domain/ports/data-migrator.port';
-import { MysqlConnection } from './mysql-connection.adapter';
-import { MysqlSchemaInspector } from './mysql-schema-inspector.adapter';
-import { MysqlSchemaSynchronizer } from './mysql-schema-synchronizer.adapter';
-import { MysqlDataMigrator } from '../../migration/mysql-data-migrator.adapter';
+import { DatabaseAdapterSet, ListTablesOptions } from '../registry.js';
+import { ConnectionConfig } from '../../../domain/types/connection.types.js';
+import { IDatabaseConnection } from '../../../domain/ports/database.port.js';
+import { ISchemaInspector } from '../../../domain/ports/schema-inspector.port.js';
+import { ISchemaSynchronizer } from '../../../domain/ports/schema-synchronizer.port.js';
+import { IDataMigrator } from '../../../domain/ports/data-migrator.port.js';
+import { MysqlConnection } from './mysql-connection.adapter.js';
+import { MysqlSchemaInspector } from './mysql-schema-inspector.adapter.js';
+import { MysqlSchemaSynchronizer } from './mysql-schema-synchronizer.adapter.js';
+import { MysqlDataMigrator } from '../../migration/mysql-data-migrator.adapter.js';
 
 export class MysqlAdapterSet implements DatabaseAdapterSet {
   readonly adminDatabase = 'mysql';

@@ -1,15 +1,15 @@
-import { IDataMigrator, MigrationProgressCallback } from '../../domain/ports/data-migrator.port';
-import { IDbClient } from '../../domain/ports/database.port';
-import { ConnectionConfig, DatabaseType } from '../../domain/types/connection.types';
+import { IDataMigrator, MigrationProgressCallback } from '../../domain/ports/data-migrator.port.js';
+import { IDbClient } from '../../domain/ports/database.port.js';
+import { ConnectionConfig, DatabaseType } from '../../domain/types/connection.types.js';
 import {
   MigrationResult,
   TableMigrationPlan,
   TableMigrationResult,
-} from '../../domain/types/migration.types';
-import { DataMigrationError } from '../../domain/errors/migration.errors';
-import { MssqlConnection } from '../database/mssql/mssql-connection.adapter';
-import { PgConnection } from '../database/pg/pg-connection.adapter';
-import { MysqlConnection } from '../database/mysql/mysql-connection.adapter';
+} from '../../domain/types/migration.types.js';
+import { DataMigrationError } from '../../domain/errors/migration.errors.js';
+import { MssqlConnection } from '../database/mssql/mssql-connection.adapter.js';
+import { PgConnection } from '../database/pg/pg-connection.adapter.js';
+import { MysqlConnection } from '../database/mysql/mysql-connection.adapter.js';
 
 const BATCH_SIZE = 500;
 const DEFAULT_SCHEMA_MSSQL = 'dbo';

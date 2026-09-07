@@ -1,4 +1,4 @@
-import { ConnectionConfig } from './connection.types';
+import { ConnectionConfig } from './connection.types.js';
 
 export interface WorkerPayload {
   tables: string[];

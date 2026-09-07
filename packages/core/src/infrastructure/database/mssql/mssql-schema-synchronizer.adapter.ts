@@ -1,14 +1,14 @@
-import { ISchemaSynchronizer } from '../../../domain/ports/schema-synchronizer.port';
-import { IDatabaseConnection } from '../../../domain/ports/database.port';
+import { ISchemaSynchronizer } from '../../../domain/ports/schema-synchronizer.port.js';
+import { IDatabaseConnection } from '../../../domain/ports/database.port.js';
 import {
   DatabaseSchema,
   TableSchema,
   ColumnSchema,
   ConstraintSchema,
   SequenceSchema,
-} from '../../../domain/types/schema.types';
-import { SchemaDiff } from '../../../domain/types/migration.types';
-import { SchemaSyncError } from '../../../domain/errors/migration.errors';
+} from '../../../domain/types/schema.types.js';
+import { SchemaDiff } from '../../../domain/types/migration.types.js';
+import { SchemaSyncError } from '../../../domain/errors/migration.errors.js';
 
 function escapeId(name: string): string {
   return '[' + name.replace(/]/g, ']]') + ']';

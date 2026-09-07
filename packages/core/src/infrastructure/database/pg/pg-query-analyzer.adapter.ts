@@ -1,7 +1,7 @@
 import type { PoolClient } from 'pg';
-import { IDatabaseConnection } from '../../../domain/ports/database.port';
-import { IQueryAnalyzer, QueryColumn } from '../../../domain/ports/query-analyzer.port';
-import { PgConnection } from './pg-connection.adapter';
+import { IDatabaseConnection } from '../../../domain/ports/database.port.js';
+import { IQueryAnalyzer, QueryColumn } from '../../../domain/ports/query-analyzer.port.js';
+import { PgConnection } from './pg-connection.adapter.js';
 
 // Maps common PostgreSQL type OIDs to SQL type names.
 // These are stable built-in OIDs that do not change across Postgres versions.

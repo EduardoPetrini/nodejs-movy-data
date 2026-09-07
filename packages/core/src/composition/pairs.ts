@@ -1,5 +1,5 @@
-import { DatabaseType } from '../domain/types/connection.types';
-import { DatabaseAdapterRegistry } from '../infrastructure/database/registry';
+import { DatabaseType } from '../domain/types/connection.types.js';
+import { DatabaseAdapterRegistry } from '../infrastructure/database/registry.js';
 
 /**
  * One directional migration route between two engines, e.g. MSSQL -> PostgreSQL.

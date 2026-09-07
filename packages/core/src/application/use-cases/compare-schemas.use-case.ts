@@ -1,9 +1,9 @@
-import { ISchemaInspector } from '../../domain/ports/schema-inspector.port';
-import { ISchemaSynchronizer } from '../../domain/ports/schema-synchronizer.port';
-import { IDatabaseConnection } from '../../domain/ports/database.port';
-import { ILogger } from '../../domain/ports/logger.port';
-import { DatabaseSchema } from '../../domain/types/schema.types';
-import { SchemaDiff } from '../../domain/types/migration.types';
+import { ISchemaInspector } from '../../domain/ports/schema-inspector.port.js';
+import { ISchemaSynchronizer } from '../../domain/ports/schema-synchronizer.port.js';
+import { IDatabaseConnection } from '../../domain/ports/database.port.js';
+import { ILogger } from '../../domain/ports/logger.port.js';
+import { DatabaseSchema } from '../../domain/types/schema.types.js';
+import { SchemaDiff } from '../../domain/types/migration.types.js';
 
 export interface CompareSchemaResult {
   sourceSchema: DatabaseSchema;

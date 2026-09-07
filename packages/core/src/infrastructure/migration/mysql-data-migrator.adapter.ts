@@ -1,11 +1,11 @@
-import { IDataMigrator, MigrationProgressCallback } from '../../domain/ports/data-migrator.port';
-import { ConnectionConfig } from '../../domain/types/connection.types';
+import { IDataMigrator, MigrationProgressCallback } from '../../domain/ports/data-migrator.port.js';
+import { ConnectionConfig } from '../../domain/types/connection.types.js';
 import {
   MigrationResult,
   TableMigrationPlan,
   TableMigrationResult,
-} from '../../domain/types/migration.types';
-import { MysqlConnection } from '../database/mysql/mysql-connection.adapter';
+} from '../../domain/types/migration.types.js';
+import { MysqlConnection } from '../database/mysql/mysql-connection.adapter.js';
 
 const BATCH_SIZE = 500;
 

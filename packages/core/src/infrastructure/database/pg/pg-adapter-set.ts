@@ -1,15 +1,15 @@
-import { DatabaseAdapterSet, ListTablesOptions } from '../registry';
-import { ConnectionConfig } from '../../../domain/types/connection.types';
-import { IDatabaseConnection } from '../../../domain/ports/database.port';
-import { ISchemaInspector } from '../../../domain/ports/schema-inspector.port';
-import { ISchemaSynchronizer } from '../../../domain/ports/schema-synchronizer.port';
-import { IDataMigrator } from '../../../domain/ports/data-migrator.port';
-import { ISchemaTranslator } from '../../../domain/ports/schema-translator.port';
-import { PgConnection } from './pg-connection.adapter';
-import { PgSchemaInspector } from './pg-schema-inspector.adapter';
-import { PgSchemaSynchronizer } from './pg-schema-synchronizer.adapter';
-import { PgSchemaTranslator } from './pg-schema-translator.adapter';
-import { PgDataMigrator } from '../../migration/pg-data-migrator.adapter';
+import { DatabaseAdapterSet, ListTablesOptions } from '../registry.js';
+import { ConnectionConfig } from '../../../domain/types/connection.types.js';
+import { IDatabaseConnection } from '../../../domain/ports/database.port.js';
+import { ISchemaInspector } from '../../../domain/ports/schema-inspector.port.js';
+import { ISchemaSynchronizer } from '../../../domain/ports/schema-synchronizer.port.js';
+import { IDataMigrator } from '../../../domain/ports/data-migrator.port.js';
+import { ISchemaTranslator } from '../../../domain/ports/schema-translator.port.js';
+import { PgConnection } from './pg-connection.adapter.js';
+import { PgSchemaInspector } from './pg-schema-inspector.adapter.js';
+import { PgSchemaSynchronizer } from './pg-schema-synchronizer.adapter.js';
+import { PgSchemaTranslator } from './pg-schema-translator.adapter.js';
+import { PgDataMigrator } from '../../migration/pg-data-migrator.adapter.js';
 
 export class PgAdapterSet implements DatabaseAdapterSet {
   readonly adminDatabase = 'postgres';

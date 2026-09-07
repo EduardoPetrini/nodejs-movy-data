@@ -1,4 +1,4 @@
-import { TableSchema, SequenceSchema, ConstraintSchema, IndexSchema, EnumSchema } from './schema.types';
+import { TableSchema, SequenceSchema, ConstraintSchema, IndexSchema, EnumSchema } from './schema.types.js';
 
 export interface ColumnDiff {
   columnName: string;
@@ -9,7 +9,7 @@ export interface ColumnDiff {
 export interface SchemaDiff {
   tablesToCreate: TableSchema[];
   tablesToDrop: string[];
-  columnsToAdd: { tableName: string; column: import('./schema.types').ColumnSchema }[];
+  columnsToAdd: { tableName: string; column: import('./schema.types.js').ColumnSchema }[];
   columnsToDrop: { tableName: string; columnName: string }[];
   columnsToAlter: { tableName: string; diff: ColumnDiff }[];
   constraintsToAdd: { tableName: string; constraint: ConstraintSchema; columnTypes?: Record<string, string> }[];

@@ -1,12 +1,12 @@
-import { IDataMigrator, MigrationProgressCallback } from '../../domain/ports/data-migrator.port';
-import { IDbClient } from '../../domain/ports/database.port';
-import { ConnectionConfig } from '../../domain/types/connection.types';
+import { IDataMigrator, MigrationProgressCallback } from '../../domain/ports/data-migrator.port.js';
+import { IDbClient } from '../../domain/ports/database.port.js';
+import { ConnectionConfig } from '../../domain/types/connection.types.js';
 import {
   MigrationResult,
   TableMigrationPlan,
   TableMigrationResult,
-} from '../../domain/types/migration.types';
-import { MssqlConnection } from '../database/mssql/mssql-connection.adapter';
+} from '../../domain/types/migration.types.js';
+import { MssqlConnection } from '../database/mssql/mssql-connection.adapter.js';
 
 const BATCH_SIZE = 500;
 const DEFAULT_SCHEMA = 'dbo';

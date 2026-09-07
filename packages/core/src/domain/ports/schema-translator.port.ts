@@ -1,5 +1,5 @@
-import { DatabaseType } from '../types/connection.types';
-import { ConstraintSchema } from '../types/schema.types';
+import { DatabaseType } from '../types/connection.types.js';
+import { ConstraintSchema } from '../types/schema.types.js';
 
 export interface ISchemaTranslator {
   translateColumnType(

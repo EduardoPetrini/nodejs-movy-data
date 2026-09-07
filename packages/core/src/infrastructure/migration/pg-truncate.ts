@@ -1,4 +1,4 @@
-import { escapeIdentifier } from '../../shared/utils';
+import { escapeIdentifier } from '../../shared/utils.js';
 
 /**
  * Clearing a PostgreSQL destination before a load.

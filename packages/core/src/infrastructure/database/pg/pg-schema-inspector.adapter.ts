@@ -1,5 +1,5 @@
-import { ISchemaInspector } from '../../../domain/ports/schema-inspector.port';
-import { IDatabaseConnection } from '../../../domain/ports/database.port';
+import { ISchemaInspector } from '../../../domain/ports/schema-inspector.port.js';
+import { IDatabaseConnection } from '../../../domain/ports/database.port.js';
 import {
   DatabaseSchema,
   TableSchema,
@@ -8,9 +8,9 @@ import {
   IndexSchema,
   SequenceSchema,
   EnumSchema,
-} from '../../../domain/types/schema.types';
-import { SchemaInspectionError } from '../../../domain/errors/migration.errors';
-import { toRowCount } from '../../../shared/utils';
+} from '../../../domain/types/schema.types.js';
+import { SchemaInspectionError } from '../../../domain/errors/migration.errors.js';
+import { toRowCount } from '../../../shared/utils.js';
 
 interface RawColumn {
   table_name: string;

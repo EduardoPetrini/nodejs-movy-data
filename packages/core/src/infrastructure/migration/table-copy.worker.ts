@@ -2,7 +2,7 @@ import { workerData, parentPort } from 'worker_threads';
 import { Pool } from 'pg';
 import { pipeline } from 'stream/promises';
 import { from as copyFrom, to as copyTo } from 'pg-copy-streams';
-import { WorkerPayload, WorkerMessage } from '../../domain/types/worker.types';
+import { WorkerPayload, WorkerMessage } from '../../domain/types/worker.types.js';
 
 async function copyTable(
   tableName: string,

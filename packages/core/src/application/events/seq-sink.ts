@@ -1,5 +1,5 @@
-import { MigrationEvent, MigrationEventInput } from '../../domain/types/events.types';
-import { MigrationEventSink, SequencedEventSink } from '../../domain/ports/event-sink.port';
+import { MigrationEvent, MigrationEventInput } from '../../domain/types/events.types.js';
+import { MigrationEventSink, SequencedEventSink } from '../../domain/ports/event-sink.port.js';
 
 /**
  * Stamps runId, a monotonic seq and a timestamp onto every event, then

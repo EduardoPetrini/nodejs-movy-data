@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { ILogger } from '../../domain/ports/logger.port';
+import { ILogger } from '../../domain/ports/logger.port.js';
 
 export class FileLogger implements ILogger {
   private stream: fs.WriteStream;

@@ -1,11 +1,11 @@
-import { SequencedEventSink, MigrationEventSink } from '../../domain/ports/event-sink.port';
-import { createSeqSink } from './seq-sink';
-import { createThrottledSink } from './throttled-sink';
-import { createSafeSink } from './safe-sink';
+import { SequencedEventSink, MigrationEventSink } from '../../domain/ports/event-sink.port.js';
+import { createSeqSink } from './seq-sink.js';
+import { createThrottledSink } from './throttled-sink.js';
+import { createSafeSink } from './safe-sink.js';
 
-export { createSeqSink } from './seq-sink';
-export { createThrottledSink } from './throttled-sink';
-export { createSafeSink } from './safe-sink';
+export { createSeqSink } from './seq-sink.js';
+export { createThrottledSink } from './throttled-sink.js';
+export { createSafeSink } from './safe-sink.js';
 
 /**
  * The standard pipeline: safe( seq( throttled( target ) ) ).

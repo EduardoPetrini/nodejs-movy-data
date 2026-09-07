@@ -1,5 +1,5 @@
-import { IQueryAnalyzer, QueryColumn } from '../../../domain/ports/query-analyzer.port';
-import { IDatabaseConnection } from '../../../domain/ports/database.port';
+import { IQueryAnalyzer, QueryColumn } from '../../../domain/ports/query-analyzer.port.js';
+import { IDatabaseConnection } from '../../../domain/ports/database.port.js';
 
 interface FieldRow {
   Field: string;

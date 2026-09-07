@@ -6,9 +6,14 @@ export default defineNuxtConfig({
 
   css: ['~/assets/css/global.css'],
 
-  // Migrations run in a forked process, never in Nitro, and the drivers must be
-  // required from node_modules rather than bundled — see packages/core
-  // resolveWorkerPath(). Bundling @movy/core would break worker resolution.
+  // @movy/core stays CommonJS: resolveWorkerPath() depends on __dirname, and
+  // migrations run in a forked @movy/runner process that loads core from disk.
+  //
+  // Its emitted specifiers carry explicit .js extensions, so the output is valid
+  // under both CJS and ESM resolution. That is what lets it be externalised here
+  // without Nitro re-emitting extensionless deep imports into an ESM bundle.
+  //
+  // The database drivers are native and must never be bundled.
   nitro: {
     externals: {
       external: ['@movy/core', 'pg', 'pg-copy-streams', 'mysql2', 'mssql'],

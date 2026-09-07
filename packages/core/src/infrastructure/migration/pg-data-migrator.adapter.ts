@@ -1,10 +1,10 @@
-import { IDataMigrator, MigrationProgressCallback } from '../../domain/ports/data-migrator.port';
-import { ConnectionConfig } from '../../domain/types/connection.types';
-import { MigrationResult, TableMigrationPlan } from '../../domain/types/migration.types';
-import { WorkerPool } from './worker-pool';
-import { PgConnection } from '../database/pg/pg-connection.adapter';
-import { IDatabaseConnection } from '../../domain/ports/database.port';
-import { truncatePgTables } from './pg-truncate';
+import { IDataMigrator, MigrationProgressCallback } from '../../domain/ports/data-migrator.port.js';
+import { ConnectionConfig } from '../../domain/types/connection.types.js';
+import { MigrationResult, TableMigrationPlan } from '../../domain/types/migration.types.js';
+import { WorkerPool } from './worker-pool.js';
+import { PgConnection } from '../database/pg/pg-connection.adapter.js';
+import { IDatabaseConnection } from '../../domain/ports/database.port.js';
+import { truncatePgTables } from './pg-truncate.js';
 
 /** Injectable so tests can drive this without opening a real connection. */
 export type DestConnectionFactory = (config: ConnectionConfig) => IDatabaseConnection;

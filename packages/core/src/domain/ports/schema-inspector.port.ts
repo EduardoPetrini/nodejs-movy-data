@@ -1,5 +1,5 @@
-import { IDatabaseConnection } from './database.port';
-import { DatabaseSchema } from '../types/schema.types';
+import { IDatabaseConnection } from './database.port.js';
+import { DatabaseSchema } from '../types/schema.types.js';
 
 export interface ISchemaInspector {
   inspect(connection: IDatabaseConnection, schemaName?: string): Promise<DatabaseSchema>;

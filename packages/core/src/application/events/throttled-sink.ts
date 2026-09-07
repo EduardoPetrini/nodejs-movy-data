@@ -1,5 +1,5 @@
-import { MigrationEventInput } from '../../domain/types/events.types';
-import { MigrationEventSink } from '../../domain/ports/event-sink.port';
+import { MigrationEventInput } from '../../domain/types/events.types.js';
+import { MigrationEventSink } from '../../domain/ports/event-sink.port.js';
 
 const DEFAULT_INTERVAL_MS = 250;
 

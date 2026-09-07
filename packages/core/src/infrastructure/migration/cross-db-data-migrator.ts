@@ -1,17 +1,17 @@
 import { pipeline } from 'stream/promises';
 import { from as copyFrom, to as copyTo } from 'pg-copy-streams';
 import mysql from 'mysql2/promise';
-import { IDataMigrator, MigrationProgressCallback } from '../../domain/ports/data-migrator.port';
-import { ConnectionConfig, DatabaseType } from '../../domain/types/connection.types';
+import { IDataMigrator, MigrationProgressCallback } from '../../domain/ports/data-migrator.port.js';
+import { ConnectionConfig, DatabaseType } from '../../domain/types/connection.types.js';
 import {
   MigrationResult,
   TableMigrationPlan,
   TableMigrationResult,
-} from '../../domain/types/migration.types';
-import { DataMigrationError } from '../../domain/errors/migration.errors';
-import { MysqlConnection } from '../database/mysql/mysql-connection.adapter';
-import { PgConnection } from '../database/pg/pg-connection.adapter';
-import { truncatePgTables } from './pg-truncate';
+} from '../../domain/types/migration.types.js';
+import { DataMigrationError } from '../../domain/errors/migration.errors.js';
+import { MysqlConnection } from '../database/mysql/mysql-connection.adapter.js';
+import { PgConnection } from '../database/pg/pg-connection.adapter.js';
+import { truncatePgTables } from './pg-truncate.js';
 
 const BATCH_SIZE = 500;
 

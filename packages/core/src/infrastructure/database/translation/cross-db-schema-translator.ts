@@ -1,7 +1,7 @@
-import { ISchemaTranslator } from '../../../domain/ports/schema-translator.port';
-import { DatabaseType } from '../../../domain/types/connection.types';
-import { ConstraintSchema } from '../../../domain/types/schema.types';
-import { DefaultValueTranslator } from './default-value.translator';
+import { ISchemaTranslator } from '../../../domain/ports/schema-translator.port.js';
+import { DatabaseType } from '../../../domain/types/connection.types.js';
+import { ConstraintSchema } from '../../../domain/types/schema.types.js';
+import { DefaultValueTranslator } from './default-value.translator.js';
 
 /**
  * Strips length/precision from a type string, returning only the base name.

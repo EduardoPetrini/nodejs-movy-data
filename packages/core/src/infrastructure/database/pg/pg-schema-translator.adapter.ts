@@ -1,6 +1,6 @@
-import { ISchemaTranslator } from '../../../domain/ports/schema-translator.port';
-import { DatabaseType } from '../../../domain/types/connection.types';
-import { ConstraintSchema } from '../../../domain/types/schema.types';
+import { ISchemaTranslator } from '../../../domain/ports/schema-translator.port.js';
+import { DatabaseType } from '../../../domain/types/connection.types.js';
+import { ConstraintSchema } from '../../../domain/types/schema.types.js';
 
 export class PgSchemaTranslator implements ISchemaTranslator {
   translateColumnType(
