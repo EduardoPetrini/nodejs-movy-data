@@ -6,21 +6,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 # Run the CLI
-npm start                    # ts-node src/index.ts
+npm start                    # runs @movy/cli (ts-node, no build step)
 npm run dev                  # ts-node-dev with hot reload
 
 # Build
-npm run build                # tsc → dist/
+npm run build                # tsc -b across workspaces → <pkg>/dist/
 
 # Type check (no emit)
-npx tsc --noEmit
+npm run typecheck            # per-workspace, includes tests
 
 # Tests
 npm test                     # vitest run (all tests, single pass)
 npm run test:watch           # vitest watch mode
 
 # Run a single test file
-npx vitest run tests/unit/application/migration-orchestrator.service.test.ts
+npx vitest run packages/core/tests/unit/application/migration-orchestrator.service.test.ts
 ```
 
 ## Architecture
@@ -30,16 +30,20 @@ This is a database-agnostic CLI migration tool ("Movy") built with **hexagonal a
 ### Layer overview
 
 ```
-src/
-├── domain/           # Pure types, ports (interfaces), and errors — no I/O
-├── application/      # Use cases and orchestration service
-├── infrastructure/   # Concrete adapter implementations (pg, mysql, translators, migrators)
-└── presentation/     # CLI entry point and prompt helpers
+packages/core/          # @movy/core — the hexagon. No I/O entry points.
+├── src/domain/         # Pure types, ports (interfaces), and errors — no I/O
+├── src/application/    # Use cases and orchestration service
+├── src/infrastructure/ # Concrete adapter implementations (pg, mysql, mssql, translators, migrators)
+├── src/index.ts        # Public barrel — apps import ONLY from '@movy/core'
+└── tests/              # Mock-driven unit tests
+
+apps/cli/               # @movy/cli — interactive command-line surface
+apps/runner/            # @movy/runner — forked per run (scaffolded; Phase 1)
 ```
 
 ### Domain ports (interfaces)
 
-All database interactions are behind interfaces in `src/domain/ports/`:
+All database interactions are behind interfaces in `packages/core/src/domain/ports/`:
 
 | Port | Purpose |
 |------|---------|
@@ -53,7 +57,7 @@ All database interactions are behind interfaces in `src/domain/ports/`:
 
 ### Adapter registration
 
-`DatabaseAdapterRegistry` (`src/infrastructure/database/registry.ts`) maps a `DatabaseType` to a `DatabaseAdapterSet`. **PostgreSQL**, **MySQL** and **MSSQL** are fully registered. Cross-DB translator and migrator pairs are registered separately via `registerTranslator()` and `registerDataMigrator()`.
+`DatabaseAdapterRegistry` (`packages/core/src/infrastructure/database/registry.ts`) maps a `DatabaseType` to a `DatabaseAdapterSet`. **PostgreSQL**, **MySQL** and **MSSQL** are fully registered. Cross-DB translator and migrator pairs are registered separately via `registerTranslator()` and `registerDataMigrator()`.
 
 ```
 registry.register(DatabaseType.POSTGRES, new PgAdapterSet())
@@ -119,7 +123,7 @@ Logs are written to both the console and a timestamped file under `logs/` (`movy
 
 ### Cross-database schema translation
 
-`CrossDbSchemaTranslator` (`src/infrastructure/database/translation/cross-db-schema-translator.ts`) is the abstract base class. It does normalised type lookup with precision-suffix propagation. Concrete subclasses:
+`CrossDbSchemaTranslator` (`packages/core/src/infrastructure/database/translation/cross-db-schema-translator.ts`) is the abstract base class. It does normalised type lookup with precision-suffix propagation. Concrete subclasses:
 - `MysqlToPostgresTranslator` — uses `MYSQL_TO_POSTGRES_TYPE_MAP`
 - `PostgresToMysqlTranslator` — uses `POSTGRES_TO_MYSQL_TYPE_MAP`
 - `MssqlToPostgresTranslator` — uses `MSSQL_TO_POSTGRES_TYPE_MAP`
@@ -131,13 +135,13 @@ Default-value translation is delegated to `DefaultValueTranslator`, injected int
 
 ### Schema types
 
-`src/domain/types/schema.types.ts` defines the canonical in-memory schema representation: `DatabaseSchema` → `TableSchema[]` + `SequenceSchema[]` + `EnumSchema[]`. Each `TableSchema` has `ColumnSchema[]`, `ConstraintSchema[]`, and `IndexSchema[]`.
+`packages/core/src/domain/types/schema.types.ts` defines the canonical in-memory schema representation: `DatabaseSchema` → `TableSchema[]` + `SequenceSchema[]` + `EnumSchema[]`. Each `TableSchema` has `ColumnSchema[]`, `ConstraintSchema[]`, and `IndexSchema[]`.
 
 ### Tests
 
-- Unit tests live in `tests/unit/` and are the only tests currently implemented.
-- Integration tests directory exists (`tests/integration/`) with a README explaining they require real DB connections and are not automated.
-- `tests/helpers/mock-database.ts` provides shared mock `IDatabaseConnection` for unit tests.
+- Unit tests live in `packages/core/tests/unit/` (plus `apps/cli/tests/unit/`) and are the only tests currently implemented.
+- Integration tests directory exists (`packages/core/tests/integration/`) with a README explaining they require real DB connections and are not automated.
+- `packages/core/tests/helpers/mock-database.ts` provides shared mock `IDatabaseConnection` for unit tests.
 - Tests use **Vitest** with `globals: true`, `pool: 'forks'`.
 - The whole suite is mock-driven and runs without any database.
 - `npm run test:coverage` produces a coverage report. Thresholds in `vitest.config.ts` are set to the current measured floor and ratchet upward; the target is 80%.

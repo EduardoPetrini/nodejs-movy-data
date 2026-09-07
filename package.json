@@ -1,12 +1,17 @@
 {
   "name": "nodejs-movy-data",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "private": true,
+  "description": "Database-agnostic migration tool. Migrates schema and data between PostgreSQL, MySQL and MSSQL.",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
   "scripts": {
-    "start": "ts-node src/index.ts",
-    "dev": "ts-node-dev --respawn src/index.ts",
-    "build": "tsc",
+    "start": "npm run start -w @movy/cli",
+    "dev": "npm run dev -w @movy/cli",
+    "build": "npm run build -w @movy/core && npm run build -w @movy/cli && npm run build -w @movy/runner",
+    "typecheck": "npm run typecheck -w @movy/core && npm run typecheck -w @movy/cli",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage"
@@ -15,20 +20,15 @@
   "author": "",
   "license": "ISC",
   "devDependencies": {
+    "@types/mssql": "^9.1.5",
     "@types/node": "^25.5.2",
     "@types/pg": "^8.20.0",
     "@types/pg-copy-streams": "^1.2.5",
     "@vitest/coverage-v8": "^4.1.11",
     "ts-node": "^10.9.2",
     "ts-node-dev": "^2.0.0",
+    "tsconfig-paths": "^4.2.0",
     "typescript": "^6.0.2",
     "vitest": "^4.1.3"
-  },
-  "dependencies": {
-    "@types/mssql": "^9.1.5",
-    "mssql": "^12.5.2",
-    "mysql2": "^3.22.0",
-    "pg": "^8.20.0",
-    "pg-copy-streams": "^7.0.0"
   }
 }

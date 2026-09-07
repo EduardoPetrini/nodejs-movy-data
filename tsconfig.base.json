@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "commonjs",
+    "lib": ["ES2022"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    // Workspaces hoist @types to the repo root and the packages have no local
+    // node_modules, so auto-inclusion does not reach them. Name the global types
+    // explicitly. Per-module types (@types/pg, @types/mssql, ...) still resolve
+    // through normal import resolution and do not belong here.
+    "types": ["node"]
+  }
+}

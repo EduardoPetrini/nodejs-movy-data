@@ -1,5 +1,7 @@
 node_modules/
 dist/
+dist.stale.bak/
+*.tsbuildinfo
 *.env
 .env
 logs/

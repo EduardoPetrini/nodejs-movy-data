@@ -1,0 +1,19 @@
+{
+  "name": "@movy/cli",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Movy interactive command-line delivery surface.",
+  "main": "dist/main.js",
+  "bin": {
+    "movy": "dist/main.js"
+  },
+  "scripts": {
+    "start": "ts-node -r tsconfig-paths/register --project tsconfig.dev.json src/main.ts",
+    "dev": "ts-node-dev -r tsconfig-paths/register --project tsconfig.dev.json --respawn src/main.ts",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.test.json"
+  },
+  "dependencies": {
+    "@movy/core": "*"
+  }
+}
