@@ -1,0 +1,117 @@
+{"type":"run_started","mode":"full","source":{"engine":"postgres","database":"movy_fixture_src"},"target":{"engine":"postgres","database":"movy_fixture_dst"},"runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":1,"at":"2026-09-07T21:19:01.877Z"}
+{"type":"step_started","stepId":"validate_connections","ordinal":0,"runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":2,"at":"2026-09-07T21:19:01.877Z"}
+{"type":"log","level":"info","message":"Validating connections...","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":3,"at":"2026-09-07T21:19:01.878Z"}
+{"type":"step_finished","stepId":"validate_connections","status":"ok","durationMs":18,"runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":4,"at":"2026-09-07T21:19:01.895Z"}
+{"type":"step_started","stepId":"create_database","ordinal":1,"runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":5,"at":"2026-09-07T21:19:01.895Z"}
+{"type":"log","level":"info","message":"Database 'movy_fixture_dst' created.","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":6,"at":"2026-09-07T21:19:01.916Z"}
+{"type":"step_finished","stepId":"create_database","status":"ok","durationMs":26,"detail":{"kind":"create_database","database":"movy_fixture_dst","created":true},"runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":7,"at":"2026-09-07T21:19:01.921Z"}
+{"type":"step_started","stepId":"inspect_and_diff","ordinal":2,"runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":8,"at":"2026-09-07T21:19:01.921Z"}
+{"type":"log","level":"info","message":"Inspecting source schema...","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":9,"at":"2026-09-07T21:19:01.921Z"}
+{"type":"log","level":"info","message":"Inspecting destination schema...","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":10,"at":"2026-09-07T21:19:01.935Z"}
+{"type":"log","level":"info","message":"Source: 5 tables, 5 sequences","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":11,"at":"2026-09-07T21:19:01.948Z"}
+{"type":"log","level":"info","message":"Source enums: 0 (none)","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":12,"at":"2026-09-07T21:19:01.948Z"}
+{"type":"log","level":"info","message":"Diff: +5 tables, -0 tables, +0 cols, -0 cols, +0 enums","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":13,"at":"2026-09-07T21:19:01.948Z"}
+{"type":"step_finished","stepId":"inspect_and_diff","status":"ok","durationMs":27,"detail":{"kind":"inspect_and_diff","sourceTables":5,"sourceSequences":5,"sourceEnums":0,"diff":{"tablesToCreate":5,"tablesToDrop":0,"columnsToAdd":0,"columnsToDrop":0,"columnsToAlter":0,"constraintsToAdd":0,"constraintsToDrop":0,"indexesToCreate":0,"indexesToDrop":0,"sequencesToCreate":5,"enumsToCreate":0}},"runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":14,"at":"2026-09-07T21:19:01.948Z"}
+{"type":"step_started","stepId":"sync_schema","ordinal":3,"runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":15,"at":"2026-09-07T21:19:01.948Z"}
+{"type":"log","level":"info","message":"Applying schema changes to destination...","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":16,"at":"2026-09-07T21:19:01.948Z"}
+{"type":"log","level":"info","message":"Schema sync complete.","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":17,"at":"2026-09-07T21:19:01.956Z"}
+{"type":"step_finished","stepId":"sync_schema","status":"ok","durationMs":8,"runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":18,"at":"2026-09-07T21:19:01.956Z"}
+{"type":"step_started","stepId":"disable_triggers","ordinal":4,"runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":19,"at":"2026-09-07T21:19:01.956Z"}
+{"type":"step_finished","stepId":"disable_triggers","status":"ok","durationMs":1,"detail":{"kind":"triggers","tables":5},"runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":20,"at":"2026-09-07T21:19:01.957Z"}
+{"type":"step_started","stepId":"migrate_data","ordinal":5,"runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":21,"at":"2026-09-07T21:19:01.957Z"}
+{"type":"log","level":"info","message":"\nTables to migrate (5 tables, ~315,000 estimated rows):","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":22,"at":"2026-09-07T21:19:01.966Z"}
+{"type":"log","level":"info","message":"  audit_log     ~80,000 rows","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":23,"at":"2026-09-07T21:19:01.966Z"}
+{"type":"log","level":"info","message":"  customers     ~20,000 rows","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":24,"at":"2026-09-07T21:19:01.966Z"}
+{"type":"log","level":"info","message":"  products      ~5,000 rows","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":25,"at":"2026-09-07T21:19:01.966Z"}
+{"type":"log","level":"info","message":"  orders        ~60,000 rows","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":26,"at":"2026-09-07T21:19:01.967Z"}
+{"type":"log","level":"info","message":"  order_items   ~150,000 rows","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":27,"at":"2026-09-07T21:19:01.967Z"}
+{"type":"log","level":"info","message":"","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":28,"at":"2026-09-07T21:19:01.967Z"}
+{"type":"log","level":"info","message":"Starting migration with 4 workers...","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":29,"at":"2026-09-07T21:19:01.967Z"}
+{"type":"plan_ready","plan":{"loadOrder":["audit_log","customers","products","orders","order_items"],"cleanupOrder":["order_items","orders","products","customers","audit_log"],"levels":[["audit_log","customers","products"],["orders"],["order_items"]],"cyclicTables":[]},"rowEstimates":{"customers":20000,"orders":60000,"order_items":150000,"products":5000,"audit_log":80000},"workerCount":4,"runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":30,"at":"2026-09-07T21:19:01.967Z"}
+{"type":"table_progress","tableName":"products","rowsDone":586,"rowsTotal":5000,"pct":12,"runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":31,"at":"2026-09-07T21:19:02.017Z"}
+{"type":"log","level":"info","message":"  [products] 586 / ~5,000 rows  12%  (overall: 0.2%)","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":32,"at":"2026-09-07T21:19:02.017Z"}
+{"type":"overall_progress","rowsDone":586,"rowsTotal":315000,"pct":0.18603174603174605,"tablesDone":0,"tablesTotal":5,"runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":33,"at":"2026-09-07T21:19:02.017Z"}
+{"type":"log","level":"info","message":"  [products] 2,081 / ~5,000 rows  42%  (overall: 0.7%)","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":34,"at":"2026-09-07T21:19:02.019Z"}
+{"type":"log","level":"info","message":"  [products] 3,554 / ~5,000 rows  71%  (overall: 1.1%)","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":35,"at":"2026-09-07T21:19:02.022Z"}
+{"type":"log","level":"info","message":"  [products] 5,002 / ~5,000 rows  100%  (overall: 1.6%)","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":36,"at":"2026-09-07T21:19:02.023Z"}
+{"type":"table_progress","tableName":"audit_log","rowsDone":8182,"rowsTotal":80000,"pct":10,"runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":37,"at":"2026-09-07T21:19:02.027Z"}
+{"type":"log","level":"info","message":"  [audit_log] 8,182 / ~80,000 rows  10%  (overall: 4.2%)","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":38,"at":"2026-09-07T21:19:02.027Z"}
+{"type":"table_progress","tableName":"order_items","rowsDone":16332,"rowsTotal":150000,"pct":11,"runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":39,"at":"2026-09-07T21:19:02.027Z"}
+{"type":"log","level":"info","message":"  [order_items] 16,332 / ~150,000 rows  11%  (overall: 9.4%)","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":40,"at":"2026-09-07T21:19:02.027Z"}
+{"type":"log","level":"info","message":"  [audit_log] 16,508 / ~80,000 rows  21%  (overall: 12.0%)","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":41,"at":"2026-09-07T21:19:02.031Z"}
+{"type":"log","level":"info","message":"  [order_items] 31,767 / ~150,000 rows  21%  (overall: 16.9%)","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":42,"at":"2026-09-07T21:19:02.031Z"}
+{"type":"log","level":"info","message":"  [order_items] 45,793 / ~150,000 rows  31%  (overall: 21.4%)","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":43,"at":"2026-09-07T21:19:02.038Z"}
+{"type":"log","level":"info","message":"  [audit_log] 24,244 / ~80,000 rows  30%  (overall: 23.8%)","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":44,"at":"2026-09-07T21:19:02.040Z"}
+{"type":"table_progress","tableName":"products","rowsDone":5002,"rowsTotal":5000,"pct":100,"runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":45,"at":"2026-09-07T21:19:02.041Z"}
+{"type":"overall_progress","rowsDone":75039,"rowsTotal":315002,"pct":23.82175351267611,"tablesDone":0,"tablesTotal":5,"runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":46,"at":"2026-09-07T21:19:02.041Z"}
+{"type":"table_finished","tableName":"products","rowsCopied":5002,"durationMs":24,"success":true,"runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":47,"at":"2026-09-07T21:19:02.041Z"}
+{"type":"log","level":"info","message":"  [order_items] 61,315 / ~150,000 rows  41%  (overall: 28.7%)","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":48,"at":"2026-09-07T21:19:02.044Z"}
+{"type":"log","level":"info","message":"  [audit_log] 32,872 / ~80,000 rows  41%  (overall: 31.5%)","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":49,"at":"2026-09-07T21:19:02.047Z"}
+{"type":"log","level":"info","message":"  [order_items] 75,555 / ~150,000 rows  50%  (overall: 36.0%)","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":50,"at":"2026-09-07T21:19:02.052Z"}
+{"type":"table_progress","tableName":"orders","rowsDone":6094,"rowsTotal":60000,"pct":10,"runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":51,"at":"2026-09-07T21:19:02.055Z"}
+{"type":"log","level":"info","message":"  [orders] 6,094 / ~60,000 rows  10%  (overall: 37.9%)","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":52,"at":"2026-09-07T21:19:02.055Z"}
+{"type":"log","level":"info","message":"  [audit_log] 40,208 / ~80,000 rows  50%  (overall: 40.3%)","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":53,"at":"2026-09-07T21:19:02.056Z"}
+{"type":"log","level":"info","message":"  [order_items] 90,599 / ~150,000 rows  60%  (overall: 45.0%)","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":54,"at":"2026-09-07T21:19:02.058Z"}
+{"type":"log","level":"info","message":"  [orders] 12,790 / ~60,000 rows  21%  (overall: 47.2%)","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":55,"at":"2026-09-07T21:19:02.062Z"}
+{"type":"log","level":"info","message":"  [audit_log] 48,001 / ~80,000 rows  60%  (overall: 49.6%)","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":56,"at":"2026-09-07T21:19:02.065Z"}
+{"type":"log","level":"info","message":"  [order_items] 105,462 / ~150,000 rows  70%  (overall: 54.4%)","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":57,"at":"2026-09-07T21:19:02.066Z"}
+{"type":"log","level":"info","message":"  [orders] 18,919 / ~60,000 rows  32%  (overall: 56.3%)","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":58,"at":"2026-09-07T21:19:02.066Z"}
+{"type":"log","level":"info","message":"  [orders] 24,041 / ~60,000 rows  40%  (overall: 57.9%)","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":59,"at":"2026-09-07T21:19:02.070Z"}
+{"type":"log","level":"info","message":"  [order_items] 120,013 / ~150,000 rows  80%  (overall: 62.6%)","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":60,"at":"2026-09-07T21:19:02.073Z"}
+{"type":"log","level":"info","message":"  [audit_log] 56,257 / ~80,000 rows  70%  (overall: 65.2%)","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":61,"at":"2026-09-07T21:19:02.073Z"}
+{"type":"log","level":"info","message":"  [orders] 30,271 / ~60,000 rows  50%  (overall: 67.2%)","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":62,"at":"2026-09-07T21:19:02.076Z"}
+{"type":"log","level":"info","message":"  [order_items] 137,033 / ~150,000 rows  91%  (overall: 72.6%)","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":63,"at":"2026-09-07T21:19:02.079Z"}
+{"type":"log","level":"info","message":"  [audit_log] 64,051 / ~80,000 rows  80%  (overall: 75.0%)","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":64,"at":"2026-09-07T21:19:02.082Z"}
+{"type":"log","level":"info","message":"  [orders] 36,893 / ~60,000 rows  61%  (overall: 77.1%)","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":65,"at":"2026-09-07T21:19:02.083Z"}
+{"type":"log","level":"info","message":"  [order_items] 150,079 / ~150,000 rows  100%  (overall: 81.3%)","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":66,"at":"2026-09-07T21:19:02.087Z"}
+{"type":"log","level":"info","message":"  [orders] 42,491 / ~60,000 rows  71%  (overall: 83.0%)","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":67,"at":"2026-09-07T21:19:02.089Z"}
+{"type":"log","level":"info","message":"  [audit_log] 72,303 / ~80,000 rows  90%  (overall: 85.7%)","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":68,"at":"2026-09-07T21:19:02.089Z"}
+{"type":"log","level":"info","message":"  [orders] 48,717 / ~60,000 rows  81%  (overall: 87.6%)","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":69,"at":"2026-09-07T21:19:02.095Z"}
+{"type":"log","level":"info","message":"  [audit_log] 80,098 / ~80,000 rows  100%  (overall: 90.1%)","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":70,"at":"2026-09-07T21:19:02.097Z"}
+{"type":"log","level":"info","message":"  [orders] 54,238 / ~60,000 rows  90%  (overall: 91.8%)","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":71,"at":"2026-09-07T21:19:02.099Z"}
+{"type":"log","level":"info","message":"  [orders] 60,071 / ~60,000 rows  100%  (overall: 93.7%)","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":72,"at":"2026-09-07T21:19:02.101Z"}
+{"type":"table_progress","tableName":"orders","rowsDone":60071,"rowsTotal":60000,"pct":100,"runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":73,"at":"2026-09-07T21:19:02.134Z"}
+{"type":"overall_progress","rowsDone":295250,"rowsTotal":315250,"pct":93.6558287073751,"tablesDone":1,"tablesTotal":5,"runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":74,"at":"2026-09-07T21:19:02.134Z"}
+{"type":"table_finished","tableName":"orders","rowsCopied":60071,"durationMs":79,"success":true,"runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":75,"at":"2026-09-07T21:19:02.134Z"}
+{"type":"table_progress","tableName":"audit_log","rowsDone":80098,"rowsTotal":80000,"pct":100,"runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":76,"at":"2026-09-07T21:19:02.140Z"}
+{"type":"overall_progress","rowsDone":295250,"rowsTotal":315250,"pct":93.6558287073751,"tablesDone":2,"tablesTotal":5,"runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":77,"at":"2026-09-07T21:19:02.140Z"}
+{"type":"table_finished","tableName":"audit_log","rowsCopied":80105,"durationMs":113,"success":true,"runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":78,"at":"2026-09-07T21:19:02.140Z"}
+{"type":"table_progress","tableName":"customers","rowsDone":2382,"rowsTotal":20000,"pct":12,"runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":79,"at":"2026-09-07T21:19:02.143Z"}
+{"type":"log","level":"info","message":"  [customers] 2,382 / ~20,000 rows  12%  (overall: 94.4%)","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":80,"at":"2026-09-07T21:19:02.143Z"}
+{"type":"log","level":"info","message":"  [customers] 4,047 / ~20,000 rows  20%  (overall: 94.9%)","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":81,"at":"2026-09-07T21:19:02.143Z"}
+{"type":"log","level":"info","message":"  [customers] 6,045 / ~20,000 rows  30%  (overall: 95.6%)","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":82,"at":"2026-09-07T21:19:02.145Z"}
+{"type":"log","level":"info","message":"  [customers] 8,709 / ~20,000 rows  44%  (overall: 96.4%)","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":83,"at":"2026-09-07T21:19:02.145Z"}
+{"type":"log","level":"info","message":"  [customers] 10,466 / ~20,000 rows  52%  (overall: 97.0%)","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":84,"at":"2026-09-07T21:19:02.146Z"}
+{"type":"log","level":"info","message":"  [customers] 12,602 / ~20,000 rows  63%  (overall: 97.7%)","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":85,"at":"2026-09-07T21:19:02.147Z"}
+{"type":"log","level":"info","message":"  [customers] 14,734 / ~20,000 rows  74%  (overall: 98.3%)","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":86,"at":"2026-09-07T21:19:02.149Z"}
+{"type":"log","level":"info","message":"  [customers] 16,015 / ~20,000 rows  80%  (overall: 98.7%)","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":87,"at":"2026-09-07T21:19:02.150Z"}
+{"type":"log","level":"info","message":"  [customers] 18,147 / ~20,000 rows  91%  (overall: 99.4%)","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":88,"at":"2026-09-07T21:19:02.151Z"}
+{"type":"log","level":"info","message":"  [customers] 20,028 / ~20,000 rows  100%  (overall: 100.0%)","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":89,"at":"2026-09-07T21:19:02.151Z"}
+{"type":"table_progress","tableName":"order_items","rowsDone":150079,"rowsTotal":150000,"pct":100,"runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":90,"at":"2026-09-07T21:19:02.157Z"}
+{"type":"overall_progress","rowsDone":315285,"rowsTotal":315285,"pct":100,"tablesDone":3,"tablesTotal":5,"runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":91,"at":"2026-09-07T21:19:02.157Z"}
+{"type":"table_finished","tableName":"order_items","rowsCopied":150079,"durationMs":130,"success":true,"runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":92,"at":"2026-09-07T21:19:02.157Z"}
+{"type":"table_progress","tableName":"customers","rowsDone":20028,"rowsTotal":20000,"pct":100,"runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":93,"at":"2026-09-07T21:19:02.161Z"}
+{"type":"overall_progress","rowsDone":315285,"rowsTotal":315285,"pct":100,"tablesDone":4,"tablesTotal":5,"runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":94,"at":"2026-09-07T21:19:02.161Z"}
+{"type":"table_finished","tableName":"customers","rowsCopied":20028,"durationMs":18,"success":true,"runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":95,"at":"2026-09-07T21:19:02.161Z"}
+{"type":"log","level":"info","message":"","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":96,"at":"2026-09-07T21:19:02.164Z"}
+{"type":"log","level":"info","message":"+--------------------+---------+---------+----------+","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":97,"at":"2026-09-07T21:19:02.164Z"}
+{"type":"log","level":"info","message":"| Table              | Status  |    Rows | Duration |","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":98,"at":"2026-09-07T21:19:02.164Z"}
+{"type":"log","level":"info","message":"+--------------------+---------+---------+----------+","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":99,"at":"2026-09-07T21:19:02.164Z"}
+{"type":"log","level":"info","message":"| products           | OK      |   5,002 |     44ms |","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":100,"at":"2026-09-07T21:19:02.164Z"}
+{"type":"log","level":"info","message":"| orders             | OK      |  60,071 |     93ms |","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":101,"at":"2026-09-07T21:19:02.164Z"}
+{"type":"log","level":"info","message":"| audit_log          | OK      |  80,105 |    143ms |","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":102,"at":"2026-09-07T21:19:02.164Z"}
+{"type":"log","level":"info","message":"| order_items        | OK      | 150,079 |    160ms |","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":103,"at":"2026-09-07T21:19:02.164Z"}
+{"type":"log","level":"info","message":"| customers          | OK      |  20,028 |     21ms |","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":104,"at":"2026-09-07T21:19:02.164Z"}
+{"type":"log","level":"info","message":"+--------------------+---------+---------+----------+","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":105,"at":"2026-09-07T21:19:02.164Z"}
+{"type":"log","level":"info","message":"| TOTAL (5/5 tables) | OK      | 315,285 |    197ms |","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":106,"at":"2026-09-07T21:19:02.164Z"}
+{"type":"log","level":"info","message":"+--------------------+---------+---------+----------+","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":107,"at":"2026-09-07T21:19:02.164Z"}
+{"type":"log","level":"info","message":"","runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":108,"at":"2026-09-07T21:19:02.164Z"}
+{"type":"step_finished","stepId":"migrate_data","status":"ok","durationMs":207,"detail":{"kind":"migrate_data","tables":5,"rowsCopied":315285,"failed":0},"runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":109,"at":"2026-09-07T21:19:02.164Z"}
+{"type":"step_started","stepId":"enable_triggers","ordinal":6,"runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":110,"at":"2026-09-07T21:19:02.164Z"}
+{"type":"step_finished","stepId":"enable_triggers","status":"ok","durationMs":2,"detail":{"kind":"triggers","tables":5},"runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":111,"at":"2026-09-07T21:19:02.166Z"}
+{"type":"step_started","stepId":"create_indexes","ordinal":7,"runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":112,"at":"2026-09-07T21:19:02.166Z"}
+{"type":"step_finished","stepId":"create_indexes","status":"ok","durationMs":0,"detail":{"kind":"create_indexes","indexes":0},"runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":113,"at":"2026-09-07T21:19:02.166Z"}
+{"type":"step_started","stepId":"reset_sequences","ordinal":8,"runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":114,"at":"2026-09-07T21:19:02.166Z"}
+{"type":"step_finished","stepId":"reset_sequences","status":"ok","durationMs":4,"detail":{"kind":"reset_sequences","sequences":5},"runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":115,"at":"2026-09-07T21:19:02.170Z"}
+{"type":"run_finished","status":"succeeded","durationMs":293,"result":{"tables":[{"tableName":"products","rowsCopied":5002,"durationMs":44,"success":true},{"tableName":"orders","rowsCopied":60071,"durationMs":93,"success":true},{"tableName":"audit_log","rowsCopied":80105,"durationMs":143,"success":true},{"tableName":"order_items","rowsCopied":150079,"durationMs":160,"success":true},{"tableName":"customers","rowsCopied":20028,"durationMs":21,"success":true}],"totalDurationMs":197,"success":true},"runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":116,"at":"2026-09-07T21:19:02.170Z"}
+{"type":"overall_progress","rowsDone":315285,"rowsTotal":315285,"pct":100,"tablesDone":5,"tablesTotal":5,"runId":"dc191eb5-d15f-4c31-8920-b5d50a420af3","seq":117,"at":"2026-09-07T21:19:02.171Z"}

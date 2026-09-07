@@ -8,6 +8,7 @@ import {
   IndexSchema,
 } from '../../../domain/types/schema.types';
 import { SchemaInspectionError } from '../../../domain/errors/migration.errors';
+import { toRowCount } from '../../../shared/utils';
 
 const DEFAULT_SCHEMA = 'dbo';
 
@@ -73,7 +74,7 @@ export class MssqlSchemaInspector implements ISchemaInspector {
 
     const estimates = new Map<string, number>();
     for (const row of rows) {
-      estimates.set(row.table_name, row.row_count ?? 0);
+      estimates.set(row.table_name, toRowCount(row.row_count));
     }
     return estimates;
   }

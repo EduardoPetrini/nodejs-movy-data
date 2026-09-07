@@ -10,6 +10,7 @@ import {
   EnumSchema,
 } from '../../../domain/types/schema.types';
 import { SchemaInspectionError } from '../../../domain/errors/migration.errors';
+import { toRowCount } from '../../../shared/utils';
 
 interface RawColumn {
   table_name: string;
@@ -93,7 +94,7 @@ export class PgSchemaInspector implements ISchemaInspector {
     const tablesNeedingCount: string[] = [];
 
     for (const row of rows) {
-      const estimate = row.reltuples;
+      const estimate = toRowCount(row.reltuples);
       if (estimate > 0) {
         map.set(row.relname, estimate);
       } else {

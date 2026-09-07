@@ -8,6 +8,7 @@ import {
   IndexSchema,
 } from '../../../domain/types/schema.types';
 import { SchemaInspectionError } from '../../../domain/errors/migration.errors';
+import { toRowCount } from '../../../shared/utils';
 
 interface ColumnRow {
   table_name: string;
@@ -88,7 +89,7 @@ export class MysqlSchemaInspector implements ISchemaInspector {
     const tablesNeedingCount: string[] = [];
 
     for (const row of rows) {
-      const est = row.table_rows ?? 0;
+      const est = toRowCount(row.table_rows);
       if (est > 0) {
         estimates.set(row.table_name, est);
       } else {

@@ -99,3 +99,23 @@ export function resolveWorkerPath(filename: string): string {
   }
   return found;
 }
+
+/**
+ * Coerce a driver-supplied row estimate to a finite number.
+ *
+ * Database drivers return 64-bit integer columns as STRINGS to avoid losing
+ * precision: node-pg does this for `reltuples::bigint`, and mysql2 / mssql do
+ * the same for BIGINT depending on configuration. `IDatabaseConnection.query<T>`
+ * is an unchecked cast at the driver boundary, so a `Map<string, number>` could
+ * silently end up holding strings — and `0 + "20000"` is `"020000"`, which made
+ * every overall-progress percentage collapse to 0.
+ */
+export function toRowCount(value: unknown): number {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+  if (typeof value === 'bigint') return Number(value);
+  if (typeof value === 'string') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
+}
