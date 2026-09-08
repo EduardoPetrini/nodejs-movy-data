@@ -1,5 +1,6 @@
 import type { OrgRole } from '../db/schema';
 import type { RunRow, RunStepRow, RunTableRow, RunEventRow } from '../repositories/runs.repo';
+import type { WireEvent, WireRun, WireStep, WireTable } from '../../shared/run-wire';
 
 /**
  * What a client is allowed to see of a run.
@@ -9,24 +10,11 @@ import type { RunRow, RunStepRow, RunTableRow, RunEventRow } from '../repositori
  * is not a redaction so much as a promise that nothing else can creep in: a
  * host or username added to `runs` later still has to be copied deliberately.
  */
-export interface PublicRun {
-  id: string;
-  status: string;
-  mode: string;
-  simulated: boolean;
-  source: { engine: string; database: string };
-  target: { engine: string; database: string };
-  progress: { rowsDone: number; rowsTotal: number; tablesDone: number; tablesTotal: number; pct: number };
-  lastSeq: number;
-  error: { name: string; message: string } | null;
-  createdAt: string;
-  startedAt: string | null;
-  finishedAt: string | null;
-  durationMs: number | null;
-  /** Editor and admin only: which saved connections this run used. */
-  sourceConnectionId?: string | null;
-  targetConnectionId?: string | null;
-}
+/**
+ * Declared in `shared/run-wire.ts` so the reducer and this serializer cannot
+ * drift: a field dropped here becomes a type error in the client.
+ */
+export type PublicRun = WireRun;
 
 export function toPublicRun(row: RunRow, role: OrgRole): PublicRun {
   const base: PublicRun = {
@@ -62,7 +50,7 @@ export function toPublicRun(row: RunRow, role: OrgRole): PublicRun {
   };
 }
 
-export function toPublicStep(row: RunStepRow) {
+export function toPublicStep(row: RunStepRow): WireStep {
   return {
     stepId: row.stepId,
     ordinal: row.ordinal,
@@ -75,7 +63,7 @@ export function toPublicStep(row: RunStepRow) {
   };
 }
 
-export function toPublicTableProgress(row: RunTableRow) {
+export function toPublicTableProgress(row: RunTableRow): WireTable {
   return {
     tableName: row.tableName,
     status: row.status,
@@ -88,7 +76,7 @@ export function toPublicTableProgress(row: RunTableRow) {
   };
 }
 
-export function toPublicEvent(row: RunEventRow) {
+export function toPublicEvent(row: RunEventRow): WireEvent {
   return { seq: row.seq, type: row.type, at: row.at.toISOString(), level: row.level, payload: row.payload };
 }
 

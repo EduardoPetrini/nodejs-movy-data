@@ -140,7 +140,16 @@ export async function applyProjection(db: Db, runId: string, projection: Project
     if (projection.events.length > 0) {
       await tx
         .insert(runEvents)
-        .values(projection.events.map((e) => ({ ...e, runId })))
+        // A MigrationEvent is a plain JSON object by construction — it has just
+        // been through the journal and, for a real run, an IPC round trip. The
+        // cast is only because a TS interface has no implicit index signature.
+        .values(
+          projection.events.map((e) => ({
+            ...e,
+            runId,
+            payload: e.payload as unknown as Record<string, unknown>,
+          }))
+        )
         // Idempotent by primary key: IPC and the journal tailer both deliver
         // the same events, and neither may produce a duplicate the timeline
         // has to reason about.

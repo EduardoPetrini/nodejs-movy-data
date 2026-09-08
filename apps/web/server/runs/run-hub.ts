@@ -1,5 +1,5 @@
-import type { MigrationEvent } from '@movy/core';
 import type { OrgRole } from '../db/schema';
+import type { WireEvent } from '../../shared/run-wire';
 import { mayReadLogs } from '../serializers/run.serializer';
 
 /**
@@ -152,7 +152,7 @@ export class RunHub {
    * from having a hole: every event it could miss is already queryable by the
    * time anyone is told about it.
    */
-  publish(runId: string, events: readonly MigrationEvent[]): void {
+  publish(runId: string, events: readonly WireEvent[]): void {
     if (events.length === 0) return;
     const rooms = this.byRun.get(runId);
     if (!rooms) return;

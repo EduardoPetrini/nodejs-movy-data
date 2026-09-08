@@ -72,7 +72,22 @@ export function useRunManager(): RunManager {
       {
         onError: (err, runId) => console.error(`[runs] event write failed for ${runId}:`, err.message),
         // After the durable write, never before — see EventWriter.onFlushed.
-        onFlushed: (runId, projection) => runHub.publish(runId, projection.events.map((e) => e.payload)),
+        //
+        // Converted to the SAME WireEvent shape the snapshot sends. An earlier
+        // version published the raw MigrationEvent, so a client received
+        // `{seq,type,at,level,payload}` on connect and a bare event afterwards
+        // — and every live frame then blew up in the reducer.
+        onFlushed: (runId, projection) =>
+          runHub.publish(
+            runId,
+            projection.events.map((e) => ({
+              seq: e.seq,
+              type: e.type,
+              at: e.at.toISOString(),
+              level: e.level,
+              payload: e.payload as unknown as Record<string, unknown>,
+            }))
+          ),
       }
     );
 
@@ -112,6 +127,27 @@ export function journalPathFor(runId: string): string {
   const dir = process.env.MOVY_JOURNAL_DIR ?? path.resolve(process.cwd(), '.movy/runs');
   fs.mkdirSync(dir, { recursive: true });
   return path.join(dir, `${runId}.ndjson`);
+}
+
+/**
+ * The one recording the web app will replay.
+ *
+ * Resolved here rather than accepted from a request body: this string becomes
+ * `--simulate <path>` on a child process, and a path from a client is a path
+ * the client chose.
+ */
+export function simulationFixture(): string {
+  const override = process.env.MOVY_SIMULATION_FIXTURE;
+  if (override) return path.resolve(override);
+
+  const bundled = path.resolve(process.cwd(), '../runner/fixtures/pg-to-pg-315k.ndjson');
+  if (!fs.existsSync(bundled)) {
+    throw createError({
+      statusCode: 503,
+      statusMessage: 'No simulation recording is available on this host.',
+    });
+  }
+  return bundled;
 }
 
 /**

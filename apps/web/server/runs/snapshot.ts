@@ -63,5 +63,8 @@ export async function loadRunSnapshot(grant: SubscriptionGrant) {
     events: events.map(toPublicEvent),
     /** Everything at or below this seq is already in `events`. */
     lastSeq: run.lastSeq,
+    // So the client can say WHY its log pane is empty, rather than implying
+    // the run produced no output.
+    cohort: grant.cohort,
   };
 }

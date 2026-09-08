@@ -4,7 +4,7 @@ import { createRepos } from '~~/server/repositories';
 import { requirePermission } from '~~/server/utils/rbac';
 import { toConnectionConfig, parseEngine } from '~~/server/utils/connection-config';
 import { toPublicRun } from '~~/server/serializers/run.serializer';
-import { journalPathFor, useRunManager } from '~~/server/runs';
+import { journalPathFor, simulationFixture, useRunManager } from '~~/server/runs';
 
 interface Body {
   sourceConnectionId?: string;
@@ -12,9 +12,22 @@ interface Body {
   /** Override the connection's own database, as the CLI prompt does. */
   sourceDatabase?: string;
   targetDatabase?: string;
-  /** Replay a recorded journal instead of touching a database. */
-  simulateFixture?: string;
+  /**
+   * Replay the bundled recording instead of touching a database.
+   *
+   * A boolean, NOT a path. An earlier version took the fixture path from the
+   * body and handed it to the runner as `--simulate <path>`, which let any
+   * editor name any file on the host — at best a way to probe which paths
+   * exist, and an entirely unnecessary one. The server owns the path.
+   */
+  simulate?: boolean;
   speed?: number;
+}
+
+/** Recorded pace is 1; below this the replay outlives any reason to watch it. */
+function clampSpeed(speed: unknown): number | undefined {
+  if (typeof speed !== 'number' || !Number.isFinite(speed)) return undefined;
+  return Math.min(50, Math.max(0.001, speed));
 }
 
 export default defineEventHandler(async (event) => {
@@ -66,7 +79,7 @@ export default defineEventHandler(async (event) => {
     targetDatabase,
     mode: 'full',
     status: 'queued',
-    simulated: Boolean(body.simulateFixture),
+    simulated: Boolean(body.simulate),
     journalPath,
     requestedByUserId: org.userId,
   });
@@ -82,8 +95,10 @@ export default defineEventHandler(async (event) => {
       source: toConnectionConfig(source, sourceDatabase),
       target: toConnectionConfig(target, targetDatabase),
     },
-    simulateFixture: body.simulateFixture,
-    speed: body.speed,
+    simulateFixture: body.simulate ? simulationFixture() : undefined,
+    // Clamped: the runner rejects a non-positive speed, but a 1e-9 would
+    // schedule a replay measured in centuries and hold a process open.
+    speed: clampSpeed(body.speed),
   });
 
   setResponseStatus(event, 201);

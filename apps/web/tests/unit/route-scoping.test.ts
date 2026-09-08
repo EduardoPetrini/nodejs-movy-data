@@ -53,6 +53,18 @@ describe('API route scoping', () => {
     expect(ungated, `org-scoped but ungated: ${ungated.join(', ')}`).toEqual([]);
   });
 
+  it('never lets a request name a path on the host', () => {
+    // `simulateFixture` used to come off the request body and become
+    // `--simulate <path>` on a child process, which let any editor name any
+    // file on the host. The server owns that path now; a route that takes one
+    // from a body has reintroduced the hole.
+    const offenders = routes.filter((r) => {
+      const src = readFileSync(join(API_DIR, r), 'utf8');
+      return /body[.?]\s*\w*(?:[Pp]ath|[Ff]ixture|[Ff]ile|[Dd]ir)\b/.test(src);
+    });
+    expect(offenders, `takes a filesystem path from the request: ${offenders.join(', ')}`).toEqual([]);
+  });
+
   it('never calls the unscoped ingestion helpers from a route', () => {
     // applyProjection and friends take a run id and no org, because they are
     // driven by a runner process that has no request and no user. Reaching one

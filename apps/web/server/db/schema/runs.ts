@@ -122,7 +122,8 @@ export const runEvents = pgTable(
     /** `level` for `log` events, null otherwise. Lifted out so the redacted
      *  log cohort can be filtered in SQL rather than by unpacking jsonb. */
     level: text('level'),
-    payload: jsonb('payload').notNull(),
+    /** The full MigrationEvent. Typed so the serializer need not cast. */
+    payload: jsonb('payload').$type<Record<string, unknown>>().notNull(),
   },
   (t) => [
     primaryKey({ columns: [t.runId, t.seq] }),

@@ -39,7 +39,9 @@ async function signOut() {
         <NuxtLink :to="`/o/${orgSlug}/connections`" class="nav" :class="{ on: route.path.endsWith('/connections') }">
           Connections
         </NuxtLink>
-        <span class="nav soon">Runs<em>Phase 3</em></span>
+        <NuxtLink :to="`/o/${orgSlug}/runs`" class="nav" :class="{ on: route.path.includes('/runs') }">
+          Runs
+        </NuxtLink>
         <span class="nav soon">Compare<em>Phase 5</em></span>
       </aside>
 
@@ -90,4 +92,20 @@ async function signOut() {
 .soon em { font-style: normal; font-size: var(--mv-fs-micro); opacity: 0.7; }
 
 .content { flex: 1; min-width: 0; padding: var(--mv-s-5); }
+
+/* Below this the 200px rail is more than half the viewport, and the page
+   starts scrolling sideways to fit it. It becomes a strip instead. */
+@media (max-width: 720px) {
+  .body { flex-direction: column; }
+  .rail {
+    width: auto; flex-direction: row; gap: var(--mv-s-1);
+    border-right: none; border-bottom: 1px solid var(--mv-line);
+    overflow-x: auto;
+  }
+  .nav { justify-content: flex-start; gap: var(--mv-s-2); white-space: nowrap; }
+  .soon em { display: none; }
+  .content { padding: var(--mv-s-4); }
+  .bar { gap: var(--mv-s-3); }
+  .email { display: none; }
+}
 </style>

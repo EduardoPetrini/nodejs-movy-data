@@ -1,7 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { MigrationEvent } from '@movy/core';
+import { applySnapshot, applyEvents } from '../../app/utils/run-reducer';
+import type { ServerFrame, WireEvent } from '../../shared/run-wire';
 import { RunHub, cohortFor } from '../../server/runs/run-hub';
 import type { HubPeer, SubscriptionGrant } from '../../server/runs/run-hub';
 import { TicketStore } from '../../server/runs/subscription-ticket';
@@ -18,8 +19,8 @@ function fakePeer() {
     peer,
     frames,
     get closed() { return closed; },
-    events(): MigrationEvent[] {
-      return frames.filter((f) => f.k === 'events').flatMap((f) => f.events as MigrationEvent[]);
+    events(): WireEvent[] {
+      return frames.filter((f) => f.k === 'events').flatMap((f) => f.events as WireEvent[]);
     },
   };
 }
@@ -34,9 +35,23 @@ function grant(over: Partial<SubscriptionGrant> = {}): SubscriptionGrant {
 }
 
 let seq = 0;
-function ev(type: MigrationEvent['type'], rest: Record<string, unknown> = {}, runId = RUN_A): MigrationEvent {
+/**
+ * WireEvent, the shape the snapshot sends — NOT a bare MigrationEvent.
+ *
+ * This file used to build bare events, and `run-reducer.test.ts` built
+ * WireEvents. Each half passed against its own idea of the wire, and the
+ * mismatch only showed up in a browser. Both now use one shape.
+ */
+function ev(type: string, payload: Record<string, unknown> = {}, runId = RUN_A): WireEvent {
   seq += 1;
-  return { type, runId, seq, at: new Date(seq * 1000).toISOString(), ...rest } as MigrationEvent;
+  const at = new Date(seq * 1000).toISOString();
+  return {
+    seq,
+    type,
+    at,
+    level: (payload.level as string | undefined) ?? null,
+    payload: { type, runId, seq, at, ...payload },
+  };
 }
 
 const log = (runId = RUN_A) => ev('log', { level: 'info', message: 'SELECT * FROM customers' }, runId);
@@ -167,7 +182,7 @@ describe('log cohorts', () => {
     const redacted = fakePeer();
     hub.subscribe(redacted.peer, grant({ cohort: 'redacted' }));
 
-    hub.publish(RUN_A, [ev('some_future_event' as MigrationEvent['type'])]);
+    hub.publish(RUN_A, [ev('some_future_event')]);
 
     expect(redacted.events()).toHaveLength(1);
   });
@@ -312,5 +327,72 @@ describe('revalidation — a demotion must reach a live socket', () => {
     expect(await hub.revalidate()).toEqual({ moved: 0, evicted: 0 });
     expect(hub.stats().peers).toBe(1);
     expect(onError).toHaveBeenCalledOnce();
+  });
+});
+
+
+describe('the live frame and the snapshot speak the same shape', () => {
+  /**
+   * REGRESSION. The hub used to publish bare MigrationEvents while the
+   * snapshot sent WireEvent rows, so every live frame threw in the reducer —
+   * `payload` was undefined. Nothing caught it because this file tested the
+   * hub with one shape and `run-reducer.test.ts` tested the reducer with the
+   * other. This test makes the hub's real output feed the real reducer.
+   */
+  it('feeds a published frame straight through the reducer', () => {
+    const hub = new RunHub();
+    const peer = fakePeer();
+    hub.subscribe(peer.peer, grant({ cohort: 'full' }));
+
+    hub.publish(RUN_A, [
+      ev('step_started', { stepId: 'sync_schema', ordinal: 3 }),
+      ev('log', { level: 'info', message: 'Applying schema changes...' }),
+      ev('table_finished', { tableName: 'orders', rowsCopied: 60_000, durationMs: 900, success: true }),
+    ]);
+
+    const run = {
+      id: RUN_A, status: 'running', mode: 'full', simulated: true,
+      source: { engine: 'postgres', database: 'src' },
+      target: { engine: 'postgres', database: 'dst' },
+      progress: { rowsDone: 0, rowsTotal: 0, tablesDone: 0, tablesTotal: 0, pct: 0 },
+      lastSeq: 0, error: null, createdAt: new Date().toISOString(),
+      startedAt: null, finishedAt: null, durationMs: null,
+    };
+    const snapshot: Extract<ServerFrame, { k: 'snapshot' }> = {
+      k: 'snapshot', run, steps: [], tables: [], events: [], lastSeq: 0, cohort: 'full',
+    };
+
+    const state = applyEvents(applySnapshot(snapshot), peer.events());
+
+    expect(state.steps.find((s) => s.stepId === 'sync_schema')?.status).toBe('running');
+    expect(state.logs.map((l) => l.message)).toEqual(['Applying schema changes...']);
+    expect(state.tables[0]).toMatchObject({ tableName: 'orders', status: 'done', rowsDone: 60_000 });
+  });
+
+  it('gives a redacted subscriber frames the reducer can still fold', () => {
+    const hub = new RunHub();
+    const peer = fakePeer();
+    hub.subscribe(peer.peer, grant({ cohort: 'redacted' }));
+
+    hub.publish(RUN_A, [
+      ev('log', { level: 'info', message: 'SELECT * FROM customers' }),
+      ev('overall_progress', { rowsDone: 5, rowsTotal: 10, pct: 50, tablesDone: 1, tablesTotal: 2 }),
+    ]);
+
+    const run = {
+      id: RUN_A, status: 'running', mode: 'full', simulated: true,
+      source: { engine: 'postgres', database: 'src' },
+      target: { engine: 'postgres', database: 'dst' },
+      progress: { rowsDone: 0, rowsTotal: 0, tablesDone: 0, tablesTotal: 0, pct: 0 },
+      lastSeq: 0, error: null, createdAt: new Date().toISOString(),
+      startedAt: null, finishedAt: null, durationMs: null,
+    };
+    const state = applyEvents(
+      applySnapshot({ k: 'snapshot', run, steps: [], tables: [], events: [], lastSeq: 0, cohort: 'redacted' }),
+      peer.events()
+    );
+
+    expect(state.logs).toHaveLength(0);
+    expect(state.run?.progress.pct).toBe(50);
   });
 });

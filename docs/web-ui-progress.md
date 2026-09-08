@@ -3,9 +3,9 @@
 Working branch: **`feat/monorepo-restructure`** (7 commits ahead of `main`).
 Plan: `~/.claude-personal/plans/let-s-a-web-ui-vectorized-codd.md`.
 
-Phases 0, 1 and 2 are done. **Phase 3a steps 1, 2 and 3 are done** — the runner,
-the RunManager and the live event stream. Step 4 (the UI) is next, and every
-server-side piece it needs already works.
+**Phase 3a is done.** The runner, the RunManager, the live event stream and the
+UI. Click Run, watch a migration draw itself, kill the dev server mid-run,
+restart, and watch it catch up — all of it works end to end.
 
 > This covers the **web UI** work. `docs/implementation-plan.md` remains the
 > CLI-side plan (engine roadmap, type maps, Pair status) and is unaffected.
@@ -21,7 +21,7 @@ apps/runner/     @movy/runner  the run driver: argv, stdin, signals, IPC, journa
 apps/web/        @movy/web     Nuxt 4: orgs, RBAC, encrypted connections
 ```
 
-`pnpm` workspaces. 963 tests. Coverage 62.04 / 46.46 / 65.94 / 62.82 over core +
+`pnpm` workspaces. 994 tests. Coverage 62.04 / 46.46 / 65.94 / 62.82 over core +
 CLI + runner, ratcheted upward only; `apps/web` ratchets separately so a young
 app neither dilutes the core number nor hands it a free jump.
 
@@ -93,6 +93,11 @@ HTTP request. Adding a string-keyed join would undo the entire guarantee, and
 database and then goes live. If an event were announced before it were
 queryable, everything between those two moments would be invisible to that
 client — and a gap it was never told about is one it cannot recover from.
+
+**One declaration of the wire, in `shared/`.** Both halves of a contract
+described twice will disagree eventually — and when they did here, every unit
+test still passed, because each side was tested against its own copy. If you add
+a frame or a field, add it there and let the compiler find the callers.
 
 **Serializers build up, never tear down.** There is no `delete row.secret`
 anywhere — a field that is never copied cannot be forgotten.
@@ -311,26 +316,70 @@ could be marked finished before its last events were stored — and the socket
 work made it visible, because "durably stored" became something another
 component depended on rather than an internal detail.
 
-## Next: Phase 3a step 4 — the UI
+## Phase 3a step 4 — the UI (done)
 
-`run-reducer.ts` (pure, outside the store) plus `RunTimeline`,
-`TableProgressGrid` and `LogStream`, all driven by the simulator.
+Two pages under `/o/:slug/runs`, four components, and one pure reducer.
 
-The wire contract is settled and exercised:
+**`shared/run-wire.ts` is the contract.** Nuxt 4's `shared/` directory, so the
+serializer and the reducer import the same declarations — a field the server
+stops sending is a type error in the client rather than `undefined` in front of
+someone watching a migration. It restates the nine step ids rather than
+importing them from `@movy/core`, because core is CommonJS and externalised for
+Nitro; `step-order.test.ts` fails if the copy ever drifts.
+
+**`app/utils/run-reducer.ts` is pure and outside any store**, the same reasoning
+as `run-projection.ts` on the server. It de-duplicates by `seq` (the snapshot
+and the first live batch overlap by design), takes the outcome from
+`run_finished` rather than the last frame, and does not un-finish a table when
+the throttle's held sample arrives late. All of that is tested against the
+recorded fixture with no component, no socket and no browser involved.
+
+**`useRunStream` degrades to REST.** The socket is a fast path over a durable
+record, so every failure falls back to `GET .../events?afterSeq=` — the same
+cursor the socket would have used — with capped exponential backoff. It also
+pages that endpoint after every snapshot, because the snapshot caps at 500
+events and a run further along than that still has a gap to close.
+
+The frame contract, as built:
 
 | Frame | Meaning |
 |-------|---------|
 | `{k:'hello'}` | connected, nothing authorised yet |
 | `{k:'subscribe', ticket}` | client -> server, the only message accepted |
-| `{k:'snapshot', run, steps, tables, events, lastSeq}` | opening state |
+| `{k:'snapshot', run, steps, tables, events, lastSeq, cohort}` | opening state |
 | `{k:'events', runId, events[]}` | live batch, ordered, may repeat a seq |
 | `{k:'cohort_changed', cohort}` | role changed under you |
 | `{k:'revoked', reason}` | membership gone; socket closes |
 | `{k:'error', message}` | refused; socket closes |
 
-The reducer must **de-duplicate by `seq`** — the snapshot and the first live
-batch can overlap by design — and take the run's outcome from the
-`run_finished` event rather than from the last frame.
+Verified in a browser at 1440, 768 and 375, in both themes, as editor and as
+viewer: the timeline draws, the grid fills, the log follows its own tail, and a
+viewer sees the whole timeline with the log pane replaced by the reason it is
+empty.
+
+### The bugs this step found
+
+1. **The live stream and the snapshot spoke different shapes.** The hub
+   published bare `MigrationEvent`s while the snapshot sent `WireEvent` rows, so
+   every live frame threw in the reducer — `payload` was undefined. It survived
+   step 3 because my probes only read `type` and `seq`, which both shapes have,
+   and it survived unit tests because `socket-isolation.test.ts` built one shape
+   while `run-reducer.test.ts` built the other. **Each half was tested against
+   its own idea of the wire.** Both now use `WireEvent`, and a test feeds the
+   hub's real output through the real reducer.
+
+2. **`simulateFixture` was a filesystem path off the request body**, handed to
+   the runner as `--simulate <path>`. Any editor could name any file on the
+   host. The API now takes `simulate: true` and the server owns the path;
+   `route-scoping.test.ts` fails if a route takes a path from a body again.
+
+3. Smaller: the timeline collided with itself whenever a label wrapped; log
+   timestamps were UTC while everything else was local; `ELAPSED` showed the
+   *recording's* 407ms rather than this run's wall clock; the 200px rail made
+   the page scroll sideways on a phone; and a viewer's log pane said "no log
+   output yet" for a run with 75 log lines, because the cohort was only sent on
+   a *change* and a viewer is never demoted mid-session. It is on the snapshot
+   now.
 
 Demo for 3a: click Run, watch a simulated migration draw itself, kill the dev
 server mid-run, restart, and watch the UI re-attach and catch up. **The server

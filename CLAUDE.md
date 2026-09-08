@@ -209,7 +209,34 @@ the same reason a peer joins its room *before* its snapshot is read: an overlap
 is a duplicate the client drops by `seq`, which a gap is not.
 
 **A demotion reaches a live socket** within one 5s revalidation interval — one
-batched query for all subscribers, deduplicated per person.
+batched query for all subscribers, deduplicated per person. The subscriber's
+cohort is on the SNAPSHOT as well as on `cohort_changed`: a viewer is never
+demoted mid-session, so without it they never learn why their log pane is empty.
+
+### The run UI
+
+`shared/run-wire.ts` (Nuxt 4's `shared/`, imported by both halves) is the one
+declaration of the wire contract — frames, row shapes, step ids and labels. The
+serializer's return types are annotated with it, so a field the server stops
+sending is a type error in the client. It restates the nine step ids rather than
+importing `MIGRATION_STEP_ORDER`, because `@movy/core` is CommonJS and
+externalised; `step-order.test.ts` fails if the copy drifts.
+
+| Module | Purpose |
+|--------|---------|
+| `app/utils/run-reducer.ts` | **Pure.** Folds snapshot + live frames into view state. De-dupes by `seq`, takes the outcome from `run_finished`, never un-finishes a table. |
+| `app/composables/useRunStream.ts` | Ticket, socket, backoff, and REST catch-up on the same `afterSeq` cursor. |
+| `app/components/run/` | `RunHeader`, `RunTimeline`, `TableProgressGrid`, `LogStream`. |
+
+**Both halves must be tested against the same shape.** The hub once published
+bare `MigrationEvent`s while the snapshot sent `WireEvent` rows; every unit test
+passed because each side built its own idea of the wire, and it only failed in a
+browser. `socket-isolation.test.ts` now feeds the hub's real output through the
+real reducer.
+
+**A run request never names a path on the host.** `simulate: true`, and the
+server resolves the fixture — an earlier version took `simulateFixture` off the
+body and handed it to a child process as `--simulate <path>`.
 
 Journals go to `apps/web/.movy/runs/` (`MOVY_JOURNAL_DIR` overrides), each with a
 `.stderr.log` beside it. The runner entry resolves to `@movy/runner`'s built

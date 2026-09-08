@@ -21,7 +21,11 @@ export default defineConfig({
         },
       },
       {
-        resolve: { alias },
+        // `#shared` is Nuxt's alias for apps/web/shared/, where the run wire
+        // contract lives. Tests import the reducer directly, so they need it.
+        resolve: {
+          alias: { ...alias, '#shared': path.resolve(__dirname, 'apps/web/shared') },
+        },
         test: {
           name: 'web',
           root: path.resolve(__dirname, 'apps/web'),
