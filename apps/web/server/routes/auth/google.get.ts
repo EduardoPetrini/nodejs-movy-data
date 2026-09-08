@@ -38,6 +38,7 @@ export default defineOAuthGoogleEventHandler({
           lastLoginAt: new Date(),
         })
         .returning();
+      if (!row) throw createError({ statusCode: 500, statusMessage: 'Could not create the user.' });
 
       await db.insert(oauthAccounts).values({
         id: randomUUID(),

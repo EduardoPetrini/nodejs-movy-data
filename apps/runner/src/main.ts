@@ -28,9 +28,24 @@ import { readJournalLines, replayJournal } from './simulate';
 import { executeRun } from './execute';
 
 function send(message: RunnerToHost): void {
-  // Absent when run from a shell rather than forked. Simulation from a terminal
-  // is a first-class way to use this, so a missing channel is not an error.
-  process.send?.(message);
+  // Two different "no channel" cases, and both are normal.
+  //
+  // `process.send` is absent when run from a shell rather than forked —
+  // simulating from a terminal is a first-class way to use this.
+  //
+  // `process.connected` goes false when the HOST dies. `process.send` is still
+  // there, so the optional call above does not cover it: Node emits an
+  // unhandled 'error' on `process` and kills the runner. That would defeat the
+  // whole point of the detached fork — the run is supposed to outlive the host
+  // and be re-attached from the journal. The try/catch closes the race between
+  // the check and the write.
+  if (process.send === undefined || !process.connected) return;
+  try {
+    process.send(message);
+  } catch {
+    // The host went away mid-write. IPC is the copy; the journal has this
+    // event already, and the host reads it back from there.
+  }
 }
 
 async function main(): Promise<number> {
@@ -144,7 +159,18 @@ main()
     process.exitCode = code;
     // Closes the channel once queued messages have flushed. Without it an open
     // IPC handle keeps a finished runner alive indefinitely.
-    process.disconnect?.();
+    //
+    // Guarded like send(): disconnect() throws ERR_IPC_CHANNEL_CLOSED if the
+    // host already went away, which would fall into the catch below and
+    // overwrite a correct exit code with 70 — telling a host that the run
+    // never started, when in fact it ran to completion after the host died.
+    if (process.connected) {
+      try {
+        process.disconnect?.();
+      } catch {
+        // Already gone. The exit code is the record now.
+      }
+    }
   })
   .catch((err: unknown) => {
     const message = err instanceof Error ? err.stack ?? err.message : String(err);

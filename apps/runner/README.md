@@ -38,6 +38,16 @@ covers the case where the host dies between fork and write.
 stderr and sent to the host as a `fatal`, and two of the fields it validates are
 passwords. `run-spec.test.ts` asserts the password cannot appear in one.
 
+**Every IPC call is guarded on `process.connected`.** Not decoration: after the
+host dies `process.send` still *exists*, so `process.send?.(...)` calls it
+anyway, Node emits an unhandled `'error'` on `process`, and the runner dies a
+few events into being orphaned. `process.disconnect?.()` had the same flaw, and
+threw into the top-level catch — reporting exit 70, *the run never started*, for
+a run that had completed. Removing these guards turns the journal from a system
+of record back into a log of whatever the host was awake for.
+`tests/process/host-death.test.ts` kills a real parent mid-replay and asserts
+the orphan finishes.
+
 **The journal is the system of record; IPC is a copy.** The runner is forked
 `detached`, so it outlives a host restart and keeps writing while nobody is
 listening. Every event is journalled *before* it is sent. The host re-attaches

@@ -8,7 +8,7 @@
     "dev": "pnpm --filter @movy/cli dev",
     "dev:web": "pnpm --filter @movy/web dev",
     "build": "tsc -b packages/core apps/cli apps/runner && pnpm --filter @movy/web build",
-    "typecheck": "pnpm --filter @movy/core typecheck && pnpm --filter @movy/cli typecheck && pnpm --filter @movy/runner typecheck",
+    "typecheck": "pnpm --filter @movy/core typecheck && pnpm --filter @movy/cli typecheck && pnpm --filter @movy/runner typecheck && pnpm --filter @movy/web typecheck",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",

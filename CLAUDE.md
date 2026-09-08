@@ -151,6 +151,42 @@ viewers.
 
 `--json-events[=<path>]` on the CLI records the stream as NDJSON beside the log file.
 
+### Runs in the web app (@movy/web)
+
+The web app forks the runner once per run and rebuilds run state from its
+events. Four tables: `runs` plus `run_events` and the two projections
+`run_steps` / `run_table_progress`.
+
+| Module | Purpose |
+|--------|---------|
+| `server/runs/run-projection.ts` | **Pure.** Folds a batch of events into row patches. No I/O, so every ordering rule is testable against the recorded fixture. |
+| `server/runs/event-writer.ts` | Batches events (200 / 250ms) into one transaction per run. Never rethrows: a failed metadata write must not kill a live migration. |
+| `server/runs/journal-tailer.ts` | Reads a journal forward from a `seq` cursor; tolerates a half-written trailing line. |
+| `server/runs/run-manager.ts` | Forks the runner `detached`, feeds IPC to the writer, cancels, and re-attaches on boot. |
+| `server/repositories/runs.repo.ts` | Org-scoped reads; plus the unscoped ingestion helpers the manager uses. |
+
+**`run_events` is keyed on `(run_id, seq)`.** Events arrive from IPC *and* from
+the journal tailer, so delivery is at-least-once from two sources. That key is
+what makes the second delivery an `ON CONFLICT DO NOTHING` no-op instead of a
+duplicate. Do not add a surrogate id.
+
+**`reattach()` is not a one-shot read.** IPC dies with the old host and cannot be
+re-established, so a run still in flight after a restart is *followed* — its
+journal re-read each second until a terminal event or the owning process is
+gone. A run whose process vanished with no outcome is settled `failed` /
+`RunnerVanished`, and the message says the migration may be partially applied,
+because Movy has no resume.
+
+**The two log cohorts live in one predicate**: `mayReadLogs(role)` in
+`run.serializer.ts`. A viewer has `run:read` but not `run:log:read`, so the
+events route asks only for the non-`log` types — there is no filtered-out row to
+leak. The socket rooms must reuse this, not re-decide it.
+
+Journals go to `apps/web/.movy/runs/` (`MOVY_JOURNAL_DIR` overrides), each with a
+`.stderr.log` beside it. The runner entry resolves to `@movy/runner`'s built
+`dist/main.js` first, so **`pnpm build` after editing the runner** or the stale
+build is what actually runs.
+
 ### The runner (@movy/runner)
 
 `apps/runner` is forked once per run by the web app. It owns what the core
@@ -225,7 +261,7 @@ Default-value translation is delegated to `DefaultValueTranslator`, injected int
 ### Tests
 
 - Unit tests live in `packages/core/tests/unit/`, `apps/cli/tests/unit/`, `apps/runner/tests/unit/` and `apps/web/tests/unit/`.
-- `apps/runner/tests/process/` forks the real runner binary (detached, with IPC) and asserts the contract the web app depends on. It needs no database.
+- `apps/runner/tests/process/` forks the real runner binary (detached, with IPC) and asserts the contract the web app depends on. It needs no database. `host-death.test.ts` kills a real parent mid-replay: the orphan must finish its journal, which is the premise the whole re-attach design rests on.
 - Integration tests directory exists (`packages/core/tests/integration/`) with a README explaining they require real DB connections and are not automated.
 - `packages/core/tests/helpers/mock-database.ts` provides shared mock `IDatabaseConnection` for unit tests.
 - Tests use **Vitest** with `globals: true`, `pool: 'forks'`.

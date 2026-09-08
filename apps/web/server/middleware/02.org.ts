@@ -21,12 +21,13 @@ export default defineEventHandler(async (event) => {
   const user = event.context.user as { id: string } | undefined;
   if (!user) return; // 01.auth already rejected, or the route is public.
 
-  const slug = decodeURIComponent(match[1]);
+  const slug = decodeURIComponent(match[1]!);
   const rows = await useDb()
     .select({
       orgId: organizations.id,
       orgSlug: organizations.slug,
       role: memberships.role,
+      maxConcurrentRuns: organizations.maxConcurrentRuns,
     })
     .from(organizations)
     .innerJoin(memberships, eq(memberships.orgId, organizations.id))
@@ -41,5 +42,6 @@ export default defineEventHandler(async (event) => {
     orgSlug: row.orgSlug,
     userId: user.id,
     role: row.role,
+    maxConcurrentRuns: row.maxConcurrentRuns,
   } satisfies OrgContext;
 });

@@ -43,6 +43,8 @@ export interface OrgContext {
   orgSlug: string;
   userId: string;
   role: OrgRole;
+  /** Read here so the run-launch handler needs no second query for it. */
+  maxConcurrentRuns: number;
 }
 
 export function hasPermission(role: OrgRole, permission: Permission): boolean {

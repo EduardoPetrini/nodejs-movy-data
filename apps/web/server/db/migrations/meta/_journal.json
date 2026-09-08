@@ -8,6 +8,13 @@
       "when": 1788817339231,
       "tag": "0000_hot_stick",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1788874022353,
+      "tag": "0001_broad_glorian",
+      "breakpoints": true
     }
   ]
 }

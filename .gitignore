@@ -10,4 +10,7 @@ coverage/
 .nuxt/
 .output/
 .data/
+# Run journals. The system of record for a live run, but per-machine state:
+# a journal names a path and a pid on the host that produced it.
+.movy/
 package-lock.json

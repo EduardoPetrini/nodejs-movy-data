@@ -41,6 +41,7 @@ export class ConnectionsRepository {
       .insert(connections)
       .values({ ...row, orgId: this.orgId })
       .returning();
+    if (!created) throw new Error('insert into connections returned no row');
     return created;
   }
 
