@@ -6,6 +6,12 @@ export default defineNuxtConfig({
 
   css: ['~/assets/css/global.css'],
 
+  // Without this, Nuxt prefixes a component's name with its directory, so
+  // app/components/ui/AppButton.vue registers as <UiAppButton>. Every call site
+  // says <AppButton>, which then resolves to nothing and renders as an inert
+  // custom element — a button that looks like plain text and cannot be clicked.
+  components: [{ path: '~/components', pathPrefix: false }],
+
   // @movy/core stays CommonJS: resolveWorkerPath() depends on __dirname, and
   // migrations run in a forked @movy/runner process that loads core from disk.
   //
