@@ -1,6 +1,11 @@
 <script setup lang="ts">
 definePageMeta({ layout: false })
 
+// nuxt-auth-utils keeps loggedIn/user in client state, populated by this fetch.
+// The POST below only sets the cookie, so without refreshing that state the
+// global middleware still sees a signed-out user and bounces straight back here.
+const { fetch: refreshSession } = useUserSession()
+
 const email = ref('')
 const password = ref('')
 const error = ref<string | null>(null)
@@ -11,6 +16,7 @@ async function signIn() {
   error.value = null
   try {
     await $fetch('/api/auth/login', { method: 'POST', body: { email: email.value, password: password.value } })
+    await refreshSession()
     await navigateTo('/', { replace: true })
   } catch (err) {
     error.value = (err as { statusMessage?: string }).statusMessage ?? 'Sign-in failed.'
