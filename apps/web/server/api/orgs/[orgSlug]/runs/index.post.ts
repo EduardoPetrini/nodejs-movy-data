@@ -1,17 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { buildRegistry } from '@movy/core';
 import { createRepos } from '~~/server/repositories';
 import { requirePermission } from '~~/server/utils/rbac';
-import { toConnectionConfig, parseEngine } from '~~/server/utils/connection-config';
+import { toConnectionConfig } from '~~/server/utils/connection-config';
 import { toPublicRun } from '~~/server/serializers/run.serializer';
 import { journalPathFor, simulationFixture, useRunManager } from '~~/server/runs';
+import { resolveRunTarget, type RunTargetBody } from '~~/server/runs/resolve-target';
 
-interface Body {
-  sourceConnectionId?: string;
-  targetConnectionId?: string;
-  /** Override the connection's own database, as the CLI prompt does. */
-  sourceDatabase?: string;
-  targetDatabase?: string;
+interface Body extends RunTargetBody {
   /**
    * Replay the bundled recording instead of touching a database.
    *
@@ -35,23 +30,11 @@ export default defineEventHandler(async (event) => {
   const body = await readBody<Body>(event);
   const repos = createRepos(event);
 
-  for (const field of ['sourceConnectionId', 'targetConnectionId'] as const) {
-    if (!body?.[field]) throw createError({ statusCode: 400, statusMessage: `"${field}" is required.` });
-  }
-
-  // findById is org-scoped, so a connection id from another org is simply
-  // absent here — the run cannot be pointed at it.
-  const source = await repos.connections.findById(body.sourceConnectionId!);
-  const target = await repos.connections.findById(body.targetConnectionId!);
-  if (!source || !target) throw createError({ statusCode: 404, statusMessage: 'Not Found' });
-
-  // Refusing an unsupported Pair here rather than at run time: a run row that
-  // exists only to fail on its first step is noise in the history.
-  const pair = { from: parseEngine(source.engine), to: parseEngine(target.engine) };
-  const registry = buildRegistry();
-  if (!registry.has(pair.from) || !registry.has(pair.to)) {
-    throw createError({ statusCode: 400, statusMessage: 'That engine pair is not supported.' });
-  }
+  // The same resolution the preview used, so the run that starts is the run
+  // that was reviewed. It settles the definition, both connections, both
+  // databases and the mode, and refuses an unsupported combination with the
+  // sentence the form already showed.
+  const target = await resolveRunTarget(event, body);
 
   // One noisy org must not starve another, and two concurrent runs into the
   // same destination would clear each other's tables.
@@ -65,21 +48,20 @@ export default defineEventHandler(async (event) => {
 
   const runId = randomUUID();
   const journalPath = journalPathFor(runId);
-  const sourceDatabase = body.sourceDatabase?.trim() || source.database;
-  const targetDatabase = body.targetDatabase?.trim() || target.database;
 
   const run = await repos.runs.create({
     id: runId,
-    sourceConnectionId: source.id,
-    targetConnectionId: target.id,
+    definitionId: target.definition?.id ?? null,
+    sourceConnectionId: target.source.id,
+    targetConnectionId: target.target.id,
     // Snapshotted so history stays true after a connection is edited or deleted.
-    sourceEngine: source.engine,
-    sourceDatabase,
-    targetEngine: target.engine,
-    targetDatabase,
-    mode: 'full',
+    sourceEngine: target.source.engine,
+    sourceDatabase: target.sourceDatabase,
+    targetEngine: target.target.engine,
+    targetDatabase: target.targetDatabase,
+    mode: target.mode,
     status: 'queued',
-    simulated: Boolean(body.simulate),
+    simulated: Boolean(body?.simulate),
     journalPath,
     requestedByUserId: org.userId,
   });
@@ -91,14 +73,16 @@ export default defineEventHandler(async (event) => {
     journalPath,
     spec: {
       runId,
+      // `resolveRunTarget` has already refused every mode the runner cannot
+      // drive, so this asserts a decision rather than making one.
       mode: 'full',
-      source: toConnectionConfig(source, sourceDatabase),
-      target: toConnectionConfig(target, targetDatabase),
+      source: toConnectionConfig(target.source, target.sourceDatabase),
+      target: toConnectionConfig(target.target, target.targetDatabase),
     },
-    simulateFixture: body.simulate ? simulationFixture() : undefined,
+    simulateFixture: body?.simulate ? simulationFixture() : undefined,
     // Clamped: the runner rejects a non-positive speed, but a 1e-9 would
     // schedule a replay measured in centuries and hold a process open.
-    speed: clampSpeed(body.speed),
+    speed: clampSpeed(body?.speed),
   });
 
   setResponseStatus(event, 201);

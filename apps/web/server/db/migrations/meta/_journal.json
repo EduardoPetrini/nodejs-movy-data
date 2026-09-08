@@ -15,6 +15,13 @@
       "when": 1788874022353,
       "tag": "0001_broad_glorian",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1788902325046,
+      "tag": "0002_definitions",
+      "breakpoints": true
     }
   ]
 }

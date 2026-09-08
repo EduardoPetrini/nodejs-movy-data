@@ -14,7 +14,7 @@
     "test:coverage": "vitest run --coverage",
     "db:migrate": "pnpm --filter @movy/web db:migrate",
     "db:generate": "pnpm --filter @movy/web db:generate",
-    "seed:dev": "pnpm --filter @movy/web exec tsx scripts/seed-dev.ts",
+    "seed:dev": "pnpm --filter @movy/web exec tsx --env-file=.env scripts/seed-dev.ts",
     "simulate": "tsx --tsconfig apps/runner/tsconfig.dev.json apps/runner/src/main.ts"
   },
   "keywords": [],

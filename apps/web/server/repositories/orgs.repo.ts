@@ -2,6 +2,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import { useDb } from '../db/client';
 import { invitations, memberships, organizations, users, type OrgRole } from '../db/schema';
 import { hashInvitationToken, invitationStatus } from '../orgs/invitation-token';
+import { isUniqueViolation } from './pg-errors';
 
 /**
  * The two acts that cannot be org-scoped, because they are what produces the
@@ -13,19 +14,6 @@ import { hashInvitationToken, invitationStatus } from '../orgs/invitation-token'
  */
 
 export type OrganizationRow = typeof organizations.$inferSelect;
-
-const UNIQUE_VIOLATION = '23505';
-
-/**
- * Walks the `cause` chain, because Drizzle wraps a driver error in its own
- * `DrizzleQueryError`. Reading `err.code` alone missed every unique violation
- * and turned "that URL is taken" into a 500 with the failing SQL in the body.
- */
-export function isUniqueViolation(err: unknown, depth = 4): boolean {
-  if (depth < 0 || typeof err !== 'object' || err === null) return false;
-  if ((err as { code?: unknown }).code === UNIQUE_VIOLATION) return true;
-  return isUniqueViolation((err as { cause?: unknown }).cause, depth - 1);
-}
 
 export type CreateOrgResult =
   | { ok: true; org: OrganizationRow }

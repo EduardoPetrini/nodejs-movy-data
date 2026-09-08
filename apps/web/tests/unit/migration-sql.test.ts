@@ -23,15 +23,40 @@ describe('generated migrations', () => {
     expect(sql.length).toBeGreaterThan(100);
   });
 
-  for (const side of ['source', 'target'] as const) {
-    it(`scopes SET NULL to ${side}_connection_id, never to the whole composite key`, () => {
-      expect(sql).toContain(`ON DELETE SET NULL ("${side}_connection_id")`);
+  for (const column of ['source_connection_id', 'target_connection_id', 'definition_id'] as const) {
+    it(`scopes SET NULL to ${column}, never to the whole composite key`, () => {
+      expect(sql).toContain(`ON DELETE SET NULL ("${column}")`);
     });
   }
 
   it('has no bare composite SET NULL left anywhere', () => {
-    const bare = /FOREIGN KEY \("org_id","(?:source|target)_connection_id"\)[^;]*ON DELETE set null(?!\s*\()/i;
+    const bare = /FOREIGN KEY \("org_id","(?:source_connection_id|target_connection_id|definition_id)"\)[^;]*ON DELETE set null(?!\s*\()/i;
     expect(bare.test(sql)).toBe(false);
+  });
+
+  it('restricts deleting a connection a definition still names', () => {
+    // `set null` here would leave a definition pointing at nothing, which the
+    // NOT NULL column forbids anyway; `cascade` would delete the definition
+    // and take its run history's attribution with it. Neither is what the
+    // operator asked for when they deleted a connection — a 409 is.
+    for (const side of ['source', 'target'] as const) {
+      expect(sql).toMatch(
+        new RegExp(`migration_definitions_${side}_connection_fk[^;]*ON DELETE restrict`, 'i')
+      );
+    }
+  });
+
+  it('keeps the definition name unique only among live definitions', () => {
+    // Definitions are archived rather than deleted, so a plain UNIQUE would
+    // let an archived typo squat the name its replacement wants.
+    expect(sql).toContain(
+      'CREATE UNIQUE INDEX "migration_definitions_org_name_uq" ON "migration_definitions" ' +
+        'USING btree ("org_id","name") WHERE archived_at IS NULL'
+    );
+  });
+
+  it('refuses a query definition with no SQL in the database, not only the handler', () => {
+    expect(sql).toContain(`CHECK (mode <> 'query' OR query_sql IS NOT NULL)`);
   });
 
   it('keeps run_events keyed on (run_id, seq), which is what makes ingestion idempotent', () => {

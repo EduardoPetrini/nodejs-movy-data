@@ -9,36 +9,6 @@ const org = computed(() => me.value?.orgs.find((o) => o.slug === orgSlug))
 const mayRun = computed(() => org.value?.permissions.includes('run:execute') ?? false)
 
 const { data, refresh } = await useFetch<{ runs: WireRun[] }>(`/api/orgs/${orgSlug}/runs`)
-const { data: connections } = await useFetch<{ connections: { id: string; name: string; engine: string; database: string }[] }>(
-  `/api/orgs/${orgSlug}/connections`
-)
-
-const sourceId = ref('')
-const targetId = ref('')
-const simulate = ref(true)
-const launching = ref(false)
-const launchError = ref<string | null>(null)
-
-async function launch() {
-  launchError.value = null
-  launching.value = true
-  try {
-    const { run } = await $fetch<{ run: WireRun }>(`/api/orgs/${orgSlug}/runs`, {
-      method: 'POST',
-      body: {
-        sourceConnectionId: sourceId.value,
-        targetConnectionId: targetId.value,
-        // A filesystem path is the server's business, not the browser's: the
-        // client asks for simulation and the server decides what to replay.
-        ...(simulate.value ? { simulate: true, speed: 0.02 } : {}),
-      },
-    })
-    await navigateTo(`/o/${orgSlug}/runs/${run.id}`)
-  } catch (err) {
-    launchError.value = (err as { statusMessage?: string }).statusMessage ?? 'Could not start the run.'
-    launching.value = false
-  }
-}
 
 const when = (iso: string) => new Date(iso).toLocaleString()
 const rows = new Intl.NumberFormat()
@@ -63,52 +33,21 @@ onBeforeUnmount(() => { if (timer) clearInterval(timer) })
 <template>
   <div class="page">
     <header class="head">
-      <h1>Runs</h1>
-      <p class="sub">Every migration this organisation has executed.</p>
-    </header>
-
-    <section v-if="mayRun" class="launch" aria-labelledby="launch-heading">
-      <h2 id="launch-heading" class="mv-label">Start a run</h2>
-      <div class="form">
-        <label class="field">
-          <span class="mv-label">Source</span>
-          <select v-model="sourceId">
-            <option value="" disabled>Choose a connection</option>
-            <option v-for="c in connections?.connections ?? []" :key="c.id" :value="c.id">
-              {{ c.name }} — {{ c.database }}
-            </option>
-          </select>
-        </label>
-
-        <span class="arrow" aria-hidden="true">→</span>
-
-        <label class="field">
-          <span class="mv-label">Destination</span>
-          <select v-model="targetId">
-            <option value="" disabled>Choose a connection</option>
-            <option v-for="c in connections?.connections ?? []" :key="c.id" :value="c.id">
-              {{ c.name }} — {{ c.database }}
-            </option>
-          </select>
-        </label>
-
-        <label class="check">
-          <input v-model="simulate" type="checkbox">
-          <span>Simulate<em>replay a recording; no database is touched</em></span>
-        </label>
-
-        <AppButton variant="primary" :disabled="!sourceId || !targetId || launching" @click="launch">
-          {{ launching ? 'Starting…' : 'Run' }}
-        </AppButton>
+      <div>
+        <h1>Runs</h1>
+        <p class="sub">Every migration this organisation has executed.</p>
       </div>
-      <p v-if="launchError" class="err">{{ launchError }}</p>
-    </section>
+      <!-- Starting a run now goes through the review screen. A migration that
+           empties its destination and cannot be rolled back should not begin
+           with one click from a list. -->
+      <NuxtLink v-if="mayRun" :to="`/o/${orgSlug}/runs/new`" class="cta">New run</NuxtLink>
+    </header>
 
     <section class="list" aria-labelledby="history-heading">
       <h2 id="history-heading" class="mv-label">History</h2>
 
       <p v-if="(data?.runs.length ?? 0) === 0" class="empty">
-        No runs yet.<template v-if="mayRun"> Start one above.</template>
+        No runs yet.<template v-if="mayRun"> Start one with <em>New run</em>.</template>
       </p>
 
       <ul v-else class="runs">
@@ -131,27 +70,22 @@ onBeforeUnmount(() => { if (timer) clearInterval(timer) })
 
 <style scoped>
 .page { display: flex; flex-direction: column; gap: var(--mv-s-6); max-width: 1100px; }
+.head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--mv-s-4); }
 .head h1 { font-size: var(--mv-fs-lg); letter-spacing: -0.015em; }
 .sub { font-size: var(--mv-fs-xs); color: var(--mv-fg-subtle); margin-top: var(--mv-s-1); }
 
-.launch {
-  display: flex; flex-direction: column; gap: var(--mv-s-3);
-  padding: var(--mv-s-4);
-  border: 1px solid var(--mv-line); border-radius: var(--mv-r-lg);
-  background: var(--mv-bg-base); box-shadow: var(--mv-elev-1);
-}
-.form { display: flex; align-items: flex-end; gap: var(--mv-s-4); flex-wrap: wrap; }
-.field { display: flex; flex-direction: column; gap: var(--mv-s-1); min-width: 200px; }
-.field select {
+.cta {
   padding: 6px var(--mv-s-3);
-  border: 1px solid var(--mv-line); border-radius: var(--mv-r-md);
-  background: var(--mv-bg-raised); font-size: var(--mv-fs-sm);
+  border: 1px solid transparent; border-radius: var(--mv-r-md);
+  background: var(--mv-accent); color: var(--mv-accent-fg);
+  font-size: var(--mv-fs-sm); font-weight: var(--mv-fw-medium); text-decoration: none;
+  box-shadow: var(--mv-elev-1); white-space: nowrap;
+  transition: opacity var(--mv-dur-1) var(--mv-ease-out);
 }
-.arrow { color: var(--mv-fg-subtle); padding-bottom: 8px; }
-.check { display: flex; align-items: center; gap: var(--mv-s-2); font-size: var(--mv-fs-xs); color: var(--mv-fg-muted); }
-.check em { display: block; font-style: normal; font-size: var(--mv-fs-micro); color: var(--mv-fg-subtle); }
+.cta:hover { opacity: 0.9; text-decoration: none; }
+.cta:focus-visible { outline: 2px solid var(--mv-focus); outline-offset: 2px; }
 
-.err { font-size: var(--mv-fs-xs); color: var(--mv-danger); }
+.empty em { font-style: normal; color: var(--mv-fg-muted); }
 
 .list { display: flex; flex-direction: column; gap: var(--mv-s-3); }
 .empty {
@@ -179,7 +113,6 @@ onBeforeUnmount(() => { if (timer) clearInterval(timer) })
 
 @media (max-width: 720px) {
   .dbs, .rows { display: none; }
-  .form { flex-direction: column; align-items: stretch; }
-  .arrow { display: none; }
+  .head { flex-direction: column; }
 }
 </style>

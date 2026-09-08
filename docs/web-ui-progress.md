@@ -23,7 +23,7 @@ phase is indistinguishable from one that was never started.
 
 ## Status board
 
-*Last reviewed: 2026-09-08. 1032 tests, 76 files, green.*
+*Last reviewed: 2026-09-08. 1094 tests, 79 files, green.*
 
 | Phase | State | Notes |
 |-------|-------|-------|
@@ -31,26 +31,11 @@ phase is indistinguishable from one that was never started.
 | 1 — core made drivable | **DONE** | event contract, sinks, `--json-events` |
 | 2 — web shell, auth, orgs, connections | **DONE** (2026-09-08) | org creation, members, invitations, org switcher |
 | 3a — live timeline, simulated | **DONE** | runner, RunManager, socket, UI |
-| 3b — real runs | **PART** | the pipe works; the surface around it does not |
+| 3b — real runs | **DONE** (2026-09-08) | definitions, PairSelector, preview; real PG→PG verified |
 | 4 — history, replay, stats, drift | **TODO** | nothing built |
 | 5 — hardening | **TODO** | light theme + reduced-motion landed early |
 
 ### Remaining work
-
-**Phase 3b — real runs.** The runner already executes a real
-`MigrationOrchestrator` (`apps/runner/src/execute.ts:34`) and `POST …/runs`
-decrypts both connections onto the child's stdin, so a real run is one
-un-ticked checkbox away. Missing around it:
-
-- **Definitions CRUD** — no `definitions` table; a run is assembled ad hoc from
-  two `<select>`s and nothing is saved or repeatable.
-- **PairSelector** — `server/api/pairs.get.ts` exists and *no client calls it*,
-  so planned engines are not disabled and query mode is neither offered nor
-  explained. The plan requires the reason to be shown, never a runtime failure.
-- **Preview** — `POST …/preview/diff`, the plan/diff review before launch.
-- **Query mode** — `mode` is hardcoded `'full'` in `runs/index.post.ts`.
-- **A real PG→PG run through the web app has not been verified.** 3a was
-  verified live and written up; the real path has not been.
 
 **Phase 4 — nothing built.** Keyset pagination + sparklines on the run ledger
 (today: a plain list on a 3s poll), `validation_runs` + the compare page +
@@ -67,8 +52,10 @@ undefined there), `README.md`. `CLAUDE.md` is current.
 
 **Verification gaps.** No Playwright and no E2E anywhere in the repo, so the
 plan's end-to-end gate (sign in → org → connection → run → reload mid-run →
-catch up) is unwritten. There is also **no credential-redaction test**, which
-the plan calls the worst plausible bug in this project. Google SSO is wired but
+catch up) is unwritten — Phase 3b's real run was driven by hand and by curl,
+not by a test that will run again tomorrow. There is also **no
+credential-redaction test**, which the plan calls the worst plausible bug in
+this project. Google SSO is wired but
 needs `NUXT_OAUTH_GOOGLE_CLIENT_ID` / `SECRET`.
 
 **Known bugs, tracked.** [#5](https://github.com/EduardoPetrini/nodejs-movy-data/issues/5)
@@ -85,10 +72,10 @@ MSSQL sequence reset assumes an `id` column.
 packages/core/   @movy/core    the hexagon; CommonJS, no I/O entry points
 apps/cli/        @movy/cli     the original interactive CLI
 apps/runner/     @movy/runner  the run driver: argv, stdin, signals, IPC, journal
-apps/web/        @movy/web     Nuxt 4: orgs, RBAC, encrypted connections
+apps/web/        @movy/web     Nuxt 4: orgs, RBAC, connections, definitions, runs
 ```
 
-`pnpm` workspaces. 1032 tests. Coverage 62.04 / 46.46 / 65.94 / 62.82 over core +
+`pnpm` workspaces. 1094 tests. Coverage 62.04 / 46.46 / 65.94 / 62.82 over core +
 CLI + runner, ratcheted upward only; `apps/web` ratchets separately so a young
 app neither dilutes the core number nor hands it a free jump.
 
@@ -116,6 +103,103 @@ PostgreSQL server.
 **Closed 2026-09-08** with the half that was missing: an org could be reached
 but never created, and the `invitations` table was referenced by nothing. Full
 write-up under *Phase 2 — onboarding* below.
+
+### Phase 3b — real runs
+**Closed 2026-09-08.** A run can now be saved, reviewed and repeated, and a real
+PostgreSQL→PostgreSQL migration has been driven end to end through the browser.
+
+`migration_definitions` (migration `0002`), `DefinitionsRepository`, CRUD behind
+`definition:read` / `definition:write`, `PairSelector`, `POST …/runs/preview`,
+and a `/o/:slug/runs/new` review screen. `runs` gained `definition_id` and its
+`mode` now comes from the definition instead of the literal `'full'`.
+
+**Verified live** against the PostgreSQL on :5432, `movy_fixture_src` →
+`movy_fixture_dst` (5 tables, 315k rows, FK-related). 500 rows were deleted from
+the destination's `order_items` first, so a pass could not be mistaken for a
+no-op:
+
+- Preview reported 315,000 estimated rows, load order
+  `audit_log, customers, products, orders, order_items` (FK parents first) and
+  the warning naming all five tables that would be emptied.
+- The run finished `succeeded` in 805 ms, nine steps green, 315,330 rows.
+- Every destination count matched the source exactly afterwards — including the
+  500 rows put back — proving the destination really was emptied and reloaded.
+- Launched a second time from the browser, `24a2e40d`: same result, with the
+  timeline, table grid and log stream drawing live.
+
+Refusals were exercised against the running server: query-mode launch → 422 with
+the reason, same-database run → 400, duplicate definition name → 409, deleting a
+connection two definitions use → 409 naming the count.
+
+## Phase 3b — decisions
+
+**Query mode can be SAVED but not LAUNCHED, and those are two different gates.**
+`MigrateQueryUseCase` takes no `MigrationRunContext` and emits nothing — not
+`run_started`, not a step, not a row count — so a web run of it would show nine
+hollow nodes indistinguishable from a hang. But the SQL is still worth writing
+down and running from the CLI, and refusing to save it would make the `mode`
+column a lie. Hence `saveAvailability` (permissive) and `modeAvailability`
+(strict) in `shared/pair-capability.ts`, with a test asserting the second is
+never laxer than the first.
+
+**One module owns both the decision and its wording.** `shared/pair-capability.ts`
+is imported by the form, by `prepareDefinition` and by `resolveRunTarget`. The
+plan's rule is "disabled with the reason shown, never a runtime failure", and
+that is only achievable if the UI's tooltip and the API's 422 come from the same
+function. A rule split across the two halves ends with the UI offering something
+the API refuses.
+
+**Preview and launch resolve through the same function.** `resolveRunTarget()`
+settles definition, connections, databases and mode for both. A review screen
+describing a different migration from the one the button starts is worse than no
+review screen, because it is trusted.
+
+**One `POST …/runs/preview`, not the plan's `/preview/diff` + `/preview/plan`.**
+Both need the same two connections and the same full schema inspection; splitting
+them would inspect two production databases twice to draw one screen. Deviation
+from the plan, recorded deliberately.
+
+**A missing destination database is information, not an error.** Preview asks
+`listDatabases()` rather than connecting and reading the failure, because "the
+database does not exist" and "the credentials are wrong" are not reliably
+distinguishable from a driver error — and guessing wrong tells someone their
+database is missing when their password is stale. Absent, it diffs against an
+empty schema, which is exactly what the run does after step 1. Refusing here
+would fail precisely when a preview is most wanted: the first migration.
+
+**Definitions are archived, never deleted.** A run points at the definition that
+produced it, and that attribution is the only thing tying a year of history to
+one migration. The name index is partial on `archived_at IS NULL`, so archiving
+frees the name for reuse; the connection FKs are `restrict` so a delete can never
+orphan one.
+
+---
+
+## Bugs found in Phase 3b
+
+1. **`ON DELETE RESTRICT` raises `23001`, not `23503`.** `isForeignKeyViolation`
+   matched only `foreign_key_violation`, but PostgreSQL raises
+   `restrict_violation` for a RESTRICT constraint — so "2 saved migrations still
+   use this connection" arrived as a 500 quoting the constraint name. **The unit
+   test asserted the code I had assumed and passed the whole time**; only the
+   live database found it. Both codes are matched now.
+
+2. **Enum degradation cannot be read off the translator's output.**
+   `CrossDbSchemaTranslator` passes an unmapped type through *unchanged*, so a
+   PostgreSQL enum type crossing to MySQL comes back identical to what went in —
+   and "unchanged, therefore fine" gets that case exactly backwards. The warning
+   is decided by comparing the two ENGINES instead.
+
+3. **`runs_definition_fk` needed the same hand-edit as migration `0001`.**
+   drizzle-kit emits a bare `ON DELETE set null` for a composite key, which would
+   try to null `org_id` too — and `org_id` is NOT NULL, so deleting any
+   definition a run referenced would have failed outright. `migration-sql.test.ts`
+   now guards `definition_id` alongside the two connection columns.
+
+4. **`pnpm seed:dev` had never loaded `apps/web/.env`.** Pre-existing, and a
+   documented command in `CLAUDE.md`: it read `process.env.NUXT_DATABASE_URL`
+   and nothing put it there, so it only worked for someone who had already
+   exported it. Now `tsx --env-file=.env`.
 
 ---
 

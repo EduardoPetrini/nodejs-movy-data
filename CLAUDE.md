@@ -154,8 +154,9 @@ viewers.
 ### Runs in the web app (@movy/web)
 
 The web app forks the runner once per run and rebuilds run state from its
-events. Four tables: `runs` plus `run_events` and the two projections
-`run_steps` / `run_table_progress`.
+events. Five tables: `migration_definitions` (the saved, repeatable migration)
+and `runs`, plus `run_events` and the two projections `run_steps` /
+`run_table_progress`.
 
 | Module | Purpose |
 |--------|---------|
@@ -164,6 +165,8 @@ events. Four tables: `runs` plus `run_events` and the two projections
 | `server/runs/journal-tailer.ts` | Reads a journal forward from a `seq` cursor; tolerates a half-written trailing line. |
 | `server/runs/run-manager.ts` | Forks the runner `detached`, feeds IPC to the writer, cancels, and re-attaches on boot. |
 | `server/repositories/runs.repo.ts` | Org-scoped reads; plus the unscoped ingestion helpers the manager uses. |
+| `server/runs/resolve-target.ts` | Settles definition, connections, databases and mode for **both** preview and launch. |
+| `server/definitions/build-preview.ts` | **Pure.** Two schemas + a diff + a plan → the review screen and its warnings. |
 
 **`run_events` is keyed on `(run_id, seq)`.** Events arrive from IPC *and* from
 the journal tailer, so delivery is at-least-once from two sources. That key is
@@ -215,8 +218,8 @@ demoted mid-session, so without it they never learn why their log pane is empty.
 
 ### The run UI
 
-`shared/run-wire.ts` (Nuxt 4's `shared/`, imported by both halves) is the one
-declaration of the wire contract — frames, row shapes, step ids and labels. The
+`shared/run-wire.ts` and `shared/definition-wire.ts` (Nuxt 4's `shared/`,
+imported by both halves) are the one declaration of the wire contract — frames, row shapes, step ids and labels. The
 serializer's return types are annotated with it, so a field the server stops
 sending is a type error in the client. It restates the nine step ids rather than
 importing `MIGRATION_STEP_ORDER`, because `@movy/core` is CommonJS and
@@ -226,13 +229,42 @@ externalised; `step-order.test.ts` fails if the copy drifts.
 |--------|---------|
 | `app/utils/run-reducer.ts` | **Pure.** Folds snapshot + live frames into view state. De-dupes by `seq`, takes the outcome from `run_finished`, never un-finishes a table. |
 | `app/composables/useRunStream.ts` | Ticket, socket, backoff, and REST catch-up on the same `afterSeq` cursor. |
-| `app/components/run/` | `RunHeader`, `RunTimeline`, `TableProgressGrid`, `LogStream`. |
+| `app/components/run/` | `RunHeader`, `RunTimeline`, `TableProgressGrid`, `LogStream`, `PairSelector`, `PreviewPanel`. |
+| `app/composables/usePairs.ts` | `GET /api/pairs` once, shared; every predicate re-exported from `#shared/pair-capability`. |
 
 **Both halves must be tested against the same shape.** The hub once published
 bare `MigrationEvent`s while the snapshot sent `WireEvent` rows; every unit test
 passed because each side built its own idea of the wire, and it only failed in a
 browser. `socket-isolation.test.ts` now feeds the hub's real output through the
 real reducer.
+
+**Saved migrations (`migration_definitions`) make a run repeatable**, and a run
+records the `definition_id` it came from. Definitions are **archived, never
+deleted** — a run points at the one that produced it, and that attribution is
+the only thing tying a year of history to one migration. The name's unique index
+is partial on `archived_at IS NULL` so archiving frees the name; the connection
+FKs are `restrict`, so deleting a connection a definition still names is a 409.
+
+**`shared/pair-capability.ts` owns both the decision and its wording.** The form,
+`prepareDefinition` and `resolveRunTarget` all import it, so a control disabled
+in the UI and a 422 from the API say the same sentence. The rule is *disabled
+with the reason shown, never a run that fails on its first step* — achievable
+only from one module. `saveAvailability` is deliberately more permissive than
+`modeAvailability`: **query mode may be saved but not launched**, because
+`MigrateQueryUseCase` emits no events, so its timeline would stay blank for the
+whole run. Run it from the CLI. A test asserts launching is never laxer than
+saving.
+
+**Preview and launch resolve through the same function.** `resolveRunTarget()`
+is called by both, so the run that starts is the run that was reviewed. Preview
+is strictly read-only and creates nothing — a missing destination database is
+reported (`targetDatabaseExists: false`) and diffed against an empty schema,
+which is what the run does after step 1, rather than refused.
+
+**PostgreSQL raises `23001` for `ON DELETE RESTRICT`, not `23503`.** Both are
+matched in `server/repositories/pg-errors.ts`. Matching only the latter turned a
+409 into a 500 quoting the constraint name, and the unit test asserting the
+assumed code passed the whole time — only a live database found it.
 
 **A run request never names a path on the host.** `simulate: true`, and the
 server resolves the fixture — an earlier version took `simulateFixture` off the

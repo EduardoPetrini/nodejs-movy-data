@@ -66,6 +66,13 @@ async function signOut() {
         <NuxtLink :to="`/o/${orgSlug}/connections`" class="nav" :class="{ on: route.path.endsWith('/connections') }">
           Connections
         </NuxtLink>
+        <NuxtLink
+          :to="`/o/${orgSlug}/definitions`"
+          class="nav"
+          :class="{ on: route.path.endsWith('/definitions') }"
+        >
+          Migrations
+        </NuxtLink>
         <NuxtLink :to="`/o/${orgSlug}/runs`" class="nav" :class="{ on: route.path.includes('/runs') }">
           Runs
         </NuxtLink>

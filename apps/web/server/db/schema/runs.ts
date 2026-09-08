@@ -4,6 +4,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import { organizations } from './orgs';
 import { connections } from './connections';
+import { migrationDefinitions } from './definitions';
 import { users } from './auth';
 
 /**
@@ -37,6 +38,15 @@ export const runs = pgTable(
     id: uuid('id').primaryKey(),
     orgId: uuid('org_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
 
+    /**
+     * Which saved definition produced this run, when one did.
+     *
+     * Nullable because an ad-hoc run is still a first-class run — you should
+     * not have to name and save a migration before you are allowed to try it
+     * once. It is what lets Phase 4 chart the same migration over time.
+     */
+    definitionId: uuid('definition_id'),
+
     // Nullable and ON DELETE SET NULL: deleting a connection must not delete
     // the history of what it did.
     sourceConnectionId: uuid('source_connection_id'),
@@ -47,7 +57,12 @@ export const runs = pgTable(
     targetEngine: text('target_engine').notNull(),
     targetDatabase: text('target_database').notNull(),
 
-    mode: text('mode').$type<'full'>().notNull().default('full'),
+    /**
+     * Copied from the definition rather than assumed, so the column means
+     * something. Only 'full' is launchable today — see
+     * `shared/pair-capability.ts`, which is where the refusal is worded.
+     */
+    mode: text('mode').$type<'full' | 'query'>().notNull().default('full'),
     status: text('status').$type<RunStatus>().notNull().default('queued'),
 
     /** A replayed fixture must never be mistakable for a real migration. */
@@ -83,9 +98,14 @@ export const runs = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
-    // Composite FKs against connections(org_id, id). Attaching another org's
-    // connection to a run is then a database-level error, not something the
-    // repository layer has to remember to forbid.
+    // Composite FKs against the (org_id, id) of each parent. Attaching another
+    // org's connection or definition to a run is then a database-level error,
+    // not something the repository layer has to remember to forbid.
+    foreignKey({
+      columns: [t.orgId, t.definitionId],
+      foreignColumns: [migrationDefinitions.orgId, migrationDefinitions.id],
+      name: 'runs_definition_fk',
+    }).onDelete('set null'),
     foreignKey({
       columns: [t.orgId, t.sourceConnectionId],
       foreignColumns: [connections.orgId, connections.id],
@@ -98,6 +118,9 @@ export const runs = pgTable(
     }).onDelete('set null'),
     // The history list: newest first, one org at a time.
     index('runs_org_created_idx').on(t.orgId, t.createdAt),
+    // "How has this migration behaved over its last ten runs?" — the Phase 4
+    // sparkline, and the reason definition_id is worth carrying at all.
+    index('runs_definition_idx').on(t.orgId, t.definitionId, t.createdAt),
     // "Which runs did this process leave behind?" — asked once on every boot.
     index('runs_status_idx').on(t.status),
   ]
