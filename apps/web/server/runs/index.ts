@@ -9,10 +9,53 @@ import {
   markRunLaunched,
 } from '../repositories/runs.repo';
 import { EventWriter } from './event-writer';
+import { RunHub } from './run-hub';
 import { RunManager } from './run-manager';
+import { TicketStore } from './subscription-ticket';
+import { memberships } from '../db/schema';
+import { memberKey } from './run-hub';
+import { and, eq, or } from 'drizzle-orm';
 
 let manager: RunManager | undefined;
 let writer: EventWriter | undefined;
+let hub: RunHub | undefined;
+let tickets: TicketStore | undefined;
+
+/**
+ * The socket fan-out. Built before the writer, because the writer broadcasts
+ * into it on every successful flush.
+ */
+export function useRunHub(): RunHub {
+  if (!hub) {
+    const db = useDb();
+    hub = new RunHub({
+      // Read per check, never cached: a demotion has to take effect on a live
+      // socket, not at the subscriber's next reconnect. One query for every
+      // subscriber, which is what makes checking every few seconds affordable.
+      resolveRole: async (pairs) => {
+        const found = new Map<string, (typeof memberships.$inferSelect)['role']>();
+        if (pairs.length === 0) return found;
+
+        const rows = await db
+          .select({ orgId: memberships.orgId, userId: memberships.userId, role: memberships.role })
+          .from(memberships)
+          .where(
+            or(...pairs.map((p) => and(eq(memberships.orgId, p.orgId), eq(memberships.userId, p.userId))))
+          );
+
+        for (const row of rows) found.set(memberKey(row.orgId, row.userId), row.role);
+        return found;
+      },
+      onError: (err) => console.error('[runs] hub:', err.message),
+    });
+  }
+  return hub;
+}
+
+export function useTicketStore(): TicketStore {
+  if (!tickets) tickets = new TicketStore();
+  return tickets;
+}
 
 /**
  * One manager per Nitro process, built lazily.
@@ -23,9 +66,14 @@ let writer: EventWriter | undefined;
 export function useRunManager(): RunManager {
   if (!manager) {
     const db = useDb();
+    const runHub = useRunHub();
     writer = new EventWriter(
       { apply: (runId, projection) => applyProjection(db, runId, projection) },
-      { onError: (err, runId) => console.error(`[runs] event write failed for ${runId}:`, err.message) }
+      {
+        onError: (err, runId) => console.error(`[runs] event write failed for ${runId}:`, err.message),
+        // After the durable write, never before — see EventWriter.onFlushed.
+        onFlushed: (runId, projection) => runHub.publish(runId, projection.events.map((e) => e.payload)),
+      }
     );
 
     manager = new RunManager(

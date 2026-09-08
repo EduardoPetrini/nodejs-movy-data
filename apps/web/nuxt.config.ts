@@ -21,6 +21,7 @@ export default defineNuxtConfig({
   //
   // The database drivers are native and must never be bundled.
   nitro: {
+    experimental: { websocket: true },
     externals: {
       external: ['@movy/core', 'pg', 'pg-copy-streams', 'mysql2', 'mssql'],
     },

@@ -179,8 +179,37 @@ because Movy has no resume.
 
 **The two log cohorts live in one predicate**: `mayReadLogs(role)` in
 `run.serializer.ts`. A viewer has `run:read` but not `run:log:read`, so the
-events route asks only for the non-`log` types — there is no filtered-out row to
-leak. The socket rooms must reuse this, not re-decide it.
+events route and the snapshot loader ask only for the non-`log` types — there is
+no filtered-out row to leak. `cohortFor(role)` in `run-hub.ts` is the same
+predicate for the socket rooms.
+
+### The live stream
+
+Nitro's own WebSocket support (`nitro.experimental.websocket`, crossws), not
+Socket.IO — crossws is already a dependency and needs no access to the raw HTTP
+server. Handler: `server/routes/_ws/runs.ts`.
+
+| Module | Purpose |
+|--------|---------|
+| `server/runs/run-hub.ts` | Rooms, fan-out, cohort split, role revalidation. Membership is a plain data structure so isolation is unit-testable. |
+| `server/runs/subscription-ticket.ts` | Single-use, 30s, CSPRNG tickets. Constant-time lookup. |
+| `server/runs/snapshot.ts` | A subscriber's opening state, read with the grant's org id in the WHERE clause. |
+
+**The socket performs no authorisation.** A client POSTs
+`/api/orgs/:slug/runs/:id/ticket` — an ordinary request that has been through
+auth, org resolution, a permission gate and an org-scoped lookup — and redeems
+the result. `roomKey()` is therefore reachable only with a `SubscriptionGrant`,
+so nothing from the wire can reach a room name. Do not add a string-keyed join;
+`socket-isolation.test.ts` asserts the source shape, not only the behaviour.
+
+**Broadcast happens after the durable write** (`EventWriter.onFlushed`). A
+client reads its snapshot from the database and then goes live, so announcing an
+event before it is queryable would leave a hole the client cannot detect. For
+the same reason a peer joins its room *before* its snapshot is read: an overlap
+is a duplicate the client drops by `seq`, which a gap is not.
+
+**A demotion reaches a live socket** within one 5s revalidation interval — one
+batched query for all subscribers, deduplicated per person.
 
 Journals go to `apps/web/.movy/runs/` (`MOVY_JOURNAL_DIR` overrides), each with a
 `.stderr.log` beside it. The runner entry resolves to `@movy/runner`'s built

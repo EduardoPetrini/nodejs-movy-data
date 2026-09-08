@@ -3,8 +3,9 @@
 Working branch: **`feat/monorepo-restructure`** (7 commits ahead of `main`).
 Plan: `~/.claude-personal/plans/let-s-a-web-ui-vectorized-codd.md`.
 
-Phases 0, 1 and 2 are done. **Phase 3a steps 1 and 2 are done** — the runner and
-the RunManager. Steps 3 and 4 (sockets, UI) are next.
+Phases 0, 1 and 2 are done. **Phase 3a steps 1, 2 and 3 are done** — the runner,
+the RunManager and the live event stream. Step 4 (the UI) is next, and every
+server-side piece it needs already works.
 
 > This covers the **web UI** work. `docs/implementation-plan.md` remains the
 > CLI-side plan (engine roadmap, type maps, Pair status) and is unaffected.
@@ -20,7 +21,7 @@ apps/runner/     @movy/runner  the run driver: argv, stdin, signals, IPC, journa
 apps/web/        @movy/web     Nuxt 4: orgs, RBAC, encrypted connections
 ```
 
-`pnpm` workspaces. 932 tests. Coverage 62.04 / 46.46 / 65.94 / 62.82 over core +
+`pnpm` workspaces. 963 tests. Coverage 62.04 / 46.46 / 65.94 / 62.82 over core +
 CLI + runner, ratcheted upward only; `apps/web` ratchets separately so a young
 app neither dilutes the core number nor hands it a free jump.
 
@@ -81,6 +82,17 @@ this key is the whole reason that is safe. Do not add an id column.
 exists after the host dies; only `process.connected` tells the truth. Every
 IPC call in the runner is guarded on it. Removing those guards silently reverts
 the journal from a system of record to a log of whatever the host was awake for.
+
+**Nothing the client sends may reach a room name.** `roomKey()` takes a
+`SubscriptionGrant`, and only ticket redemption produces one. The socket
+performs no authorisation of its own; it redeems a decision made by an ordinary
+HTTP request. Adding a string-keyed join would undo the entire guarantee, and
+`socket-isolation.test.ts` asserts the source shape for that reason.
+
+**Broadcast only after the durable write.** A client loads its snapshot from the
+database and then goes live. If an event were announced before it were
+queryable, everything between those two moments would be invisible to that
+client — and a gap it was never told about is one it cannot recover from.
 
 **Serializers build up, never tear down.** There is no `delete row.secret`
 anywhere — a field that is never copied cannot be forgotten.
@@ -239,18 +251,86 @@ real parent process to really die. `apps/runner/tests/process/host-death.test.ts
 now pins it: fork detached, kill the host mid-replay, assert the orphan writes
 its remaining journal and records its own terminal event.
 
-## Next: Phase 3a steps 3-4
+## Phase 3a step 3 — the live stream (done)
 
-1. Socket.IO under Nitro with **org-scoped rooms** and the two log cohorts
-   (`:full` for editor/admin, `:redacted` for viewer). The cohort predicate
-   already exists — `mayReadLogs(role)` in `run.serializer.ts`, used by the
-   events route. Reuse it rather than re-deciding. Timebox the Nitro
-   integration to half a day; the sidecar fallback is designed for.
-2. `run-reducer.ts` (pure, outside the store) plus `RunTimeline`,
-   `TableProgressGrid`, `LogStream`, all driven by the simulator. The REST
-   catch-up cursor (`GET .../runs/:id/events?afterSeq=`) is the same cursor the
-   socket hands a reconnecting client, so both paths agree on what "missed"
-   means.
+**Not Socket.IO.** Nitro's own WebSocket support (crossws) is already a
+dependency and works in dev; Socket.IO would have meant a new runtime dep plus
+attaching to the raw HTTP server behind Nuxt's dev proxy — exactly the
+integration risk the half-day timebox was hedging. The sidecar fallback was not
+needed. `nitro.experimental.websocket` is on, and the handler is
+`server/routes/_ws/runs.ts`.
+
+**Subscriptions are authorised over HTTP, never on the socket.** A client POSTs
+`/api/orgs/:slug/runs/:id/ticket` — an ordinary request that has already been
+through `01.auth`, `02.org` (membership and role, read fresh), a
+`requirePermission` gate and an org-scoped lookup — and gets a single-use,
+30-second ticket. The socket redeems it and decides nothing.
+
+The alternative was unsealing the session cookie at the upgrade. The cookie *is*
+readable there, but `getUserSession()` needs a real `H3Event` and there is none,
+so it would have meant reimplementing nuxt-auth-utils' unsealing inside the
+socket layer and then re-resolving org and role a second way. Two
+implementations of "who is this and what may they see" is how the second one
+ends up wrong.
+
+The ticket also buys the property that matters most here: **`roomKey()` is
+reachable only with a `SubscriptionGrant`**, and only ticket redemption produces
+one. There is no path from anything on the wire to a room name — which is the
+leak `socket-isolation.test.ts` was written to catch, and it asserts the shape
+of the source, not just the behaviour.
+
+- **Broadcast happens after the durable write**, never before — `EventWriter`'s
+  `onFlushed`. Announcing first would leave every event between a client's
+  snapshot read and the next flush invisible to it, and a client cannot detect
+  a hole it was never told about.
+- **A peer joins its room before its snapshot is read**, so an event landing
+  during the read is duplicated rather than dropped. The client de-dupes by
+  `seq`; a gap it could not.
+- **Cohorts are rooms, not a per-message filter.** The redacted room gets
+  everything except `log`, so a new event type added to the core reaches
+  viewers instead of silently vanishing from their timeline.
+- **A demotion reaches a live socket.** The hub re-reads every subscriber's role
+  every 5s and moves or evicts them. The check is one batched query for all
+  subscribers, deduplicated per person — which is what makes an interval that
+  short affordable. Measured live: `cohort_changed` at 5.0s, two further log
+  lines in the window, zero after.
+
+Verified against the live server: an editor and a viewer watching the same run
+received 118 and 43 events respectively — all 75 log lines to the editor, none
+to the viewer, both gapless. Forged, spent, absent and malformed tickets are all
+refused with one indistinguishable message, so the socket is not an oracle for
+which runs exist. A valid viewer ticket sent with `cohort: 'full'`, `orgId`,
+`runId` and `room` fields attached ignored every one of them.
+
+### The bug this step found
+
+**`EventWriter.flush()` did not wait for a write that was already in flight.**
+It looked only at the buffer, so it resolved immediately whenever a batch was
+mid-write. `RunManager` awaits that flush before settling a run, meaning a run
+could be marked finished before its last events were stored — and the socket
+work made it visible, because "durably stored" became something another
+component depended on rather than an internal detail.
+
+## Next: Phase 3a step 4 — the UI
+
+`run-reducer.ts` (pure, outside the store) plus `RunTimeline`,
+`TableProgressGrid` and `LogStream`, all driven by the simulator.
+
+The wire contract is settled and exercised:
+
+| Frame | Meaning |
+|-------|---------|
+| `{k:'hello'}` | connected, nothing authorised yet |
+| `{k:'subscribe', ticket}` | client -> server, the only message accepted |
+| `{k:'snapshot', run, steps, tables, events, lastSeq}` | opening state |
+| `{k:'events', runId, events[]}` | live batch, ordered, may repeat a seq |
+| `{k:'cohort_changed', cohort}` | role changed under you |
+| `{k:'revoked', reason}` | membership gone; socket closes |
+| `{k:'error', message}` | refused; socket closes |
+
+The reducer must **de-duplicate by `seq`** — the snapshot and the first live
+batch can overlap by design — and take the run's outcome from the
+`run_finished` event rather than from the last frame.
 
 Demo for 3a: click Run, watch a simulated migration draw itself, kill the dev
 server mid-run, restart, and watch the UI re-attach and catch up. **The server

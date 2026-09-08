@@ -1,4 +1,4 @@
-import { useEventWriter, useRunManager } from '~~/server/runs';
+import { useEventWriter, useRunHub, useRunManager } from '~~/server/runs';
 
 /**
  * Re-attach to runs this host left behind.
@@ -31,6 +31,7 @@ export default defineNitroPlugin((nitro) => {
   nitro.hooks.hook('close', async () => {
     // Detach without killing: the runs outlive us, on purpose.
     manager.shutdown();
+    useRunHub().close();
     await useEventWriter().close();
   });
 });
