@@ -5,6 +5,22 @@ const { data: me } = await useFetch('/api/me')
 
 const orgSlug = computed(() => route.params.orgSlug as string | undefined)
 const activeOrg = computed(() => me.value?.orgs.find((o) => o.slug === orgSlug.value))
+const orgs = computed(() => me.value?.orgs ?? [])
+const mayReadMembers = computed(() => activeOrg.value?.permissions.includes('member:read') ?? false)
+
+/**
+ * Switching org keeps you on the same kind of page rather than dumping you at
+ * a fixed landing — but only the section, never the id: run `abc` in one org
+ * has no counterpart in another, and asking for it would 404.
+ */
+const section = computed(() => {
+  const path = route.path.split('/')
+  return orgSlug.value ? (path[3] ?? 'connections') : 'connections'
+})
+
+function switchOrg(slug: string) {
+  if (slug !== orgSlug.value) navigateTo(`/o/${slug}/${section.value}`)
+}
 
 async function signOut() {
   await $fetch('/api/auth/logout', { method: 'POST' })
@@ -22,8 +38,19 @@ async function signOut() {
       </div>
 
       <nav v-if="activeOrg" class="crumbs" aria-label="Organisation">
-        <span class="org mv-mono">{{ activeOrg.slug }}</span>
+        <label class="sr-only" for="org-switcher">Organisation</label>
+        <select
+          v-if="orgs.length > 1"
+          id="org-switcher"
+          class="switcher mv-mono"
+          :value="activeOrg.slug"
+          @change="switchOrg(($event.target as HTMLSelectElement).value)"
+        >
+          <option v-for="o in orgs" :key="o.slug" :value="o.slug">{{ o.name }}</option>
+        </select>
+        <span v-else class="org mv-mono">{{ activeOrg.slug }}</span>
         <span class="role mv-label">{{ activeOrg.role }}</span>
+        <NuxtLink to="/orgs/new" class="newOrg" title="New organisation">+ New</NuxtLink>
       </nav>
 
       <div class="spacer" />
@@ -41,6 +68,14 @@ async function signOut() {
         </NuxtLink>
         <NuxtLink :to="`/o/${orgSlug}/runs`" class="nav" :class="{ on: route.path.includes('/runs') }">
           Runs
+        </NuxtLink>
+        <NuxtLink
+          v-if="mayReadMembers"
+          :to="`/o/${orgSlug}/members`"
+          class="nav"
+          :class="{ on: route.path.endsWith('/members') }"
+        >
+          People
         </NuxtLink>
         <span class="nav soon">Compare<em>Phase 5</em></span>
       </aside>
@@ -65,6 +100,19 @@ async function signOut() {
 
 .crumbs { display: flex; align-items: center; gap: var(--mv-s-2); }
 .org { font-size: var(--mv-fs-xs); color: var(--mv-fg-muted); }
+.switcher {
+  padding: 2px var(--mv-s-2); max-width: 180px;
+  border: 1px solid var(--mv-line); border-radius: var(--mv-r-md);
+  background: var(--mv-bg-raised); color: var(--mv-fg);
+  font-size: var(--mv-fs-xs); font-family: inherit;
+}
+.switcher:focus-visible { outline: 2px solid var(--mv-focus); outline-offset: 1px; }
+.newOrg { font-size: var(--mv-fs-micro); color: var(--mv-fg-subtle); text-decoration: none; }
+.newOrg:hover { color: var(--mv-accent); }
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
 .role {
   padding: 1px 6px; border-radius: var(--mv-r-sm);
   background: var(--mv-accent-dim); color: var(--mv-accent);

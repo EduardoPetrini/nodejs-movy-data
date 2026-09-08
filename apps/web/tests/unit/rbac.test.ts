@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { H3Event } from 'h3';
 import {
-  ROLE_PERMISSIONS, hasPermission, requireOrgRole, requirePermission,
+  ROLE_PERMISSIONS, hasPermission, requireOrgRole, requirePermission, parseRole, ORG_ROLES,
   type OrgContext, type Permission,
 } from '../../server/utils/rbac';
 
@@ -84,5 +84,31 @@ describe('requirePermission', () => {
         expect(statusOf(() => requirePermission(eventWith(role), p)) === undefined).toBe(allowed);
       }
     }
+  });
+});
+
+describe('parseRole', () => {
+  it('accepts exactly the three roles', () => {
+    for (const role of ORG_ROLES) expect(parseRole(role)).toBe(role);
+  });
+
+  it('rejects anything else with 400, rather than inventing a fourth role', () => {
+    for (const bad of ['owner', 'ADMIN', '', null, undefined, 3, {}]) {
+      expect(statusOf(() => parseRole(bad)), String(bad)).toBe(400);
+    }
+  });
+});
+
+describe('member permissions', () => {
+  it('keeps the member list away from viewers', () => {
+    // A viewer sees past executions and reports. Who else is in the org, and
+    // at what address, is not that.
+    expect(hasPermission('viewer', 'member:read')).toBe(false);
+    expect(hasPermission('editor', 'member:read')).toBe(true);
+  });
+
+  it('lets only an admin change a membership', () => {
+    expect(hasPermission('editor', 'member:manage')).toBe(false);
+    expect(hasPermission('admin', 'member:manage')).toBe(true);
   });
 });

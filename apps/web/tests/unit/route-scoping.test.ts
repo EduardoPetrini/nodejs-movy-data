@@ -14,6 +14,12 @@ const UNSCOPED_ALLOWLIST = new Set([
   'pairs.get.ts',        // static engine capability matrix, no org data
   'auth/login.post.ts',  // pre-session by definition
   'auth/logout.post.ts',
+  // The three acts that cannot be org-scoped, because they are what produces
+  // a scope: creating an org, and looking at or redeeming an invitation to one
+  // you are not a member of yet.
+  'orgs/index.post.ts',
+  'invitations/preview.post.ts',
+  'invitations/accept.post.ts',
 ]);
 
 function walk(dir: string): string[] {
@@ -72,6 +78,17 @@ describe('API route scoping', () => {
     const UNSCOPED_HELPERS = /\b(applyProjection|markRunLaunched|finaliseRunIfUnsettled|findUnsettledRuns)\b/;
     const offenders = routes.filter((r) => UNSCOPED_HELPERS.test(readFileSync(join(API_DIR, r), 'utf8')));
     expect(offenders, `calls an unscoped ingestion helper: ${offenders.join(', ')}`).toEqual([]);
+  });
+
+  it('never reaches the unscoped onboarding helpers from an org-scoped route', () => {
+    // orgs.repo.ts takes a user and no org, because its callers have no org
+    // yet. Reaching it from inside /orgs/[orgSlug]/ would be an org-scope
+    // bypass wearing a repository's name — the same hole the ingestion-helper
+    // rule above closes for runs.
+    const offenders = routes
+      .filter((r) => r.startsWith('orgs/[orgSlug]/'))
+      .filter((r) => /orgs\.repo/.test(readFileSync(join(API_DIR, r), 'utf8')));
+    expect(offenders, `imports the unscoped orgs repository: ${offenders.join(', ')}`).toEqual([]);
   });
 
   it('never reaches the database outside the org-scoped repository layer', () => {

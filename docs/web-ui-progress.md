@@ -1,14 +1,81 @@
 # Web UI — progress and handoff
 
-Working branch: **`feat/monorepo-restructure`** (7 commits ahead of `main`).
+Working branch: **`feat/monorepo-restructure`**.
 Plan: `~/.claude-personal/plans/let-s-a-web-ui-vectorized-codd.md`.
-
-**Phase 3a is done.** The runner, the RunManager, the live event stream and the
-UI. Click Run, watch a migration draw itself, kill the dev server mid-run,
-restart, and watch it catch up — all of it works end to end.
 
 > This covers the **web UI** work. `docs/implementation-plan.md` remains the
 > CLI-side plan (engine roadmap, type maps, Pair status) and is unaffected.
+
+## Working agreement — keep this file true
+
+**This file is the handoff.** Whoever picks the work up next reads it instead of
+re-deriving the state from the diff, so it is updated twice per phase, not once
+at the end:
+
+1. **When a phase starts** — flip its row in the status board to `IN PROGRESS`,
+   date it, and write down what "done" will mean for it.
+2. **When a phase completes** — flip the row to `DONE`, move the detail into a
+   `## Phase N — …` section below (decisions that are load-bearing, bugs the
+   work found, what was verified and how), and re-cut the *Remaining work* list.
+
+A phase abandoned or descoped is recorded too, with the reason. An unrecorded
+phase is indistinguishable from one that was never started.
+
+## Status board
+
+*Last reviewed: 2026-09-08. 1032 tests, 76 files, green.*
+
+| Phase | State | Notes |
+|-------|-------|-------|
+| 0 — monorepo restructure | **DONE** | three workspaces, history preserved |
+| 1 — core made drivable | **DONE** | event contract, sinks, `--json-events` |
+| 2 — web shell, auth, orgs, connections | **DONE** (2026-09-08) | org creation, members, invitations, org switcher |
+| 3a — live timeline, simulated | **DONE** | runner, RunManager, socket, UI |
+| 3b — real runs | **PART** | the pipe works; the surface around it does not |
+| 4 — history, replay, stats, drift | **TODO** | nothing built |
+| 5 — hardening | **TODO** | light theme + reduced-motion landed early |
+
+### Remaining work
+
+**Phase 3b — real runs.** The runner already executes a real
+`MigrationOrchestrator` (`apps/runner/src/execute.ts:34`) and `POST …/runs`
+decrypts both connections onto the child's stdin, so a real run is one
+un-ticked checkbox away. Missing around it:
+
+- **Definitions CRUD** — no `definitions` table; a run is assembled ad hoc from
+  two `<select>`s and nothing is saved or repeatable.
+- **PairSelector** — `server/api/pairs.get.ts` exists and *no client calls it*,
+  so planned engines are not disabled and query mode is neither offered nor
+  explained. The plan requires the reason to be shown, never a runtime failure.
+- **Preview** — `POST …/preview/diff`, the plan/diff review before launch.
+- **Query mode** — `mode` is hardcoded `'full'` in `runs/index.post.ts`.
+- **A real PG→PG run through the web app has not been verified.** 3a was
+  verified live and written up; the real path has not been.
+
+**Phase 4 — nothing built.** Keyset pagination + sparklines on the run ledger
+(today: a plain list on a 3s poll), `validation_runs` + the compare page +
+`CountComparisonTable`, `SchemaDiffView`, `/api/stats/summary` and an org
+dashboard — there is no org home page at all; sign-in lands on `/connections`.
+
+**Phase 5 — nothing except the theme work.** Full `AbortSignal` plumbing +
+`WorkerPool.terminate()`, retention task, per-run event cap, heartbeat
+watchdog, an error taxonomy (auth failure vs unreachable host vs missing
+permission), keyboard-navigation and focus-ring pass, ratchet coverage toward
+80 % (now 62.04 / 46.46 / 65.94 / 62.82), and the docs: ADR 0002 (run
+execution), ADR 0003 (org tenancy), `CONTEXT.md` (Org, Run, Timeline are still
+undefined there), `README.md`. `CLAUDE.md` is current.
+
+**Verification gaps.** No Playwright and no E2E anywhere in the repo, so the
+plan's end-to-end gate (sign in → org → connection → run → reload mid-run →
+catch up) is unwritten. There is also **no credential-redaction test**, which
+the plan calls the worst plausible bug in this project. Google SSO is wired but
+needs `NUXT_OAUTH_GOOGLE_CLIENT_ID` / `SECRET`.
+
+**Known bugs, tracked.** [#5](https://github.com/EduardoPetrini/nodejs-movy-data/issues/5)
+query migration crashes on a non-PostgreSQL destination,
+[#4](https://github.com/EduardoPetrini/nodejs-movy-data/issues/4) `MssqlQueryAnalyzer`
+unreachable, [#3](https://github.com/EduardoPetrini/nodejs-movy-data/issues/3)
+MSSQL sequence reset assumes an `id` column.
 
 ---
 
@@ -21,7 +88,7 @@ apps/runner/     @movy/runner  the run driver: argv, stdin, signals, IPC, journa
 apps/web/        @movy/web     Nuxt 4: orgs, RBAC, encrypted connections
 ```
 
-`pnpm` workspaces. 994 tests. Coverage 62.04 / 46.46 / 65.94 / 62.82 over core +
+`pnpm` workspaces. 1032 tests. Coverage 62.04 / 46.46 / 65.94 / 62.82 over core +
 CLI + runner, ratcheted upward only; `apps/web` ratchets separately so a young
 app neither dilutes the core number nor hands it a free jump.
 
@@ -45,6 +112,10 @@ optional `ssl`/`schema` on `ConnectionConfig`.
 Orgs, three roles, encrypted connections, the design system, and connections
 CRUD + test + database/table listing. Verified end to end against the live
 PostgreSQL server.
+
+**Closed 2026-09-08** with the half that was missing: an org could be reached
+but never created, and the `invitations` table was referenced by nothing. Full
+write-up under *Phase 2 — onboarding* below.
 
 ---
 
@@ -173,6 +244,121 @@ pnpm seed:dev       # admin@ / editor@ / viewer@movy.local, password movy-dev
 ```
 
 Sign in as the viewer to watch the write paths disappear.
+
+---
+
+## Phase 2 — onboarding (done)
+
+Closed on 2026-09-08. Two unscoped routes, five org-scoped ones, three pages
+and an org switcher — the half of Phase 2 that the connections work had
+skipped over.
+
+| Surface | Purpose |
+|---------|---------|
+| `POST /api/orgs` | Create an org; the caller becomes its admin, in one transaction |
+| `GET …/members` | Members always; outstanding invitations only for an admin |
+| `PATCH …/members/:userId` | Change a role |
+| `DELETE …/members/:userId` | Remove a member (or leave) |
+| `POST …/invitations` | Mint an invitation; the link is in this response and nowhere else |
+| `DELETE …/invitations/:id` | Revoke |
+| `POST /api/invitations/preview` | What a link leads to, before committing |
+| `POST /api/invitations/accept` | Redeem it |
+
+Pages: `/orgs/new`, `/o/:slug/members`, `/invite/:token`; plus the org switcher
+in the header, a `People` rail entry gated on `member:read`, and a `/no-access`
+page that now offers a way out instead of only explaining the dead end.
+
+### Decisions that are load-bearing
+
+**Three routes cannot be org-scoped, and that is stated in the test rather
+than in a comment.** Creating an org and redeeming an invitation are the acts
+that *produce* a scope, so `orgs.repo.ts` takes a user and no org id. It is
+therefore the one module that could reintroduce the cross-tenant hole the
+repository wall closes — so `route-scoping.test.ts` fails if anything under
+`orgs/[orgSlug]/` imports it, exactly as it already does for the unscoped run
+ingestion helpers.
+
+**An org can never be left without an administrator.** `wouldOrphanOrg()` is a
+pure predicate consulted by both the demote and the remove path; an org with no
+admin cannot be repaired from inside the product, because nobody left can
+invite or promote. The UI disables the control *and* names the reason, and the
+server refuses independently.
+
+**An invitation admits one address, once.** The row stores only a sha256 of a
+256-bit token; acceptance is inside a transaction that takes `FOR UPDATE` on
+the invitation, so two people redeeming the same link cannot both pass the
+status check. The address is compared case-insensitively, so a link that
+escapes into a group chat still admits only its recipient.
+
+**An invitation never changes an existing member's role.** Acceptance is
+`ON CONFLICT DO NOTHING`. Otherwise an invite issued for a viewer would be a
+way to strip an admin of their own org — a demotion instrument wearing a
+welcome message.
+
+**The preview does not return the invited address.** It answers *which org,
+which role, does it match you* — because whoever ends up holding a leaked link
+would otherwise learn a colleague's email from it.
+
+**Re-inviting replaces the outstanding invitation** rather than adding a second
+one. `(org_id, email)` is unique, and every extra live token is another way in.
+
+**Revoking is a state change, not a delete.** Who invited whom, and that it was
+withdrawn, is the sort of thing an org needs to be able to look up.
+
+**`shared/org-slug.ts`, not two slug rules.** The client previews the slug while
+you type and the server validates it; one declaration, the same reasoning as
+`run-wire.ts`. It folds diacritics rather than dropping them — `Ácme` becomes
+`acme`, not `cme`, which would be a different organisation wearing a similar
+name — and refuses the words the app already owns (`new`, `api`, `o`, …).
+
+**`?next=` survives the sign-in bounce, through `safeNext()`.** An invitation
+link opened while signed out has to come back after login, and an unchecked
+`next` is an open redirect handing someone who just typed their password to a
+lookalike site. Only a path on this origin survives, and `//host` does not.
+
+### The bugs this step found
+
+1. **A duplicate slug returned 500 with the failing SQL in the body.** Drizzle
+   wraps the driver error in its own `DrizzleQueryError`, so the pg code sits on
+   `cause`; reading `err.code` alone matched nothing. `isUniqueViolation()` now
+   walks the chain (bounded, so a self-referencing `cause` cannot loop), and
+   `unique-violation.test.ts` pins both shapes.
+
+2. **Every valid invitation rendered as "That invitation link is not valid".**
+   The preview ran through a plain `$fetch` during SSR, which does not forward
+   the incoming request's cookies, so it 401'd on the server and the page only
+   ever saw the failure — the exact trap `auth.global.ts` documents two files
+   away. `useRequestFetch()` fixes it. **Neither this nor the one above could
+   fail a unit test**; both needed a browser and a real database.
+
+3. **A hydration mismatch on every date.** `toLocaleDateString()` resolves
+   against Node's locale on the server and the browser's on the client:
+   `2026-09-07` against `9/7/2026`. Pinned to `en-CA` on the members page.
+   *`app/pages/o/[orgSlug]/runs/index.vue` still has this*, via `toLocaleString`
+   — same fix, not made here because it is outside this step.
+
+### Verified against the live server
+
+Sign in, create an org, and it appears in `/api/me` as admin. Reserved slug
+`new` → 400; duplicate `acme` → 409; role `owner` → 400; inviting an existing
+member → 409. An editor listing members sees the three people and no
+invitations, and gets 403 on invite; a viewer gets 403 on the member list
+entirely, and 404 — never 403 — for an org they do not belong to. An
+invitation previewed by the wrong person does not disclose the invited address
+and cannot be redeemed; the intended recipient joins, and the same token then
+returns 410. Demoting or removing the last admin returns 409 both times, and
+succeeds once a second admin exists. A revoked token returns 410, and a
+member id from another org returns 404.
+
+In a browser at 1440 and 375, in dark theme, as admin and as editor: the invite
+panel shows the link once with the warning that it is shown once, the role
+selects and the Leave button are disabled on the last admin with the reason in
+their `title`, and the editor sees a read-only list with no invitations
+section. No console errors and no hydration warnings.
+
+The verification data (an `initech-data` org and two invitations) was deleted
+afterwards; the dev database is back to `acme` + `globex` as `pnpm seed:dev`
+leaves it.
 
 ---
 
@@ -419,6 +605,9 @@ design, and nothing else catches it.
   partially applied — say that in the UI too.
 - **`maxConcurrentRuns` is per org and defaults to 1.** A second launch gets a
   409. That is also what stops two runs clearing each other's destination.
+- **`runs/index.vue` renders dates through `toLocaleString()`**, which resolves
+  against Node's locale on the server and the browser's on the client and warns
+  on hydration. `members.vue` pins `en-CA`; do the same there.
 - **Composite FKs on `runs` need PostgreSQL 15+.** `0001` uses the
   column-scoped `ON DELETE SET NULL (<column>)`, hand-edited because drizzle-kit
   emits a bare `SET NULL` that would try to null `org_id`. `migration-sql.test.ts`

@@ -1,10 +1,17 @@
 <script setup lang="ts">
+import { safeNext } from '../utils/safe-next'
+
 definePageMeta({ layout: false })
 
 // nuxt-auth-utils keeps loggedIn/user in client state, populated by this fetch.
 // The POST below only sets the cookie, so without refreshing that state the
 // global middleware still sees a signed-out user and bounces straight back here.
 const { fetch: refreshSession } = useUserSession()
+
+// Where the visitor was headed before they were bounced here — an invitation
+// link, most often. Validated, because an unchecked `next` is an open redirect.
+const route = useRoute()
+const next = computed(() => safeNext(route.query.next) ?? '/')
 
 const email = ref('')
 const password = ref('')
@@ -17,7 +24,7 @@ async function signIn() {
   try {
     await $fetch('/api/auth/login', { method: 'POST', body: { email: email.value, password: password.value } })
     await refreshSession()
-    await navigateTo('/', { replace: true })
+    await navigateTo(next.value, { replace: true })
   } catch (err) {
     error.value = (err as { statusMessage?: string }).statusMessage ?? 'Sign-in failed.'
   } finally {

@@ -1,7 +1,15 @@
+import { safeNext } from '../utils/safe-next'
+
 /**
- * Three redirects: unauthenticated to /login, a signed-in user with no org to
- * /no-access (onboarding is invite-only), and / to the active org.
+ * Four redirects: unauthenticated to /login (remembering where they were
+ * going), a signed-in user with no org to /no-access, and / to the active org.
+ *
+ * `/invite/…` and `/orgs/new` are deliberately exempt from the no-org bounce:
+ * they are the two ways out of having no org, so bouncing them would trap
+ * exactly the person they exist for.
  */
+const NO_ORG_EXEMPT = ['/invite/', '/orgs/new']
+
 export default defineNuxtRouteMiddleware(async (to) => {
   const { loggedIn } = useUserSession()
   // Plain $fetch does not forward the incoming request's cookies during SSR, so
@@ -10,8 +18,13 @@ export default defineNuxtRouteMiddleware(async (to) => {
   const requestFetch = useRequestFetch()
   const isPublic = to.path === '/login' || to.path.startsWith('/auth')
 
-  if (!loggedIn.value) return isPublic ? undefined : navigateTo('/login')
-  if (isPublic) return navigateTo('/')
+  if (!loggedIn.value) {
+    if (isPublic) return
+    return navigateTo(`/login?next=${encodeURIComponent(to.fullPath)}`)
+  }
+  if (isPublic) return navigateTo(safeNext(to.query.next) ?? '/')
+
+  if (NO_ORG_EXEMPT.some((prefix) => to.path.startsWith(prefix))) return
 
   if (to.path === '/' || to.path === '/no-access') {
     const me = await requestFetch<{ orgs: Array<{ slug: string }> }>('/api/me').catch(() => null)

@@ -38,6 +38,19 @@ export const ROLE_PERMISSIONS: Record<OrgRole, readonly Permission[]> = {
 
 const RANK: Record<OrgRole, number> = { viewer: 1, editor: 2, admin: 3 };
 
+export const ORG_ROLES = ['admin', 'editor', 'viewer'] as const;
+
+/** One place that turns request input into a role, so no route invents a fourth. */
+export function parseRole(value: unknown): OrgRole {
+  if (typeof value === 'string' && (ORG_ROLES as readonly string[]).includes(value)) {
+    return value as OrgRole;
+  }
+  throw createError({
+    statusCode: 400,
+    statusMessage: `"role" must be one of ${ORG_ROLES.join(', ')}.`,
+  });
+}
+
 export interface OrgContext {
   orgId: string;
   orgSlug: string;
