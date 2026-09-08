@@ -9,9 +9,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 # Run the CLI
-pnpm start                   # runs @movy/cli (ts-node, no build step)
+pnpm start                   # runs @movy/cli (tsx, no build step)
 pnpm dev                     # CLI with hot reload
 pnpm dev:web                 # Nuxt app on :3000
+
+# Replay a recorded run through the runner — no database needed
+pnpm simulate --journal /tmp/run.ndjson \
+  --simulate apps/runner/fixtures/pg-to-pg-315k.ndjson \
+  --run-id demo --speed 0.05
 
 # Build
 pnpm build                   # tsc -b across workspaces + Nuxt build
@@ -146,6 +151,35 @@ viewers.
 
 `--json-events[=<path>]` on the CLI records the stream as NDJSON beside the log file.
 
+### The runner (@movy/runner)
+
+`apps/runner` is forked once per run by the web app. It owns what the core
+refuses to: argv, stdin, signals, IPC framing, the NDJSON journal and exit codes.
+See `apps/runner/README.md` for the full contract.
+
+```bash
+movy-runner --journal <path> [--run-id <id>] < spec.json          # real run
+movy-runner --journal <path> --simulate <fixture> --run-id <id>   # replay
+```
+
+**The run spec arrives on stdin, never in argv.** `ps` is world-readable and the
+spec carries two database passwords. `RunSpecError` names the offending field
+and never its value, because that message is sent to the host as a `fatal`.
+
+**The journal is the system of record; IPC is a copy.** The runner is forked
+`detached`, so it outlives a host restart. Every event is written to the file
+*before* `process.send()`, and the host re-attaches by reading forward from the
+last `seq` it stored — a missing IPC message is never a missing event.
+
+**Exit codes**: 0/1/2 are succeeded/failed/cancelled, so a host that lost its
+channel can still classify the run; 64 (bad argv or spec) and 70 (the runner
+itself broke) mean the run never started.
+
+`--simulate` replays a recorded journal — `runId` and `at` rewritten, `seq`
+preserved — through the identical `publish()` path a real run uses. That is how
+the web timeline is built and tested before a database is involved. Recorded
+events bypass `composeSink`, since a second `SeqSink` would renumber them.
+
 ### Data migration — migrator selection
 
 `registry.getDataMigrator(source, dest)` selects:
@@ -190,7 +224,8 @@ Default-value translation is delegated to `DefaultValueTranslator`, injected int
 
 ### Tests
 
-- Unit tests live in `packages/core/tests/unit/` (plus `apps/cli/tests/unit/`) and are the only tests currently implemented.
+- Unit tests live in `packages/core/tests/unit/`, `apps/cli/tests/unit/`, `apps/runner/tests/unit/` and `apps/web/tests/unit/`.
+- `apps/runner/tests/process/` forks the real runner binary (detached, with IPC) and asserts the contract the web app depends on. It needs no database.
 - Integration tests directory exists (`packages/core/tests/integration/`) with a README explaining they require real DB connections and are not automated.
 - `packages/core/tests/helpers/mock-database.ts` provides shared mock `IDatabaseConnection` for unit tests.
 - Tests use **Vitest** with `globals: true`, `pool: 'forks'`.

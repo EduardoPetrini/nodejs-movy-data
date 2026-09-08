@@ -8,8 +8,8 @@
     "movy": "dist/main.js"
   },
   "scripts": {
-    "start": "ts-node -r tsconfig-paths/register --project tsconfig.dev.json src/main.ts",
-    "dev": "ts-node-dev -r tsconfig-paths/register --project tsconfig.dev.json --respawn src/main.ts",
+    "start": "tsx --tsconfig tsconfig.dev.json src/main.ts",
+    "dev": "tsx watch --tsconfig tsconfig.dev.json src/main.ts",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.test.json"
   },

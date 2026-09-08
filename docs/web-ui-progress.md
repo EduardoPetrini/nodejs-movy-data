@@ -1,9 +1,10 @@
 # Web UI — progress and handoff
 
-Working branch: **`feat/monorepo-restructure`** (6 commits ahead of `main`, tree clean).
+Working branch: **`feat/monorepo-restructure`** (7 commits ahead of `main`).
 Plan: `~/.claude-personal/plans/let-s-a-web-ui-vectorized-codd.md`.
 
-Phases 0, 1 and 2 are done. Phase 3a is next.
+Phases 0, 1 and 2 are done. **Phase 3a step 1 (the runner) is done**; steps 2-4
+are next.
 
 > This covers the **web UI** work. `docs/implementation-plan.md` remains the
 > CLI-side plan (engine roadmap, type maps, Pair status) and is unaffected.
@@ -15,13 +16,13 @@ Phases 0, 1 and 2 are done. Phase 3a is next.
 ```
 packages/core/   @movy/core    the hexagon; CommonJS, no I/O entry points
 apps/cli/        @movy/cli     the original interactive CLI
-apps/runner/     @movy/runner  scaffold only — Phase 3 fills it in
+apps/runner/     @movy/runner  the run driver: argv, stdin, signals, IPC, journal
 apps/web/        @movy/web     Nuxt 4: orgs, RBAC, encrypted connections
 ```
 
-`pnpm` workspaces. 795 tests. Core coverage 60.17 / 42.44 / 64.22 / 60.93,
-ratcheted upward only; `apps/web` ratchets separately so a young app neither
-dilutes the core number nor hands it a free jump.
+`pnpm` workspaces. 854 tests. Coverage 62.04 / 46.46 / 65.94 / 62.82 over core +
+CLI + runner, ratcheted upward only; `apps/web` ratchets separately so a young
+app neither dilutes the core number nor hands it a free jump.
 
 ### Phase 0 — monorepo restructure
 Split `src/` into three workspaces. 106 renames, so `git log --follow` still
@@ -107,6 +108,13 @@ database. Mocks could not have caught any of them.
 
 4. **Nuxt dev returned 500 on every route** — see the CommonJS note above.
 
+5. **`pnpm start` had been broken since `e8c33ea`.** That commit gave core's
+   relative specifiers explicit `.js` extensions — correct for the emitted
+   output, but ts-node's CommonJS resolver takes `./x.js` literally and cannot
+   fall back to `./x.ts`. So the CLI's own documented dev command failed on this
+   branch. Fixed by moving `start` / `dev` / `simulate` to **tsx**, which does
+   that remapping; `ts-node`, `ts-node-dev` and `tsconfig-paths` are gone.
+
 ---
 
 ## Environment
@@ -135,24 +143,47 @@ Sign in as the viewer to watch the write paths disappear.
 
 ---
 
-## Next: Phase 3a
+## Phase 3a step 1 — the runner (done)
 
-The long pole, and the only slice needing new infrastructure. Build it against
-the **recorded fixture** before a database is involved:
+`apps/runner` is now the real thing. Full contract in `apps/runner/README.md`.
 
-`apps/runner/fixtures/pg-to-pg-315k.ndjson` — a real run: 118 events, `seq`
-1..118 gapless, 9/9 steps ok, overall 0.6% → 100.0% monotonic, terminal
-`succeeded`. Checked for credentials before committing.
+- `--simulate <fixture> --speed <n>` replays a recording at the recorded pace
+  (`0.05` = 20x slower, for watching a demo). `runId` and `at` are rewritten,
+  `seq` is preserved, and both modes funnel through one `publish()` — so nothing
+  downstream can tell a simulated run from a real one.
+- **The run spec arrives on stdin, not argv.** `ps` is world-readable and the
+  spec carries two passwords. `RunSpecError` names the field, never the value.
+- **The journal is written before IPC**, always. The runner forks `detached`, so
+  it outlives a host restart; the host re-attaches from the file.
+- Exit codes 0/1/2 = succeeded/failed/cancelled; 64/70 = never started.
+- SIGTERM, SIGINT and IPC `{k:'cancel'}` all abort the same controller.
+- `tests/process/` forks the real binary detached with IPC and asserts the whole
+  contract. No database needed.
 
-1. `apps/runner`: `--simulate <fixture>` replaying with realistic delays; the
-   IPC protocol; the NDJSON journal as system of record.
-2. `RunManager` in Nitro: fork with `detached: true`, `EventWriter` batching into
+Two things surfaced while building it:
+
+- **`pnpm start` was broken on this branch.** `e8c33ea` gave core's relative
+  specifiers explicit `.js` extensions, which ts-node's CommonJS resolver cannot
+  map back to `.ts`. The CLI's documented dev command had been failing since.
+  Switched `start` / `dev` / `simulate` to **tsx**, which does that remapping;
+  dropped the now-unused `ts-node`, `ts-node-dev` and `tsconfig-paths`.
+- **The fixture has 118 events, not 117**, and its terminal `run_finished` is at
+  `seq` 117 — *not* the last line. `ThrottledSink` flushes its held progress
+  sample on close, so a trailing `overall_progress` follows the terminal event.
+  **Every consumer must take the outcome from the event, never from the last
+  line.** `fixture-replay.test.ts` pins this.
+
+## Next: Phase 3a steps 2-4
+
+1. `RunManager` in Nitro: fork with `detached: true`, `EventWriter` batching into
    `run_events`, projections into `run_steps` / `run_table_progress`,
-   `JournalTailer` re-attach on boot.
-3. Socket.IO under Nitro with **org-scoped rooms** and the two log cohorts
+   `JournalTailer` re-attach on boot. Needs new Drizzle tables — `runs`,
+   `run_events`, `run_steps`, `run_table_progress` — none exist yet. Import the
+   IPC types type-only from `@movy/runner/protocol`.
+2. Socket.IO under Nitro with **org-scoped rooms** and the two log cohorts
    (`:full` for editor/admin, `:redacted` for viewer). Timebox the Nitro
    integration to half a day — the sidecar fallback is designed for.
-4. `run-reducer.ts` (pure, outside the store) plus `RunTimeline`,
+3. `run-reducer.ts` (pure, outside the store) plus `RunTimeline`,
    `TableProgressGrid`, `LogStream`, all driven by the simulator.
 
 Demo for 3a: click Run, watch a simulated migration draw itself, kill the dev

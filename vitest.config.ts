@@ -34,6 +34,17 @@ export default defineConfig({
       {
         resolve: { alias },
         test: {
+          name: 'runner',
+          root: path.resolve(__dirname, 'apps/runner'),
+          globals: true,
+          environment: 'node',
+          include: ['tests/**/*.test.ts'],
+          pool: 'forks',
+        },
+      },
+      {
+        resolve: { alias },
+        test: {
           name: 'cli',
           root: path.resolve(__dirname, 'apps/cli'),
           globals: true,
@@ -47,12 +58,18 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json-summary'],
-      // Same denominator as the pre-monorepo config: core source + the CLI.
-      // apps/web gets its own ratchet in Phase 2 and must never dilute this one.
-      include: ['packages/core/src/**/*.ts', 'apps/cli/src/**/*.ts'],
+      // Core source, the CLI and the runner. apps/web ratchets separately and
+      // must never dilute this one. Process entry points are excluded: they are
+      // argv-and-exit-code wiring, exercised end to end rather than by unit test.
+      include: [
+        'packages/core/src/**/*.ts',
+        'apps/cli/src/**/*.ts',
+        'apps/runner/src/**/*.ts',
+      ],
       exclude: [
         'packages/core/src/index.ts',
         'apps/cli/src/main.ts',
+        'apps/runner/src/main.ts',
         '**/*.d.ts',
         '**/README.md',
       ],
@@ -60,10 +77,10 @@ export default defineConfig({
       // can only improve. Goal is 80% (see docs/implementation-plan.md); raise
       // these numbers as coverage climbs, never lower them.
       thresholds: {
-        lines: 60,
-        functions: 64,
-        branches: 41,
-        statements: 59,
+        lines: 62,
+        functions: 65,
+        branches: 46,
+        statements: 62,
       },
     },
   },

@@ -2,14 +2,22 @@
   "name": "@movy/runner",
   "version": "1.0.0",
   "private": true,
-  "description": "Movy run driver: forked once per migration run. Scaffolded in Phase 0, implemented in Phase 1.",
+  "description": "Movy run driver: forked once per migration run. Owns argv, stdin, signals, IPC, the event journal and exit codes.",
   "main": "dist/main.js",
   "bin": {
     "movy-runner": "dist/main.js"
   },
+  "exports": {
+    ".": "./dist/main.js",
+    "./protocol": {
+      "types": "./src/protocol.ts",
+      "default": "./dist/protocol.js"
+    }
+  },
   "scripts": {
+    "simulate": "tsx --tsconfig tsconfig.dev.json src/main.ts",
     "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.test.json"
   },
   "dependencies": {
     "@movy/core": "workspace:*"

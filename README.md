@@ -137,14 +137,23 @@ message rather than an unhandled error.
 ## Commands
 
 ```bash
-npm start          # run the CLI
-npm run dev        # run with hot reload (ts-node-dev)
-npm run build      # compile TypeScript to dist/
-npm test           # run all unit tests (vitest)
-npm run test:watch # vitest in watch mode
-npm run test:coverage  # run tests with a coverage report
-npx tsc --noEmit   # type-check without emitting
+pnpm start             # run the CLI (tsx, no build step)
+pnpm dev               # run with hot reload
+pnpm dev:web           # Nuxt console on :3000
+pnpm build             # compile every workspace, then build the web app
+pnpm test              # run all unit tests (vitest)
+pnpm test:watch        # vitest in watch mode
+pnpm test:coverage     # run tests with a coverage report
+pnpm typecheck         # type-check every workspace, tests included
+
+# Replay a recorded run through the runner — no database needed.
+pnpm simulate --journal /tmp/run.ndjson \
+  --simulate apps/runner/fixtures/pg-to-pg-315k.ndjson \
+  --run-id demo --speed 0.05
 ```
+
+Requires **pnpm** (pinned via `packageManager`); npm 10.x crashes resolving the
+Nuxt peer graph.
 
 ## Architecture
 
