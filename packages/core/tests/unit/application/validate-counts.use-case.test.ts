@@ -182,7 +182,7 @@ describe('MSSQL support', () => {
     const MSSQL_TARGET = { type: DatabaseType.MSSQL, database: 'appdb' };
 
     function mssqlQueryFn(tables: string[], counts: Record<string, number>) {
-      return async (sql: string): Promise<unknown[]> => {
+      return async (sql: string, _params?: unknown[]): Promise<unknown[]> => {
         if (/INFORMATION_SCHEMA\.TABLES/i.test(sql)) {
           return tables.map((t) => ({ table_name: t }));
         }

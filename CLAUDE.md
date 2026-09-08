@@ -2,25 +2,30 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+> **Web UI work in progress.** See `docs/web-ui-progress.md` for the current
+> state of the Nuxt app, the org/RBAC model, and what Phase 3 needs next.
+
 ## Commands
 
 ```bash
 # Run the CLI
-npm start                    # runs @movy/cli (ts-node, no build step)
-npm run dev                  # ts-node-dev with hot reload
+pnpm start                   # runs @movy/cli (ts-node, no build step)
+pnpm dev                     # CLI with hot reload
+pnpm dev:web                 # Nuxt app on :3000
 
 # Build
-npm run build                # tsc -b across workspaces → <pkg>/dist/
+pnpm build                   # tsc -b across workspaces + Nuxt build
 
 # Type check (no emit)
-npm run typecheck            # per-workspace, includes tests
+pnpm typecheck               # per-workspace, includes tests
 
 # Tests
-npm test                     # vitest run (all tests, single pass)
-npm run test:watch           # vitest watch mode
+pnpm test                    # vitest run (all tests, single pass)
+pnpm test:watch              # vitest watch mode
+pnpm seed:dev                # dev users: admin@/editor@/viewer@movy.local
 
 # Run a single test file
-npx vitest run packages/core/tests/unit/application/migration-orchestrator.service.test.ts
+pnpm exec vitest run packages/core/tests/unit/application/migration-orchestrator.service.test.ts
 ```
 
 ## Architecture
@@ -39,7 +44,8 @@ packages/core/          # @movy/core — the hexagon. No I/O entry points.
 └── tests/              # Mock-driven unit tests
 
 apps/cli/               # @movy/cli — interactive command-line surface
-apps/runner/            # @movy/runner — forked per run (scaffolded; Phase 1)
+apps/runner/            # @movy/runner — forked per run (scaffolded; Phase 3)
+apps/web/               # @movy/web — Nuxt 4 console (orgs, RBAC, connections)
 ```
 
 ### Domain ports (interfaces)
@@ -189,7 +195,7 @@ Default-value translation is delegated to `DefaultValueTranslator`, injected int
 - `packages/core/tests/helpers/mock-database.ts` provides shared mock `IDatabaseConnection` for unit tests.
 - Tests use **Vitest** with `globals: true`, `pool: 'forks'`.
 - The whole suite is mock-driven and runs without any database.
-- `npm run test:coverage` produces a coverage report. Thresholds in `vitest.config.ts` are set to the current measured floor and ratchet upward; the target is 80%.
+- `pnpm test:coverage` produces a coverage report. Thresholds in `vitest.config.ts` are set to the current measured floor and ratchet upward; the target is 80%.
 
 ## Agent skills
 

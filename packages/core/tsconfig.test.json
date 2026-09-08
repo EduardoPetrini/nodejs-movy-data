@@ -2,6 +2,9 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": true,
+    // A composite project may not disable declaration emit, and this config
+    // exists only to type-check tests — it never produces output.
+    "composite": false,
     "declaration": false,
     "declarationMap": false,
     "rootDir": "./"
