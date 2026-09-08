@@ -7,7 +7,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import pg from 'pg';
-import { hashPassword } from '../server/utils/crypto';
+import { hashLocalPassword } from '../server/utils/crypto';
 
 const PASSWORD = 'movy-dev';
 const PEOPLE = [
@@ -44,7 +44,7 @@ async function main() {
     await client.query(
       `INSERT INTO users (id, email, name, password_hash) VALUES ($1, $2, $3, $4)
        ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash`,
-      [userId, person.email, person.name, hashPassword(PASSWORD)]
+      [userId, person.email, person.name, hashLocalPassword(PASSWORD)]
     );
     const { rows: [user] } = await client.query(`SELECT id FROM users WHERE email = $1`, [person.email]);
     await client.query(

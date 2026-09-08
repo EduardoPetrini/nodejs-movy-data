@@ -1,7 +1,7 @@
 import { eq } from 'drizzle-orm';
 import { useDb } from '../../db/client';
 import { users } from '../../db/schema';
-import { verifyPassword } from '../../utils/crypto';
+import { verifyLocalPassword } from '../../utils/crypto';
 
 const attempts = new Map<string, { count: number; resetAt: number }>();
 const WINDOW_MS = 60_000;
@@ -33,7 +33,7 @@ export default defineEventHandler(async (event) => {
   }
 
   const [row] = await useDb().select().from(users).where(eq(users.email, email)).limit(1);
-  const ok = Boolean(row?.passwordHash) && verifyPassword(password, row!.passwordHash!);
+  const ok = Boolean(row?.passwordHash) && verifyLocalPassword(password, row!.passwordHash!);
 
   if (!ok) {
     const next = bucket && bucket.resetAt > now ? bucket : { count: 0, resetAt: now + WINDOW_MS };

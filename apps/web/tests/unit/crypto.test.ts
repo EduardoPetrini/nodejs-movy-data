@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import { randomBytes } from 'node:crypto';
 import {
   encryptSecret, decryptSecret, secretAad, assertEncryptionKeyConfigured,
-  hashPassword, verifyPassword,
+  hashLocalPassword, verifyLocalPassword,
 } from '../../server/utils/crypto';
 
 beforeAll(() => {
@@ -72,17 +72,17 @@ describe('assertEncryptionKeyConfigured', () => {
 
 describe('development passwords', () => {
   it('verifies a correct password and rejects a wrong one', () => {
-    const stored = hashPassword('correct horse');
-    expect(verifyPassword('correct horse', stored)).toBe(true);
-    expect(verifyPassword('wrong horse', stored)).toBe(false);
+    const stored = hashLocalPassword('correct horse');
+    expect(verifyLocalPassword('correct horse', stored)).toBe(true);
+    expect(verifyLocalPassword('wrong horse', stored)).toBe(false);
   });
 
   it('salts, so the same password hashes differently each time', () => {
-    expect(hashPassword('same')).not.toBe(hashPassword('same'));
+    expect(hashLocalPassword('same')).not.toBe(hashLocalPassword('same'));
   });
 
   it('rejects a malformed stored value instead of throwing', () => {
-    expect(verifyPassword('x', 'garbage')).toBe(false);
-    expect(verifyPassword('x', '')).toBe(false);
+    expect(verifyLocalPassword('x', 'garbage')).toBe(false);
+    expect(verifyLocalPassword('x', '')).toBe(false);
   });
 });
