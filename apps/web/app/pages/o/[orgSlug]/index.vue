@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { isTerminal, type WireRun } from '#shared/run-wire'
+import { formatDateTime } from '../../../utils/format-datetime'
 
 interface StatsSummary {
   windowDays: number
@@ -48,7 +49,7 @@ const runs = computed(() => runData.value?.runs ?? [])
 const sparklines = computed(() => runData.value?.sparklines ?? {})
 
 const num = new Intl.NumberFormat()
-const when = (iso: string) => new Date(iso).toLocaleString('en-CA', { hour12: false })
+const when = formatDateTime
 
 /**
  * Null is rendered as an em dash, never as zero.

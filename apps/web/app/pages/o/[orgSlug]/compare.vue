@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { RunPreview, WireDefinition } from '#shared/definition-wire'
 import type { WireValidation, WireValidationDetail } from '#shared/validation-wire'
+import { formatDateTime } from '../../../utils/format-datetime'
 
 /**
  * Did it land?
@@ -177,7 +178,7 @@ watch(() => JSON.stringify(requestBody()), () => {
 })
 
 const num = new Intl.NumberFormat()
-const when = (iso: string) => new Date(iso).toLocaleString('en-CA', { hour12: false })
+const when = formatDateTime
 const pct = (value: number) => (value === 100 ? '100' : value.toFixed(2))
 </script>
 

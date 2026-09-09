@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { formatDate } from '../../../utils/format-datetime'
+
 type Role = 'admin' | 'editor' | 'viewer'
 
 interface Member {
@@ -110,12 +112,7 @@ async function revoke(invitation: Invitation) {
 
 const pending = computed(() => data.value?.invitations.filter((i) => i.status === 'pending') ?? [])
 const settled = computed(() => data.value?.invitations.filter((i) => i.status !== 'pending') ?? [])
-/**
- * Pinned locale, not the ambient one. `toLocaleDateString()` resolves against
- * Node's locale on the server and the browser's on the client, which renders
- * two different strings for the same date and fails hydration.
- */
-const when = (iso: string) => new Date(iso).toLocaleDateString('en-CA')
+const when = formatDate
 </script>
 
 <template>

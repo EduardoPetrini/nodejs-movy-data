@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { isTerminal, type WireRun } from '#shared/run-wire'
+import { formatDateTime } from '../../../../utils/format-datetime'
 
 interface RunPage {
   runs: WireRun[]
@@ -63,14 +64,7 @@ function setStatus(value: string) {
   navigateTo({ query: value ? { status: value } : {} })
 }
 
-/**
- * `en-CA` rather than the browser's locale.
- *
- * `toLocaleString()` resolves against Node's locale on the server and the
- * browser's on the client — `2026-09-07` against `9/7/2026` — which Vue reports
- * as a hydration mismatch on every row. Pinned, as `members.vue` already is.
- */
-const when = (iso: string) => new Date(iso).toLocaleString('en-CA', { hour12: false })
+const when = formatDateTime
 const num = new Intl.NumberFormat()
 
 function dot(runStatus: string) {

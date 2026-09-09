@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { formatDateTime } from '../../../utils/format-datetime'
+import { timeValue, type SortColumn } from '../../../utils/table-sort'
+
 const route = useRoute()
 const slug = computed(() => route.params.orgSlug as string)
 const base = computed(() => `/api/orgs/${slug.value}/connections`)
@@ -7,9 +10,31 @@ const { data, refresh, error } = await useFetch<{ connections: PublicConnection[
 
 interface PublicConnection {
   id: string; name: string; engine: string; database: string; schemaName: string
+  createdAt: string
   host?: string; port?: number; username?: string
   lastTest: { at: string; ok: boolean; latencyMs: number | null; error: string | null } | null
 }
+
+// ---- ordering ----
+
+type ConnectionSortKey = 'name' | 'lastTest' | 'createdAt'
+
+const sortColumns: SortColumn<PublicConnection, ConnectionSortKey>[] = [
+  { key: 'name', defaultDirection: 'asc', value: (c) => c.name },
+  { key: 'lastTest', defaultDirection: 'desc', value: (c) => timeValue(c.lastTest?.at) },
+  { key: 'createdAt', defaultDirection: 'desc', value: (c) => timeValue(c.createdAt) },
+]
+
+const connections = computed(() => data.value?.connections ?? [])
+/**
+ * Newest first by default. The repository still reads alphabetically — that is
+ * the order the connection pickers want — so the choice is made here, where it
+ * is about this table rather than about every reader of the list.
+ */
+const { sorted, toggle, directionFor, ariaSortFor } = useTableSort(connections, sortColumns, {
+  key: 'createdAt',
+  direction: 'desc',
+})
 
 const testing = ref<string | null>(null)
 const expanded = ref<string | null>(null)
@@ -91,19 +116,26 @@ async function save() {
       <AppButton type="submit" variant="primary" :disabled="saving">{{ saving ? 'Saving…' : 'Save connection' }}</AppButton>
     </form>
 
-    <div v-if="data?.connections.length" class="mv-scroll-x">
+    <div v-if="connections.length" class="mv-scroll-x">
       <table class="grid-table">
         <thead>
           <tr>
-            <th class="mv-label">Name</th>
+            <th :aria-sort="ariaSortFor('name')">
+              <SortHeader label="Name" :direction="directionFor('name')" @toggle="toggle('name')" />
+            </th>
             <th class="mv-label">Pair</th>
             <th class="mv-label">Target</th>
-            <th class="mv-label">Last test</th>
+            <th :aria-sort="ariaSortFor('lastTest')">
+              <SortHeader label="Last test" :direction="directionFor('lastTest')" @toggle="toggle('lastTest')" />
+            </th>
+            <th :aria-sort="ariaSortFor('createdAt')">
+              <SortHeader label="Created" :direction="directionFor('createdAt')" @toggle="toggle('createdAt')" />
+            </th>
             <th />
           </tr>
         </thead>
         <tbody>
-          <template v-for="c in data.connections" :key="c.id">
+          <template v-for="c in sorted" :key="c.id">
             <tr>
               <td class="mv-mono name">{{ c.name }}</td>
               <td><PairChip :source="c.engine" /></td>
@@ -119,6 +151,7 @@ async function save() {
                 </template>
                 <span v-else class="never">never</span>
               </td>
+              <td class="mv-num created">{{ formatDateTime(c.createdAt) }}</td>
               <td class="actions">
                 <AppButton :disabled="testing === c.id" @click="test(c.id)">
                   {{ testing === c.id ? 'Testing…' : 'Test' }}
@@ -129,7 +162,7 @@ async function save() {
               </td>
             </tr>
             <tr v-if="expanded === c.id" class="drawer">
-              <td colspan="5">
+              <td colspan="6">
                 <div v-if="databases[c.id]" class="dbs">
                   <span v-for="db in databases[c.id]" :key="db" class="db mv-mono">{{ db }}</span>
                 </div>
@@ -168,6 +201,7 @@ td { height: var(--mv-row-h); padding: 0 var(--mv-s-3); border-bottom: 1px solid
 tbody tr:hover td { background: var(--mv-bg-base); }
 .name { color: var(--mv-fg); font-weight: var(--mv-fw-medium); }
 .target { color: var(--mv-fg-muted); }
+.created { color: var(--mv-fg-subtle); white-space: nowrap; }
 .test { display: flex; align-items: center; gap: var(--mv-s-2); height: var(--mv-row-h); color: var(--mv-fg-muted); }
 .test .mv-num { font-family: var(--mv-font-mono); }
 .fail { color: var(--mv-danger); }

@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import type { WireDefinition } from '#shared/definition-wire'
 import type { RunMode } from '#shared/pair-capability'
+import { formatDateTime } from '../../../utils/format-datetime'
+import { timeValue, type SortColumn } from '../../../utils/table-sort'
 
 /**
  * Saved migrations: the thing that makes a run repeatable.
@@ -29,6 +31,25 @@ const { data: connectionData } = await useFetch<{
 
 const connections = computed(() => connectionData.value?.connections ?? [])
 const definitions = computed(() => data.value?.definitions ?? [])
+
+// ---- ordering ----
+
+type DefinitionSortKey = 'name' | 'createdAt'
+
+const sortColumns: SortColumn<WireDefinition, DefinitionSortKey>[] = [
+  { key: 'name', defaultDirection: 'asc', value: (d) => d.name },
+  { key: 'createdAt', defaultDirection: 'desc', value: (d) => timeValue(d.createdAt) },
+]
+
+/**
+ * Newest first by default. The repository still reads alphabetically, which is
+ * what the run screen's picker wants; the order a reader of THIS table expects
+ * is the one they most recently saved, so the choice belongs here.
+ */
+const { sorted, toggle, directionFor, ariaSortFor } = useTableSort(definitions, sortColumns, {
+  key: 'createdAt',
+  direction: 'desc',
+})
 
 // ---- the form ----
 
@@ -195,39 +216,63 @@ async function archive(definition: WireDefinition) {
       Nothing saved yet.<template v-if="mayWrite"> Create one above and it becomes repeatable.</template>
     </p>
 
-    <ul v-else class="list">
-      <li v-for="d in definitions" :key="d.id" class="row">
-        <div class="identity">
-          <span class="name">{{ d.name }}</span>
-          <span v-if="d.mode === 'query'" class="tag">query</span>
-          <p v-if="d.description" class="desc">{{ d.description }}</p>
-        </div>
+    <div v-else class="mv-scroll-x">
+      <table class="grid-table">
+        <thead>
+          <tr>
+            <th :aria-sort="ariaSortFor('name')">
+              <SortHeader label="Name" :direction="directionFor('name')" @toggle="toggle('name')" />
+            </th>
+            <th class="mv-label">Route</th>
+            <th :aria-sort="ariaSortFor('createdAt')">
+              <SortHeader label="Created" :direction="directionFor('createdAt')" @toggle="toggle('createdAt')" />
+            </th>
+            <th />
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="d in sorted" :key="d.id">
+            <td>
+              <div class="identity">
+                <span class="name">{{ d.name }}</span>
+                <span v-if="d.mode === 'query'" class="tag">query</span>
+              </div>
+              <p v-if="d.description" class="desc">{{ d.description }}</p>
+            </td>
 
-        <div class="route">
-          <PairChip :source="d.source.engine" :target="d.target.engine" />
-          <span class="dbs mv-mono">{{ d.source.database }} → {{ d.target.database }}</span>
-        </div>
+            <td>
+              <div class="route">
+                <PairChip :source="d.source.engine" :target="d.target.engine" />
+                <span class="dbs mv-mono">{{ d.source.database }} → {{ d.target.database }}</span>
+              </div>
+            </td>
 
-        <div class="rowActions">
-          <NuxtLink
-            v-if="mayRun"
-            :to="`/o/${orgSlug}/runs/new?definition=${d.id}`"
-            class="reviewLink"
-          >
-            Review &amp; run
-          </NuxtLink>
-          <AppButton v-if="mayWrite" @click="startEdit(d)">Edit</AppButton>
-          <AppButton
-            v-if="mayWrite"
-            variant="danger"
-            :disabled="archiving === d.id"
-            @click="archive(d)"
-          >
-            {{ archiving === d.id ? 'Archiving…' : 'Archive' }}
-          </AppButton>
-        </div>
-      </li>
-    </ul>
+            <td class="mv-num created">{{ formatDateTime(d.createdAt) }}</td>
+
+            <td>
+              <div class="rowActions">
+                <NuxtLink
+                  v-if="mayRun"
+                  :to="`/o/${orgSlug}/runs/new?definition=${d.id}`"
+                  class="reviewLink"
+                >
+                  Review &amp; run
+                </NuxtLink>
+                <AppButton v-if="mayWrite" @click="startEdit(d)">Edit</AppButton>
+                <AppButton
+                  v-if="mayWrite"
+                  variant="danger"
+                  :disabled="archiving === d.id"
+                  @click="archive(d)"
+                >
+                  {{ archiving === d.id ? 'Archiving…' : 'Archive' }}
+                </AppButton>
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
   </div>
 </template>
 
@@ -268,32 +313,37 @@ async function archive(definition: WireDefinition) {
   font-size: var(--mv-fs-xs); color: var(--mv-fg-subtle);
 }
 
-.list {
-  list-style: none; margin: 0; padding: 0;
-  border: 1px solid var(--mv-line); border-radius: var(--mv-r-lg); overflow: hidden;
-}
-.list li + li { border-top: 1px solid var(--mv-line); }
-.row {
-  display: flex; align-items: center; gap: var(--mv-s-4);
-  padding: var(--mv-s-3) var(--mv-s-4);
+/*
+ * A table, like the connections and members lists — so "sort by created"
+ * hangs off a real column heading rather than a control invented for one page.
+ * Rows are padded rather than fixed-height: a description is a second line,
+ * not a truncation.
+ */
+.grid-table { width: 100%; border-collapse: collapse; font-size: var(--mv-fs-xs); }
+.grid-table th { text-align: left; padding: 0 var(--mv-s-3) var(--mv-s-2); border-bottom: 1px solid var(--mv-line); }
+.grid-table td {
+  padding: var(--mv-s-3);
+  border-bottom: 1px solid var(--mv-line);
+  vertical-align: middle;
   background: var(--mv-bg-base);
   transition: background var(--mv-dur-1) var(--mv-ease-out);
 }
-.row:hover { background: var(--mv-bg-raised); }
+.grid-table tbody tr:hover td { background: var(--mv-bg-raised); }
 
-.identity { flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--mv-s-2); flex-wrap: wrap; }
+.identity { display: flex; align-items: center; gap: var(--mv-s-2); flex-wrap: wrap; }
 .name { font-size: var(--mv-fs-sm); font-weight: var(--mv-fw-medium); }
-.desc { flex-basis: 100%; font-size: var(--mv-fs-micro); color: var(--mv-fg-subtle); }
+.desc { margin-top: 2px; font-size: var(--mv-fs-micro); color: var(--mv-fg-subtle); }
+.created { color: var(--mv-fg-subtle); white-space: nowrap; }
 .tag {
   font-size: var(--mv-fs-micro); text-transform: uppercase; letter-spacing: var(--mv-track-label);
   padding: 1px 5px; border-radius: var(--mv-r-sm);
   background: var(--mv-accent-dim); color: var(--mv-accent);
 }
 
-.route { display: flex; flex-direction: column; gap: 2px; }
+.route { display: flex; flex-direction: column; gap: 2px; align-items: flex-start; }
 .dbs { font-size: var(--mv-fs-micro); color: var(--mv-fg-subtle); }
 
-.rowActions { display: flex; align-items: center; gap: var(--mv-s-2); }
+.rowActions { display: flex; align-items: center; justify-content: flex-end; gap: var(--mv-s-2); }
 .reviewLink {
   font-size: var(--mv-fs-xs); color: var(--mv-accent); text-decoration: none;
   padding: 6px var(--mv-s-2); border-radius: var(--mv-r-md);
@@ -303,7 +353,6 @@ async function archive(definition: WireDefinition) {
 .reviewLink:focus-visible { outline: 2px solid var(--mv-focus); outline-offset: 1px; }
 
 @media (max-width: 720px) {
-  .row { flex-direction: column; align-items: stretch; gap: var(--mv-s-2); }
   .head { flex-direction: column; }
 }
 </style>
