@@ -71,7 +71,18 @@ const MAX_DEPTH = 12;
 /** Returns a new value with secrets replaced; never mutates its input. */
 export function redactValue<T>(value: T, needles: readonly string[], depth = 0): T {
   if (needles.length === 0) return value;
-  if (depth > MAX_DEPTH) return value;
+
+  // Past the cap the scrubber stops descending, and what it does with what it
+  // cannot inspect is the whole question. Forwarding it would put a string it
+  // never searched — or a whole subtree it never walked — onto the stream, a
+  // net that fails open at exactly the depth someone would aim for. So a string
+  // OR a container is replaced wholesale: at this depth the event is already
+  // malformed and nothing readable is being lost. Plain scalars pass through,
+  // because a number or a boolean cannot carry a password.
+  if (depth > MAX_DEPTH) {
+    const opaque = typeof value === 'string' || (value !== null && typeof value === 'object');
+    return (opaque ? REDACTED : value) as T;
+  }
 
   if (typeof value === 'string') {
     return redactString(value, needles) as unknown as T;

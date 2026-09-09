@@ -41,6 +41,8 @@ export interface RunManagerOptions {
   readonly stallAfterMs?: number;
   /** Reported once per silent stretch, never more. */
   readonly onStalled?: (runId: string, silentMs: number) => void;
+  /** How often live handles are swept for silence. Far coarser than the stall window. */
+  readonly stallCheckIntervalMs?: number;
 }
 
 /** One run this host is watching through its journal because IPC is gone. */
@@ -64,6 +66,10 @@ interface Handle {
   pid: number | null;
   /** Set the moment `run_finished` is seen, so exit does not re-settle it. */
   sawTerminal: boolean;
+  /** Last time this run said anything, for the stall watchdog. */
+  lastEventAt: number;
+  /** Reported once per silent stretch, and re-armed if the run speaks again. */
+  reportedStall: boolean;
 }
 
 /**
@@ -75,6 +81,15 @@ interface Handle {
  * every large migration, and a watchdog nobody believes is worse than none.
  */
 const DEFAULT_STALL_AFTER_MS = 30 * 60 * 1000;
+
+/**
+ * How often live handles are swept for silence.
+ *
+ * A minute against a thirty-minute window: the report is allowed to be up to a
+ * sweep late, because nothing acts on it automatically — it is a line in the
+ * server log for a person who will then go and look at the database.
+ */
+const DEFAULT_STALL_CHECK_INTERVAL_MS = 60_000;
 
 const EXIT_STATUS: Record<number, 'succeeded' | 'failed' | 'cancelled'> = {
   [RUNNER_EXIT.succeeded]: 'succeeded',
@@ -96,7 +111,10 @@ export class RunManager {
   private readonly followers = new Map<string, NodeJS.Timeout>();
   private readonly followIntervalMs: number;
   private readonly stallAfterMs: number;
+  private readonly stallCheckIntervalMs: number;
   private readonly onStalled: (runId: string, silentMs: number) => void;
+  /** One sweep for every live handle, rather than a timer each. */
+  private stallTimer: NodeJS.Timeout | null = null;
   private readonly runnerEntry: string;
   private readonly spawn: NonNullable<RunManagerOptions['spawn']>;
   private readonly onError: (err: Error, runId: string) => void;
@@ -109,6 +127,7 @@ export class RunManager {
     this.runnerEntry = options.runnerEntry;
     this.followIntervalMs = options.followIntervalMs ?? 1000;
     this.stallAfterMs = options.stallAfterMs ?? DEFAULT_STALL_AFTER_MS;
+    this.stallCheckIntervalMs = options.stallCheckIntervalMs ?? DEFAULT_STALL_CHECK_INTERVAL_MS;
     this.onStalled = options.onStalled ?? (() => {});
     this.onError = options.onError ?? (() => {});
     this.spawn = options.spawn ?? defaultSpawn;
@@ -122,8 +141,16 @@ export class RunManager {
     }
 
     const child = this.spawn(this.runnerEntry, argv, request.journalPath);
-    const handle: Handle = { runId: request.runId, child, pid: child.pid ?? null, sawTerminal: false };
+    const handle: Handle = {
+      runId: request.runId,
+      child,
+      pid: child.pid ?? null,
+      sawTerminal: false,
+      lastEventAt: Date.now(),
+      reportedStall: false,
+    };
     this.handles.set(request.runId, handle);
+    this.armStallWatch();
 
     child.on('message', (message: unknown) => this.onMessage(handle, message));
     child.on('error', (err) => this.onError(err, request.runId));
@@ -335,6 +362,50 @@ export class RunManager {
     this.followers.delete(runId);
   }
 
+  /**
+   * Starts the sweep that reports a forked run gone silent.
+   *
+   * `follow()` watches the runs this host ADOPTED after a restart. This watches
+   * the ones it forked itself, which is the ordinary case and was the one going
+   * unwatched: a runner wedged on a lock it will never get holds a live IPC
+   * channel, writes nothing, and never exits, so neither the exit handler nor
+   * the journal tailer has anything to react to.
+   *
+   * Like `follow()`, it REPORTS and never settles. Marking a live run failed
+   * frees its org's concurrency slot and lets a second run launch into a
+   * destination the first is still writing to, which turns a stall into
+   * corruption.
+   */
+  private armStallWatch(): void {
+    if (this.stallTimer !== null) return;
+    this.stallTimer = setInterval(() => this.sweepForStalls(), this.stallCheckIntervalMs);
+    // Never the reason the process stays alive.
+    this.stallTimer.unref?.();
+  }
+
+  private disarmStallWatch(): void {
+    if (this.stallTimer === null) return;
+    clearInterval(this.stallTimer);
+    this.stallTimer = null;
+  }
+
+  private sweepForStalls(): void {
+    const now = Date.now();
+
+    for (const handle of this.handles.values()) {
+      // A run that has emitted run_finished is winding down, not stalling.
+      if (handle.sawTerminal || handle.reportedStall) continue;
+
+      const silentMs = now - handle.lastEventAt;
+      if (silentMs < this.stallAfterMs) continue;
+
+      handle.reportedStall = true;
+      this.onStalled(handle.runId, silentMs);
+    }
+
+    if (this.handles.size === 0) this.disarmStallWatch();
+  }
+
   private async settleRun(runId: string, outcome: Outcome): Promise<boolean> {
     try {
       return await this.store.finaliseIfUnsettled(runId, outcome);
@@ -352,6 +423,7 @@ export class RunManager {
       handle.child.disconnect?.();
     }
     this.handles.clear();
+    this.disarmStallWatch();
   }
 
   private onMessage(handle: Handle, message: unknown): void {
@@ -370,6 +442,10 @@ export class RunManager {
 
       case 'event':
         if (parsed.event.type === 'run_finished') handle.sawTerminal = true;
+        // A run that speaks was not stalled; re-arm for the next silent stretch
+        // rather than staying quiet for the rest of the run.
+        handle.lastEventAt = Date.now();
+        handle.reportedStall = false;
         this.writer.push(handle.runId, parsed.event);
         break;
 

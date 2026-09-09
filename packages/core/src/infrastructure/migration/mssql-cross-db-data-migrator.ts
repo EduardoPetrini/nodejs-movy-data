@@ -10,7 +10,7 @@ import { DataMigrationError } from '../../domain/errors/migration.errors.js';
 import { MssqlConnection } from '../database/mssql/mssql-connection.adapter.js';
 import { PgConnection } from '../database/pg/pg-connection.adapter.js';
 import { MysqlConnection } from '../database/mysql/mysql-connection.adapter.js';
-import { throwIfCancelled } from './cancellation.js';
+import { throwIfCancelled, rethrowIfCancelled } from './cancellation.js';
 
 const BATCH_SIZE = 500;
 const DEFAULT_SCHEMA_MSSQL = 'dbo';
@@ -52,11 +52,19 @@ export class MssqlCrossDbDataMigrator implements IDataMigrator {
         rowsCopied = await this.copyTable(sourceConfig, destConfig, plan, table, estimated, onProgress, signal);
         onProgress?.(table, rowsCopied, rowsCopied);
       } catch (err) {
+        // A cancellation is not a table outcome — it ends the run.
+        rethrowIfCancelled(err);
         success = false;
         error = err instanceof Error ? err.message : String(err);
       }
 
       results.push({ tableName: table, rowsCopied, durationMs: Date.now() - tableStart, success, error });
+
+      // The copy loop breaks out on a short final batch without looking at the
+      // signal again, so an abort landing during the last batch of the last
+      // table would otherwise never be seen and this would return success: true
+      // for a run somebody cancelled.
+      throwIfCancelled(signal, `after copying "${table}"`);
     }
 
     return {

@@ -36,7 +36,11 @@ class FakeChild extends EventEmitter {
   disconnect() { this.connected = false; }
 }
 
-function harness(unsettled: Unsettled[] = []) {
+function harness(unsettled: Unsettled[] = [], overrides: Partial<{
+  stallAfterMs: number;
+  stallCheckIntervalMs: number;
+  onStalled: (runId: string, silentMs: number) => void;
+}> = {}) {
   const { store, launched, settled } = fakeStore(unsettled);
   const applied: { runId: string; events: MigrationEvent[] }[] = [];
   const writer = new EventWriter(
@@ -57,6 +61,7 @@ function harness(unsettled: Unsettled[] = []) {
       children.push(child);
       return child as unknown as ChildProcess;
     },
+    ...overrides,
   });
 
   return { manager, writer, children, argvs, launched, settled, applied, onError };
@@ -379,5 +384,73 @@ describe('RunManager.shutdown', () => {
     // detached fork exists to prevent.
     expect(h.children[0].connected).toBe(false);
     expect(h.children[0].listenerCount('message')).toBe(0);
+  });
+
+  it('stops the stall sweep, so a dead manager holds no timer', () => {
+    const onStalled = vi.fn();
+    const h = harness([], { stallAfterMs: 5, stallCheckIntervalMs: 5, onStalled });
+    h.manager.launch({ runId: RUN_ID, journalPath: '/tmp/j.ndjson', spec: {} });
+    h.manager.shutdown();
+
+    return new Promise<void>((resolve) => setTimeout(() => {
+      expect(onStalled).not.toHaveBeenCalled();
+      resolve();
+    }, 40));
+  });
+});
+
+/**
+ * `follow()` watches runs ADOPTED after a restart. This covers the ordinary
+ * case it did not: a run this host forked itself, whose runner is alive and
+ * holding its IPC channel but wedged on a lock and writing nothing. Neither the
+ * exit handler nor the journal tailer has anything to react to there.
+ */
+describe('RunManager — stall watchdog on a forked run', () => {
+  it('reports a forked run that has gone silent while its process is alive', async () => {
+    const onStalled = vi.fn();
+    const h = harness([], { stallAfterMs: 20, stallCheckIntervalMs: 5, onStalled });
+    h.manager.launch({ runId: RUN_ID, journalPath: '/tmp/j.ndjson', spec: {} });
+
+    await waitFor(() => onStalled.mock.calls.length > 0);
+    expect(onStalled.mock.calls[0][0]).toBe(RUN_ID);
+    expect(onStalled.mock.calls[0][1]).toBeGreaterThanOrEqual(20);
+  });
+
+  it('reports once per silent stretch, not once per sweep', async () => {
+    const onStalled = vi.fn();
+    const h = harness([], { stallAfterMs: 20, stallCheckIntervalMs: 5, onStalled });
+    h.manager.launch({ runId: RUN_ID, journalPath: '/tmp/j.ndjson', spec: {} });
+
+    await waitFor(() => onStalled.mock.calls.length > 0);
+    await new Promise((r) => setTimeout(r, 40));
+    expect(onStalled).toHaveBeenCalledTimes(1);
+  });
+
+  it('never settles a stalled run — a live run must keep its concurrency slot', async () => {
+    const onStalled = vi.fn();
+    const h = harness([], { stallAfterMs: 20, stallCheckIntervalMs: 5, onStalled });
+    h.manager.launch({ runId: RUN_ID, journalPath: '/tmp/j.ndjson', spec: {} });
+
+    await waitFor(() => onStalled.mock.calls.length > 0);
+    // Settling it here would free the slot and let a second run launch into a
+    // destination the first is still writing to.
+    expect(h.settled).toHaveLength(0);
+  });
+
+  it('stays quiet while the run keeps emitting events', async () => {
+    const onStalled = vi.fn();
+    const h = harness([], { stallAfterMs: 40, stallCheckIntervalMs: 5, onStalled });
+    h.manager.launch({ runId: RUN_ID, journalPath: '/tmp/j.ndjson', spec: {} });
+
+    const chatter = setInterval(() => {
+      h.children[0].emit('message', {
+        k: 'event',
+        event: { type: 'log', level: 'info', message: 'still going', runId: RUN_ID, seq: 1, at: new Date().toISOString() },
+      });
+    }, 10);
+
+    await new Promise((r) => setTimeout(r, 90));
+    clearInterval(chatter);
+    expect(onStalled).not.toHaveBeenCalled();
   });
 });

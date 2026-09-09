@@ -381,6 +381,12 @@ export async function pruneRunEvents(
       JOIN runs r ON r.id = e.run_id
       JOIN organizations o ON o.id = r.org_id
       WHERE r.status IN ('succeeded', 'failed', 'cancelled')
+        -- A window of zero or less means "keep everything", never "delete
+        -- everything". Nothing writes this column yet, so today it is always
+        -- the default 30 — but the day it becomes an org setting, the reading
+        -- that silently purges a year of timelines must not be the one a
+        -- careless 0 selects. make_interval(days => 0) would do exactly that.
+        AND o.retention_days > 0
         AND e.at < ${now}::timestamptz - make_interval(days => o.retention_days)
       LIMIT ${limit}
     )

@@ -12,7 +12,7 @@ import { DataMigrationError } from '../../domain/errors/migration.errors.js';
 import { MysqlConnection } from '../database/mysql/mysql-connection.adapter.js';
 import { PgConnection } from '../database/pg/pg-connection.adapter.js';
 import { truncatePgTables } from './pg-truncate.js';
-import { throwIfCancelled } from './cancellation.js';
+import { throwIfCancelled, rethrowIfCancelled } from './cancellation.js';
 
 const BATCH_SIZE = 500;
 
@@ -41,6 +41,12 @@ export class CrossDbDataMigrator implements IDataMigrator {
     const results: TableMigrationResult[] = [];
     const mysqlDest =
       isPgToMysql(sourceConfig.type, destConfig.type) ? new MysqlConnection(destConfig) : null;
+
+    // Before emptying anything. Clearing the destination is the most
+    // destructive thing this migrator does, and a cancellation that arrived
+    // while the schema step was still finishing must not be answered by wiping
+    // the load set and only then stopping.
+    throwIfCancelled(signal, 'before clearing the destination');
 
     try {
       const mysqlDestClient = mysqlDest ? await this.prepareMysqlDestination(mysqlDest, plan.cleanupOrder) : null;
@@ -82,11 +88,19 @@ export class CrossDbDataMigrator implements IDataMigrator {
             }
             onProgress?.(table, rowsCopied, rowsCopied);
           } catch (err) {
+            // A cancellation is not a table outcome — it ends the run.
+            rethrowIfCancelled(err);
             success = false;
             error = err instanceof Error ? err.message : String(err);
           }
 
           results.push({ tableName: table, rowsCopied, durationMs: Date.now() - tableStart, success, error });
+
+          // The copy loop breaks out on a short final batch without looking at
+          // the signal again, so an abort landing during the last batch of the
+          // last table would otherwise never be seen and this would return
+          // success: true for a run somebody cancelled.
+          throwIfCancelled(signal, `after copying "${table}"`);
         }
 
         return {

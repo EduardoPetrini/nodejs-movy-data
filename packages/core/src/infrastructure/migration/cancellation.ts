@@ -15,3 +15,22 @@ export function throwIfCancelled(signal: AbortSignal | undefined, where: string)
     throw new MigrationCancelledError(`Migration cancelled ${where}`);
   }
 }
+
+/**
+ * Re-throws a cancellation, letting every other error pass back to the caller.
+ *
+ * Each sequential migrator wraps a table's copy in a try/catch that turns a
+ * failure into a `TableMigrationResult` with `success: false` — the right
+ * handling for a driver error, and exactly the wrong handling for a
+ * cancellation. Swallowed, it recorded a cancelled table as a FAILED one; and
+ * when that table was last in `loadOrder` there was nothing left to re-check,
+ * so `migrate()` returned normally and a cancelled, partly-written migration
+ * reported `success: true`. The run was still settled `cancelled` only because
+ * `MigrationOrchestrator` gates the steps that follow — nothing in the
+ * migrator's own contract said so.
+ *
+ * A cancellation is not a table outcome. It ends the run.
+ */
+export function rethrowIfCancelled(err: unknown): void {
+  if (err instanceof MigrationCancelledError) throw err;
+}

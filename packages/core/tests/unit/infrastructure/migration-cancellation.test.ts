@@ -132,6 +132,112 @@ describe('sequential migrator cancellation', () => {
     expect(sql).toContain('SET SESSION FOREIGN_KEY_CHECKS = 1');
     expect(destClient.release).toHaveBeenCalled();
   });
+
+  it('does not empty the destination when the signal is already aborted', async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      migrator.migrate(makeConfig('src'), makeConfig('dst'), makePlan(), 1, undefined, undefined, controller.signal)
+    ).rejects.toThrow(MigrationCancelledError);
+
+    const sql = destClient.query.mock.calls.map((c: unknown[]) => c[0] as string);
+    expect(sql.some((s: string) => s.startsWith('TRUNCATE TABLE'))).toBe(false);
+    expect(sql.some((s: string) => s.startsWith('DELETE FROM'))).toBe(false);
+  });
+});
+
+/**
+ * The cancelled table being LAST in the plan is its own case, and it was the one
+ * that was broken: with nothing after it, no top-of-loop check ever ran again.
+ *
+ * Both shapes below returned normally before this was fixed — the short-batch
+ * one reported `success: true` for a run somebody had cancelled, and the
+ * full-batch one recorded the table as FAILED with the cancellation text and
+ * still returned rather than throwing. The run was only ever settled `cancelled`
+ * because MigrationOrchestrator gates the steps that follow.
+ */
+describe('cancellation of the last table in the plan', () => {
+  let destClient: any;
+  let migrator: MysqlDataMigrator;
+
+  /** One table, so nothing follows it to trip the top-of-loop check. */
+  function singleTablePlan(): TableMigrationPlan {
+    return { cleanupOrder: ['parent'], loadOrder: ['parent'], levels: [['parent']], cyclicTables: [] };
+  }
+
+  function setUp(rowsPerBatch: () => Record<string, unknown>[]): void {
+    connectionQueue.length = 0;
+    destClient = { query: vi.fn().mockResolvedValue([]), release: vi.fn() };
+    const source = {
+      connect: vi.fn().mockResolvedValue(undefined),
+      query: vi.fn((sql: string) => {
+        if (sql.includes('SHOW COLUMNS')) return Promise.resolve([{ Field: 'id' }]);
+        if (sql.includes('SELECT `id` FROM')) return Promise.resolve(rowsPerBatch());
+        return Promise.resolve([]);
+      }),
+      end: vi.fn().mockResolvedValue(undefined),
+    };
+    const dest = {
+      connect: vi.fn().mockResolvedValue(undefined),
+      getClient: vi.fn().mockResolvedValue(destClient),
+      end: vi.fn().mockResolvedValue(undefined),
+    };
+    connectionQueue.push(source, dest);
+    migrator = new MysqlDataMigrator();
+  }
+
+  it('throws when the abort lands during the final short batch', async () => {
+    // A single partial batch: the copy loop breaks on `rows.length < BATCH_SIZE`
+    // and never looks at the signal again.
+    setUp(() => [{ id: 1 }]);
+
+    const controller = new AbortController();
+    destClient.query.mockImplementation((sql: string) => {
+      if (sql.startsWith('INSERT INTO `parent`')) controller.abort();
+      return Promise.resolve([]);
+    });
+
+    await expect(
+      migrator.migrate(makeConfig('src'), makeConfig('dst'), singleTablePlan(), 1, undefined, undefined, controller.signal)
+    ).rejects.toThrow(MigrationCancelledError);
+  });
+
+  it('throws rather than recording the cancelled table as a failed one', async () => {
+    // Full batches, so the abort is seen by the copy loop's own check and
+    // arrives as a throw the per-table catch used to swallow.
+    let batchesLeft = 2;
+    setUp(() =>
+      batchesLeft-- > 0 ? Array.from({ length: 500 }, (_, i) => ({ id: i })) : [{ id: 1 }]
+    );
+
+    const controller = new AbortController();
+    destClient.query.mockImplementation((sql: string) => {
+      if (sql.startsWith('INSERT INTO `parent`')) controller.abort();
+      return Promise.resolve([]);
+    });
+
+    // Specifically NOT a resolved MigrationResult carrying a failed table.
+    await expect(
+      migrator.migrate(makeConfig('src'), makeConfig('dst'), singleTablePlan(), 1, undefined, undefined, controller.signal)
+    ).rejects.toThrow(MigrationCancelledError);
+  });
+
+  it('leaves an ordinary table error reported as a table failure, not a throw', async () => {
+    // The rethrow must be narrow: a driver error is still a per-table outcome.
+    setUp(() => [{ id: 1 }]);
+    destClient.query.mockImplementation((sql: string) => {
+      if (sql.startsWith('INSERT INTO `parent`')) return Promise.reject(new Error('duplicate key'));
+      return Promise.resolve([]);
+    });
+
+    const result = await migrator.migrate(
+      makeConfig('src'), makeConfig('dst'), singleTablePlan(), 1, undefined, undefined, new AbortController().signal
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.tables[0]).toMatchObject({ tableName: 'parent', success: false, error: 'duplicate key' });
+  });
 });
 
 describe('PgDataMigrator cancellation', () => {

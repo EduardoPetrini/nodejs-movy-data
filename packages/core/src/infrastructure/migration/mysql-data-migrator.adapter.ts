@@ -6,7 +6,7 @@ import {
   TableMigrationResult,
 } from '../../domain/types/migration.types.js';
 import { MysqlConnection } from '../database/mysql/mysql-connection.adapter.js';
-import { throwIfCancelled } from './cancellation.js';
+import { throwIfCancelled, rethrowIfCancelled } from './cancellation.js';
 
 const BATCH_SIZE = 500;
 
@@ -36,6 +36,13 @@ export class MysqlDataMigrator implements IDataMigrator {
       try {
         await destClient.query('SET SESSION FOREIGN_KEY_CHECKS = 0');
 
+        // Before emptying anything: clearing the destination is the most
+        // destructive thing this migrator does, and a cancellation that arrived
+        // while the schema step was still finishing must not be answered by
+        // wiping every table and only then stopping. PgDataMigrator guards its
+        // TRUNCATE the same way.
+        throwIfCancelled(signal, 'before clearing the destination');
+
         for (const table of plan.cleanupOrder) {
           await this.clearDestinationTable(destClient, table);
         }
@@ -56,11 +63,19 @@ export class MysqlDataMigrator implements IDataMigrator {
             }, signal);
             onProgress?.(table, rowsCopied, rowsCopied);
           } catch (err) {
+            // A cancellation is not a table outcome — it ends the run.
+            rethrowIfCancelled(err);
             success = false;
             error = err instanceof Error ? err.message : String(err);
           }
 
           results.push({ tableName: table, rowsCopied, durationMs: Date.now() - tableStart, success, error });
+
+          // The copy loop breaks out on a short final batch without looking at
+          // the signal again, so an abort landing during the last batch of the
+          // last table would otherwise never be seen and this would return
+          // success: true for a run somebody cancelled.
+          throwIfCancelled(signal, `after copying "${table}"`);
         }
 
         return {

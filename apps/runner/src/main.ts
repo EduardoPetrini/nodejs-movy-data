@@ -15,7 +15,7 @@
  */
 import { randomUUID } from 'crypto';
 import * as fs from 'fs';
-import { composeSink } from '@movy/core';
+import { composeSink, buildNeedles, redactString } from '@movy/core';
 import type { MigrationEvent, RunTerminalStatus } from '@movy/core';
 import { ArgsError, USAGE, parseRunnerArgs } from './args';
 import type { RunnerArgs } from './args';
@@ -26,6 +26,18 @@ import { RunSpecError, readRunSpec } from './run-spec';
 import type { RunSpec } from './run-spec';
 import { readJournalLines, replayJournal } from './simulate';
 import { executeRun } from './execute';
+
+/**
+ * The run's two passwords as redaction needles, for the message paths that
+ * never reach `composeSink`.
+ *
+ * Empty in simulate mode, where there is no spec and therefore no secret: a
+ * replay reads a recorded fixture and opens no connection.
+ */
+function specNeedles(spec: RunSpec | 'invalid' | null): readonly string[] {
+  if (spec === null || spec === 'invalid') return [];
+  return buildNeedles([spec.source.password, spec.target.password]);
+}
 
 function send(message: RunnerToHost): void {
   // Two different "no channel" cases, and both are normal.
@@ -125,7 +137,16 @@ async function main(): Promise<number> {
       status = await executeRun(spec!, { emit: sink, signal: controller.signal });
     }
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    // The one message path that does NOT go through composeSink, and it lands in
+    // the same two places a redacted one does: the host persists a fatal to
+    // `runs.error_message`, which is served to viewers. `executeRun` currently
+    // turns every migration error into a status rather than a throw, so nothing
+    // credential-bearing reaches here today — but that is a property of a
+    // function two files away, not something this seam guarantees for itself.
+    const message = redactString(
+      err instanceof Error ? err.message : String(err),
+      specNeedles(spec)
+    );
     process.stderr.write(`movy-runner: ${message}\n`);
     send({ k: 'fatal', runId, message });
     return RUNNER_EXIT.internal;
@@ -141,8 +162,15 @@ async function main(): Promise<number> {
 
   const journalFailure = journalError.current;
   if (journalFailure !== null) {
-    process.stderr.write(`movy-runner: journal write failed: ${journalFailure.message}\n`);
-    send({ k: 'fatal', runId, message: `journal write failed: ${journalFailure.message}` });
+    // An fs error names a path, not a password — but this is the same fatal
+    // frame, reaching the same persisted column, so it is scrubbed the same way
+    // rather than relying on that staying true.
+    const message = redactString(
+      `journal write failed: ${journalFailure.message}`,
+      specNeedles(spec)
+    );
+    process.stderr.write(`movy-runner: ${message}\n`);
+    send({ k: 'fatal', runId, message });
     return RUNNER_EXIT.internal;
   }
 

@@ -83,8 +83,12 @@ export default defineConfig({
       // Raised 2026-09-08 (Phase 5) from 62/65/46/62 by the redaction,
       // cancellation and error-taxonomy tests.
       thresholds: {
+        // The measured floor, ratcheted upward and never down. Set by NAME, not
+        // by position: the report prints statements/branches/functions/lines,
+        // which is not the order this object lists them in, and setting them
+        // positionally once failed the gate against numbers that had improved.
         lines: 64,
-        functions: 66,
+        functions: 67,
         branches: 48,
         statements: 63,
       },

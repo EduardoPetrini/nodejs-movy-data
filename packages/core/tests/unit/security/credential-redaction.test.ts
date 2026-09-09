@@ -166,6 +166,35 @@ describe('credential redaction — the sink', () => {
     const needles = buildNeedles(['secret', 'secretlonger']);
     expect(redactString('secretlonger', needles)).toBe(REDACTED);
   });
+
+  it('fails closed past the depth cap rather than passing a string it never searched', () => {
+    // No real event nests this deep — `plan_ready` is the deepest at four
+    // levels — so this is about which way the cap fails, not about a shape the
+    // system produces. A net that stops descending and then forwards whatever
+    // it could not inspect is open at exactly the depth someone would aim for.
+    let deep: unknown = `leading ${SOURCE_PASSWORD} trailing`;
+    for (let i = 0; i < 20; i += 1) deep = { nested: deep };
+
+    const scrubbed = redactValue(deep, buildNeedles([SOURCE_PASSWORD]));
+    expect(JSON.stringify(scrubbed)).not.toContain(SOURCE_PASSWORD);
+    // The subtree it could not walk is replaced, not forwarded — passing the
+    // container through was the first attempt at this and leaked the string
+    // sitting inside it.
+    expect(JSON.stringify(scrubbed)).toContain(REDACTED);
+  });
+
+  it('still passes shallow non-strings through untouched', () => {
+    // The depth guard must not coerce an ordinary payload: only what it cannot
+    // inspect is replaced.
+    const event = redactValue(
+      { a: 1, b: true, c: null, d: `x${SOURCE_PASSWORD}y` },
+      buildNeedles([SOURCE_PASSWORD])
+    );
+    expect(event.a).toBe(1);
+    expect(event.b).toBe(true);
+    expect(event.c).toBeNull();
+    expect(event.d).not.toContain(SOURCE_PASSWORD);
+  });
 });
 
 describe('credential redaction — a real run', () => {
