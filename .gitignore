@@ -14,3 +14,9 @@ coverage/
 # a journal names a path and a pid on the host that produced it.
 .movy/
 package-lock.json
+
+# Playwright output. Traces and screenshots for a failed E2E run — per-machine
+# and often large; `playwright show-trace` is how they are read, not the repo.
+test-results/
+playwright-report/
+.playwright/

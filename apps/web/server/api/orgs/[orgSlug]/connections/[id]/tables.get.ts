@@ -2,6 +2,7 @@ import { buildRegistry } from '@movy/core';
 import { createRepos } from '~~/server/repositories';
 import { requirePermission } from '~~/server/utils/rbac';
 import { toConnectionConfig } from '~~/server/utils/connection-config';
+import { describeConnectionFailure } from '~~/server/utils/safe-error';
 
 export default defineEventHandler(async (event) => {
   requirePermission(event, 'connection:read');
@@ -17,13 +18,18 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 501, statusMessage: `Listing tables is not supported for ${row.engine}.` });
   }
 
-  const connection = adapters.createConnection(toConnectionConfig(row, database));
+  const config = toConnectionConfig(row, database);
+  const connection = adapters.createConnection(config);
   try {
     await connection.connect();
     return { tables: await adapters.listTables(connection, { database, schema }) };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw createError({ statusCode: 502, statusMessage: `Could not list tables: ${message}` });
+    const failure = describeConnectionFailure(err, config);
+    throw createError({
+      statusCode: 502,
+      statusMessage: `Could not list tables. ${failure.text}`,
+      data: { errorKind: failure.kind },
+    });
   } finally {
     await connection.end().catch(() => {});
   }

@@ -122,7 +122,8 @@ export class MigrateDataUseCase {
           tablesDone: completedTables.size,
           tablesTotal: plan.loadOrder.length,
         });
-      }
+      },
+      ctx?.signal
     );
 
     for (const table of result.tables) {

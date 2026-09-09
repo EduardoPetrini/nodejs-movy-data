@@ -1,9 +1,10 @@
 import {
   CompareSchemasUseCase, ConsoleLogger, TableMigrationPlanner, buildRegistry,
-  type DatabaseSchema, type IDatabaseConnection, type SchemaDiff,
+  type ConnectionConfig, type DatabaseSchema, type IDatabaseConnection, type SchemaDiff,
 } from '@movy/core';
 import { requirePermission } from '~~/server/utils/rbac';
 import { toConnectionConfig, parseEngine } from '~~/server/utils/connection-config';
+import { describeConnectionFailure } from '~~/server/utils/safe-error';
 import { buildPreview } from '~~/server/definitions/build-preview';
 import { resolveRunTarget } from '~~/server/runs/resolve-target';
 
@@ -48,7 +49,7 @@ export default defineEventHandler(async (event) => {
 
   const open: IDatabaseConnection[] = [];
   try {
-    await connectOrFail(sourceConnection, 'source', target.source.engine);
+    await connectOrFail(sourceConnection, 'source', target.source.engine, sourceConfig);
     open.push(sourceConnection);
 
     const targetDatabaseExists = await destinationExists(
@@ -70,7 +71,7 @@ export default defineEventHandler(async (event) => {
     let diff: SchemaDiff;
 
     if (targetDatabaseExists) {
-      await connectOrFail(destConnection, 'destination', target.target.engine);
+      await connectOrFail(destConnection, 'destination', target.target.engine, destConfig);
       open.push(destConnection);
       const compared = await new CompareSchemasUseCase(
         sourceInspector, destInspector, synchronizer, logger
@@ -112,25 +113,32 @@ export default defineEventHandler(async (event) => {
 });
 
 /**
- * Connect, or turn the driver's error into a 502 that names which end failed.
+ * Connect, or turn the driver's error into a 502 that names which end failed
+ * and what kind of failure it was.
  *
- * Which end is the whole diagnosis: "could not reach the destination" sends
- * the operator to a different screen than "could not reach the source". The
- * driver's message is passed through — it carries host and port, which this
- * caller supplied and already has.
+ * Which end is half the diagnosis: "could not reach the destination" sends the
+ * operator to a different screen than "could not reach the source". Which KIND
+ * is the other half — a rejected password and an unreachable host are the same
+ * red box without it.
+ *
+ * The config is passed so the driver's own words can have this connection's
+ * password stripped out of them. Host and port are left in: the caller supplied
+ * those and already knows them, and they are what makes the message actionable.
  */
 async function connectOrFail(
   connection: IDatabaseConnection,
   side: 'source' | 'destination',
-  engine: string
+  engine: string,
+  config: ConnectionConfig
 ): Promise<void> {
   try {
     await connection.connect();
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const failure = describeConnectionFailure(err, config);
     throw createError({
       statusCode: 502,
-      statusMessage: `Could not reach the ${side} ${engine} database: ${message}`,
+      statusMessage: `Could not reach the ${side} ${engine} database. ${failure.text}`,
+      data: { side, errorKind: failure.kind },
     });
   }
 }

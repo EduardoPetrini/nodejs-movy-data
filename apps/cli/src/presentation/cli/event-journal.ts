@@ -32,13 +32,22 @@ export function parseJsonEventsFlag(argv: readonly string[], logFilePath: string
   return logFilePath.replace(/\.log$/, '') + '.events.ndjson';
 }
 
-export function createEventJournal(filePath: string, runId: string): EventJournal {
+/**
+ * `secrets` are the run's passwords. A journal written here is meant to be
+ * handed around as a replay fixture — `pnpm simulate --simulate <file>` — so it
+ * is the one artefact of a CLI run most likely to be attached to an issue.
+ */
+export function createEventJournal(
+  filePath: string,
+  runId: string,
+  secrets: readonly string[] = []
+): EventJournal {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const stream = fs.createWriteStream(filePath, { flags: 'a' });
 
   const sink = composeSink(runId, (event: MigrationEvent) => {
     stream.write(JSON.stringify(event) + '\n');
-  });
+  }, { secrets });
 
   return {
     path: filePath,

@@ -10,6 +10,7 @@ import { DataMigrationError } from '../../domain/errors/migration.errors.js';
 import { MssqlConnection } from '../database/mssql/mssql-connection.adapter.js';
 import { PgConnection } from '../database/pg/pg-connection.adapter.js';
 import { MysqlConnection } from '../database/mysql/mysql-connection.adapter.js';
+import { throwIfCancelled } from './cancellation.js';
 
 const BATCH_SIZE = 500;
 const DEFAULT_SCHEMA_MSSQL = 'dbo';
@@ -31,7 +32,8 @@ export class MssqlCrossDbDataMigrator implements IDataMigrator {
     plan: TableMigrationPlan,
     _workerCount: number,
     rowEstimates?: Map<string, number>,
-    onProgress?: MigrationProgressCallback
+    onProgress?: MigrationProgressCallback,
+    signal?: AbortSignal
   ): Promise<MigrationResult> {
     this.assertSupportedPair(sourceConfig.type, destConfig.type);
 
@@ -39,6 +41,7 @@ export class MssqlCrossDbDataMigrator implements IDataMigrator {
     const results: TableMigrationResult[] = [];
 
     for (const table of plan.loadOrder) {
+      throwIfCancelled(signal, `before copying "${table}"`);
       const tableStart = Date.now();
       const estimated = rowEstimates?.get(table) ?? 0;
       let rowsCopied = 0;
@@ -46,7 +49,7 @@ export class MssqlCrossDbDataMigrator implements IDataMigrator {
       let error: string | undefined;
 
       try {
-        rowsCopied = await this.copyTable(sourceConfig, destConfig, plan, table, estimated, onProgress);
+        rowsCopied = await this.copyTable(sourceConfig, destConfig, plan, table, estimated, onProgress, signal);
         onProgress?.(table, rowsCopied, rowsCopied);
       } catch (err) {
         success = false;
@@ -69,22 +72,23 @@ export class MssqlCrossDbDataMigrator implements IDataMigrator {
     plan: TableMigrationPlan,
     table: string,
     estimatedRows: number,
-    onProgress?: MigrationProgressCallback
+    onProgress?: MigrationProgressCallback,
+    signal?: AbortSignal
   ): Promise<number> {
     const { type: srcType } = sourceConfig;
     const { type: dstType } = destConfig;
 
     if (srcType === DatabaseType.MSSQL && dstType === DatabaseType.POSTGRES) {
-      return this.copyMssqlToPg(sourceConfig, destConfig, plan, table, estimatedRows, onProgress);
+      return this.copyMssqlToPg(sourceConfig, destConfig, plan, table, estimatedRows, onProgress, signal);
     }
     if (srcType === DatabaseType.MSSQL && dstType === DatabaseType.MYSQL) {
-      return this.copyMssqlToMysql(sourceConfig, destConfig, plan, table, estimatedRows, onProgress);
+      return this.copyMssqlToMysql(sourceConfig, destConfig, plan, table, estimatedRows, onProgress, signal);
     }
     if (srcType === DatabaseType.POSTGRES && dstType === DatabaseType.MSSQL) {
-      return this.copyPgToMssql(sourceConfig, destConfig, plan, table, estimatedRows, onProgress);
+      return this.copyPgToMssql(sourceConfig, destConfig, plan, table, estimatedRows, onProgress, signal);
     }
     if (srcType === DatabaseType.MYSQL && dstType === DatabaseType.MSSQL) {
-      return this.copyMysqlToMssql(sourceConfig, destConfig, plan, table, estimatedRows, onProgress);
+      return this.copyMysqlToMssql(sourceConfig, destConfig, plan, table, estimatedRows, onProgress, signal);
     }
     throw new DataMigrationError(`Unsupported pair: ${srcType} → ${dstType}`);
   }
@@ -99,7 +103,8 @@ export class MssqlCrossDbDataMigrator implements IDataMigrator {
     plan: TableMigrationPlan,
     table: string,
     estimatedRows: number,
-    onProgress?: MigrationProgressCallback
+    onProgress?: MigrationProgressCallback,
+    signal?: AbortSignal
   ): Promise<number> {
     const source = new MssqlConnection(sourceConfig);
     const dest = new PgConnection(destConfig);
@@ -125,7 +130,7 @@ export class MssqlCrossDbDataMigrator implements IDataMigrator {
             values
           );
         }
-      }, (done, total) => onProgress?.(table, done, total));
+      }, (done, total) => onProgress?.(table, done, total), signal);
     } finally {
       await Promise.allSettled([source.end(), dest.end()]);
     }
@@ -141,7 +146,8 @@ export class MssqlCrossDbDataMigrator implements IDataMigrator {
     plan: TableMigrationPlan,
     table: string,
     estimatedRows: number,
-    onProgress?: MigrationProgressCallback
+    onProgress?: MigrationProgressCallback,
+    signal?: AbortSignal
   ): Promise<number> {
     const source = new MssqlConnection(sourceConfig);
     const dest = new MysqlConnection(destConfig);
@@ -171,7 +177,7 @@ export class MssqlCrossDbDataMigrator implements IDataMigrator {
           `INSERT INTO \`${table.replace(/`/g, '``')}\` (${mysqlColList}) VALUES ${rowPlaceholders.join(', ')}`,
           values
         );
-      }, (done, total) => onProgress?.(table, done, total));
+      }, (done, total) => onProgress?.(table, done, total), signal);
     } finally {
       await destClient.query('SET SESSION FOREIGN_KEY_CHECKS = 1');
       destClient.release();
@@ -189,7 +195,8 @@ export class MssqlCrossDbDataMigrator implements IDataMigrator {
     plan: TableMigrationPlan,
     table: string,
     estimatedRows: number,
-    onProgress?: MigrationProgressCallback
+    onProgress?: MigrationProgressCallback,
+    signal?: AbortSignal
   ): Promise<number> {
     const source = new PgConnection(sourceConfig);
     const dest = new MssqlConnection(destConfig);
@@ -225,6 +232,7 @@ export class MssqlCrossDbDataMigrator implements IDataMigrator {
 
       try {
         while (true) {
+          throwIfCancelled(signal, `mid-copy of "${table}"`);
           const pgColList = columns.map((c) => `"${c.replace(/"/g, '""')}"`).join(', ');
           const rows = await source.query<Record<string, unknown>>(
             `SELECT ${pgColList} FROM "${table.replace(/"/g, '""')}" LIMIT ${BATCH_SIZE} OFFSET ${offset}`
@@ -274,7 +282,8 @@ export class MssqlCrossDbDataMigrator implements IDataMigrator {
     plan: TableMigrationPlan,
     table: string,
     estimatedRows: number,
-    onProgress?: MigrationProgressCallback
+    onProgress?: MigrationProgressCallback,
+    signal?: AbortSignal
   ): Promise<number> {
     const source = new MysqlConnection(sourceConfig);
     const dest = new MssqlConnection(destConfig);
@@ -307,6 +316,7 @@ export class MssqlCrossDbDataMigrator implements IDataMigrator {
 
       try {
         while (true) {
+          throwIfCancelled(signal, `mid-copy of "${table}"`);
           const mysqlColList = columns.map((c) => '`' + c.replace(/`/g, '``') + '`').join(', ');
           const rows = await source.query<Record<string, unknown>>(
             `SELECT ${mysqlColList} FROM \`${table.replace(/`/g, '``')}\` LIMIT ${BATCH_SIZE} OFFSET ${offset}`
@@ -383,7 +393,8 @@ export class MssqlCrossDbDataMigrator implements IDataMigrator {
     columns: string[],
     estimatedRows: number,
     processRows: (rows: Record<string, unknown>[]) => Promise<void>,
-    onProgress: (done: number, total: number) => void
+    onProgress: (done: number, total: number) => void,
+    signal?: AbortSignal
   ): Promise<number> {
     const colList = columns.map(escapeId).join(', ');
     const escapedTable = escapeId(table);
@@ -392,6 +403,7 @@ export class MssqlCrossDbDataMigrator implements IDataMigrator {
     let lastReportedPct = -1;
 
     while (true) {
+      throwIfCancelled(signal, `mid-copy of "${table}"`);
       const rows = await source.query<Record<string, unknown>>(
         `SELECT ${colList} FROM ${escapedTable}
          ORDER BY (SELECT NULL)

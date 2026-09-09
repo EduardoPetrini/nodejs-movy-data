@@ -31,7 +31,11 @@ export type {
 export type {
   MigrationEventSink, SequencedEventSink, MigrationRunContext,
 } from './domain/ports/event-sink.port.js';
-export { composeSink, createSeqSink, createThrottledSink, createSafeSink } from './application/events/index.js';
+export {
+  composeSink, createSeqSink, createThrottledSink, createSafeSink,
+  createRedactingSink, redactValue, redactString, buildNeedles,
+  REDACTED, MIN_REDACTABLE_SECRET_LENGTH,
+} from './application/events/index.js';
 
 // ---- Domain: ports ----
 export type { ILogger } from './domain/ports/logger.port.js';
@@ -44,6 +48,8 @@ export type { IQueryAnalyzer, QueryColumn } from './domain/ports/query-analyzer.
 
 // ---- Domain: errors ----
 export * from './domain/errors/migration.errors.js';
+export { classifyConnectionError, summaryForKind } from './domain/errors/connection-failure.js';
+export type { ConnectionFailure, ConnectionFailureKind } from './domain/errors/connection-failure.js';
 
 // ---- Application ----
 export { MigrationOrchestrator } from './application/services/migration-orchestrator.service.js';

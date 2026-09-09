@@ -12,7 +12,9 @@
     "typecheck": "nuxt prepare && tsc --noEmit -p .nuxt/tsconfig.server.json",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "db:studio": "drizzle-kit studio"
+    "db:studio": "drizzle-kit studio",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui"
   },
   "dependencies": {
     "@movy/core": "workspace:*",
@@ -25,6 +27,7 @@
     "vue-router": "^4.5.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "drizzle-kit": "^0.31.10"
   }
 }

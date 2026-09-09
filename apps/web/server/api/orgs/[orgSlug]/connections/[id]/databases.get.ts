@@ -2,6 +2,7 @@ import { buildRegistry } from '@movy/core';
 import { createRepos } from '~~/server/repositories';
 import { requirePermission } from '~~/server/utils/rbac';
 import { toConnectionConfig } from '~~/server/utils/connection-config';
+import { describeConnectionFailure } from '~~/server/utils/safe-error';
 
 /**
  * List the databases on the server this connection points at.
@@ -20,15 +21,17 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 501, statusMessage: `Listing databases is not supported for ${row.engine}.` });
   }
 
-  const connection = adapters.createConnection(toConnectionConfig(row, adapters.adminDatabase));
+  const config = toConnectionConfig(row, adapters.adminDatabase);
+  const connection = adapters.createConnection(config);
   try {
     await connection.connect();
     return { databases: await adapters.listDatabases(connection) };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const failure = describeConnectionFailure(err, config);
     throw createError({
       statusCode: 502,
-      statusMessage: `Could not list databases: ${message}. The credentials may lack access to the "${adapters.adminDatabase}" database.`,
+      statusMessage: `Could not list databases. ${failure.text}`,
+      data: { errorKind: failure.kind, adminDatabase: adapters.adminDatabase },
     });
   } finally {
     await connection.end().catch(() => {});

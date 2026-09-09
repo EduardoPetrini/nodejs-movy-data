@@ -34,6 +34,14 @@ async function signOut() {
 
 <template>
   <div class="shell">
+    <!--
+      First thing in the tab order, visible only when focused. Every page here
+      puts a header and a six-item rail before its content, so without this a
+      keyboard user tabs through nine controls to reach the thing they came for
+      — on every navigation.
+    -->
+    <a href="#content" class="skip">Skip to content</a>
+
     <header class="bar">
       <div class="brand">
         <span class="mark" aria-hidden="true" />
@@ -100,7 +108,7 @@ async function signOut() {
         </NuxtLink>
       </aside>
 
-      <main class="content"><slot /></main>
+      <main id="content" class="content" tabindex="-1"><slot /></main>
     </div>
   </div>
 </template>
@@ -129,6 +137,28 @@ async function signOut() {
 .switcher:focus-visible { outline: 2px solid var(--mv-focus); outline-offset: 1px; }
 .newOrg { font-size: var(--mv-fs-micro); color: var(--mv-fg-subtle); text-decoration: none; }
 .newOrg:hover { color: var(--mv-accent); }
+.skip {
+  position: absolute;
+  left: var(--mv-s-2);
+  top: var(--mv-s-2);
+  z-index: 100;
+  padding: var(--mv-s-2) var(--mv-s-3);
+  background: var(--mv-bg-raised);
+  color: var(--mv-fg);
+  border: 1px solid var(--mv-line);
+  border-radius: var(--mv-r-sm);
+  /* Moved off-screen rather than hidden: display:none and visibility:hidden
+     both remove it from the tab order, which is the one thing it needs. */
+  transform: translateY(-200%);
+  transition: transform var(--mv-t-fast, 120ms) ease;
+}
+.skip:focus-visible { transform: translateY(0); }
+@media (prefers-reduced-motion: reduce) { .skip { transition: none; } }
+
+/* The skip target itself must not draw a ring: it is focused programmatically
+   by the jump, and a ring around the whole page reads as an error. */
+.content:focus { outline: none; }
+
 .sr-only {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
   overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;

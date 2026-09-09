@@ -204,7 +204,12 @@ export async function runCli(): Promise<void> {
       }
     } else {
       const journalPath = parseJsonEventsFlag(process.argv.slice(2), logFilePath);
-      const journal = journalPath ? createEventJournal(journalPath, randomUUID()) : null;
+      const journal = journalPath
+        ? createEventJournal(journalPath, randomUUID(), [
+            sourceConfig.password,
+            destConfig.password,
+          ])
+        : null;
 
       // SinkLogger puts every existing logger.* line onto the event stream too,
       // so the journal carries narration as well as structured state.

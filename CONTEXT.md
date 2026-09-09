@@ -45,3 +45,57 @@ depend on infrastructure nobody has provisioned.
 An engine or Pair that is designed but not implemented. A Planned engine may appear in
 `DatabaseType` and be accepted by CLI input parsing — selecting it fails with a clear
 "not yet implemented" error rather than an unhandled crash.
+
+## Organization
+
+The tenancy boundary. Every connection, definition, run and comparison belongs to exactly
+one organization, and nothing is visible across the line.
+
+A person reaches an organization through a **membership**, which carries one of three
+roles — admin, editor, viewer. The role is read per request rather than stored in the
+session, so a demotion takes effect on the next request rather than the next sign-in.
+
+Not a billing concept and not a team: it is the scope every query is written against.
+
+## Definition
+
+A saved, repeatable migration: a name, two connections, two databases, and a mode. It is
+what makes a run something that can be launched again rather than reassembled from
+memory each time.
+
+Definitions are **archived, never deleted**. A run points at the definition that produced
+it, and that attribution is the only thing tying a year of history to one migration.
+Archiving frees the name for reuse.
+
+## Run
+
+One execution of a migration, from launch to a terminal outcome — succeeded, failed or
+cancelled. Its record is durable and outlives the process that produced it.
+
+A run may be **simulated**, meaning a recorded journal was replayed and no database was
+touched. That is a property of the run, not a separate kind of thing.
+
+Cancelling a run stops further work; it does **not** undo what has already been written.
+Movy has no rollback and no resume, so a cancelled or failed run leaves the destination
+partly loaded, and anything reporting one must say so.
+
+## Timeline
+
+The observable shape of a run: nine steps, per-table progress, and log lines, rebuilt by
+folding the run's events in `seq` order.
+
+The same fold produces a live view and a finished one — there is no separate "replay"
+path — which is what makes a finished run readable a year later from its stored events
+alone.
+
+## Comparison
+
+A stored per-table row-count check between two databases, with its own record and its own
+history. Distinct from a **run**: it migrates nothing, so the rules about what may be
+launched do not apply to it.
+
+## Drift
+
+The difference between two schemas, read after a migration rather than before. It is the
+same question a preview answers — "what would a run change?" — asked once the run has
+already happened, and is served by the same endpoint and drawn by the same component.

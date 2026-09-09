@@ -132,14 +132,16 @@ adding it broke no call site and no test mock. With a context supplied, the nine
 `MIGRATION_STEP_ORDER` are reported as typed `MigrationEvent`s
 (`packages/core/src/domain/types/events.types.ts`) alongside per-table and overall progress.
 
-Pipe events through `composeSink(runId, target)`, which is
-`safe(seq(throttled(target)))`:
+Pipe events through `composeSink(runId, target, { secrets })`, which is
+`safe(redact(throttled(seq(target))))`:
 
 - `ThrottledSink` coalesces `table_progress`/`overall_progress` to one per key per 250ms.
   Necessary because `CrossDbDataMigrator` fires per 500-row batch.
 - `SeqSink` sits **outside** the throttle so coalesced events never consume a `seq`,
   keeping the replay cursor gapless. It also runs in the producing process, never the
   consumer, so a consumer restart cannot reset the counter.
+- `RedactingSink` replaces the run's passwords wherever they appear. It is the net, not
+  the design — see below.
 - `SafeSink` swallows consumer exceptions: telemetry must not abort a migration.
 
 `SinkLogger` composed into `TeeLogger` puts every existing `logger.*` call onto the same
@@ -148,6 +150,37 @@ stream without touching those call sites.
 **Events describe progress, never configuration.** `SafeEndpoint` carries engine and
 database only — no host, port or credentials — because events are broadcast to read-only
 viewers.
+
+**Two strings on every event are written by code that has never heard of that rule**:
+`log.message` and a `SerialisedError`'s `message`. A driver that quotes its DSN back on a
+failed handshake lands a password on a stream viewers subscribe to. `createRedactingSink`
+scrubs both — including percent-encoded forms, since a credential usually leaks inside a
+URI — at the one seam that feeds the journal, IPC and the socket alike. Secrets under
+four characters are skipped deliberately: redacting `"ab"` shreds every message and
+advertises the password by the gaps. `credential-redaction.test.ts` drives a real
+orchestrator whose driver echoes the DSN and searches every emitted byte; it fails if
+someone widens `SafeEndpoint`.
+
+On the web side the same rule is `safeErrorMessage` / `describeConnectionFailure`
+(`server/utils/safe-error.ts`), used by the five handlers that report a failed connection
+as data — Test, list databases, list tables, preview, compare. `recordTest` **persists**
+that message to `connections.last_test_error`, which `toPublicConnection` serves to
+viewers, so an unscrubbed driver error there is a disclosure with a long shelf life.
+
+**`classifyConnectionError` gives a failure a kind**: `auth`, `unreachable`,
+`permission`, `missing_database`, `tls`, `timeout` or `unknown`. Matched on driver codes
+first (`28P01`, `ER_ACCESS_DENIED_ERROR`, `ELOGIN`, `ECONNREFUSED`) and prose only as a
+fallback, because codes are stable and localised prose is not. It answers `unknown`
+rather than guessing: telling someone their password is wrong when the host is
+unreachable sends them to rotate a working credential.
+
+**Cancellation stops work, and never rolls back.** `ctx.signal` is checked before every
+step (`MigrationOrchestrator.step`), before every table and inside every batch loop
+(`throwIfCancelled`), and `WorkerPool.terminate()` kills the threads — an `AbortSignal`
+in the parent is invisible to a worker running a blocking `COPY` in another realm. The
+pool resolves rather than rejects when terminated, so `PgDataMigrator` re-checks the
+signal itself; otherwise a cancelled run reads as a partial success. A cancelled run
+leaves the destination partly written, and every surface reporting one must say so.
 
 `--json-events[=<path>]` on the CLI records the stream as NDJSON beside the log file.
 
@@ -168,6 +201,21 @@ and `runs`, plus `run_events` and the two projections `run_steps` /
 | `server/repositories/runs.repo.ts` | Org-scoped reads; plus the unscoped ingestion helpers the manager uses. |
 | `server/runs/resolve-target.ts` | Settles definition, connections, databases and mode for **both** preview and launch. |
 | `server/definitions/build-preview.ts` | **Pure.** Two schemas + a diff + a plan → the review screen and its warnings. |
+
+**`run_events` is bounded by two things and neither is the schema.** A per-run cap in
+`EventWriter` stops storing `log` events past 20k — the one unbounded type, since
+`SinkLogger` puts every `logger.*` call on the stream and `MigrateDataUseCase` logs per
+500-row batch. The boundary event is REPLACED by a notice carrying the same `seq` rather
+than dropped, because a log pane that simply stops reads as a hang. Structural events are
+never capped: losing a `run_finished` leaves a run permanently unsettled. Separately,
+`run-retention.ts` sweeps daily and honours `organizations.retention_days` — only
+`run_events`, never `runs`/`run_steps`/`run_table_progress`, which are the ledger.
+
+**A stalled run is reported, not settled.** `RunManager.follow()` calls `onStalled` after
+30 minutes of silence from a process that is still alive. It does not fail the run:
+marking a live run failed frees its org's concurrency slot and lets a second run launch
+into a destination the first is still writing to. Thirty minutes is chosen against a
+`CREATE INDEX` over tens of millions of rows, which emits nothing while it runs.
 
 **`run_events` is keyed on `(run_id, seq)`.** Events arrive from IPC *and* from
 the journal tailer, so delivery is at-least-once from two sources. That key is
@@ -412,3 +460,25 @@ Key vocabulary (full definitions in `CONTEXT.md`): a **Pair** is one directional
 route and is the unit of completion; an **Adapter Set** is the per-engine wiring class; a
 Pair is **Done** when implemented and covered by automated tests against mocks — a live
 database is not required. Avoid the word "connector".
+
+### End-to-end tests
+
+`apps/web/tests/e2e/` is Playwright and is **not** part of `pnpm test`. The rest of the
+suite is mock-driven and runs with nothing installed; this needs a migrated database and
+`pnpm seed:dev`, so it lives behind `pnpm test:e2e` for the same reason
+`packages/core/tests/integration/` is not automated.
+
+The run it drives is **simulated** — the bundled fixture replayed through the real
+runner, socket, writer and reducer — so it exercises the whole machinery without
+depending on two throwaway databases existing on whoever's machine runs it.
+
+**The mid-run reload is the point.** Everything else is covered by unit tests against
+mocks; what none of them can cover is a real browser losing its WebSocket, re-fetching a
+snapshot from the database, and continuing from the same `seq` without a gap or a
+duplicate.
+
+Two traps, both cost an hour once: sign-in must wait for hydration
+(`waitForLoadState('networkidle')`) or `fill` writes into inputs Vue has not bound yet
+and the submit posts nothing; and authenticated API setup must use `page.request`, not
+the top-level `request` fixture, which carries no session cookie and 401s in a way that
+looks like a permission bug.

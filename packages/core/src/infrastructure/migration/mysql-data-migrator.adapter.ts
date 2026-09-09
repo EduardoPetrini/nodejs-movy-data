@@ -6,6 +6,7 @@ import {
   TableMigrationResult,
 } from '../../domain/types/migration.types.js';
 import { MysqlConnection } from '../database/mysql/mysql-connection.adapter.js';
+import { throwIfCancelled } from './cancellation.js';
 
 const BATCH_SIZE = 500;
 
@@ -20,7 +21,8 @@ export class MysqlDataMigrator implements IDataMigrator {
     plan: TableMigrationPlan,
     _workerCount: number,
     rowEstimates?: Map<string, number>,
-    onProgress?: MigrationProgressCallback
+    onProgress?: MigrationProgressCallback,
+    signal?: AbortSignal
   ): Promise<MigrationResult> {
     const start = Date.now();
     const source = new MysqlConnection(sourceConfig);
@@ -41,6 +43,7 @@ export class MysqlDataMigrator implements IDataMigrator {
         const results: TableMigrationResult[] = [];
 
         for (const table of plan.loadOrder) {
+          throwIfCancelled(signal, `before copying "${table}"`);
           const tableStart = Date.now();
           const estimated = rowEstimates?.get(table) ?? 0;
           let rowsCopied = 0;
@@ -50,7 +53,7 @@ export class MysqlDataMigrator implements IDataMigrator {
           try {
             rowsCopied = await this.copyTable(source, destClient, table, estimated, (done, total) => {
               onProgress?.(table, done, total);
-            });
+            }, signal);
             onProgress?.(table, rowsCopied, rowsCopied);
           } catch (err) {
             success = false;
@@ -89,7 +92,8 @@ export class MysqlDataMigrator implements IDataMigrator {
     destClient: Awaited<ReturnType<MysqlConnection['getClient']>>,
     table: string,
     estimatedRows: number,
-    onProgress: (done: number, total: number) => void
+    onProgress: (done: number, total: number) => void,
+    signal?: AbortSignal
   ): Promise<number> {
     const safeTable = '`' + table.replace(/`/g, '``') + '`';
 
@@ -105,6 +109,7 @@ export class MysqlDataMigrator implements IDataMigrator {
     let lastReportedPct = -1;
 
     while (true) {
+      throwIfCancelled(signal, `mid-copy of "${table}"`);
       const rows = await source.query<Record<string, unknown>>(
         `SELECT ${colList} FROM ${safeTable} LIMIT ${BATCH_SIZE} OFFSET ${offset}`
       );

@@ -2,6 +2,7 @@ import { buildRegistry } from '@movy/core';
 import { createRepos } from '~~/server/repositories';
 import { requirePermission } from '~~/server/utils/rbac';
 import { toConnectionConfig } from '~~/server/utils/connection-config';
+import { describeConnectionFailure } from '~~/server/utils/safe-error';
 
 const TIMEOUT_MS = 10_000;
 
@@ -21,10 +22,15 @@ export default defineEventHandler(async (event) => {
 
   const registry = buildRegistry();
   const startedAt = Date.now();
+  // Held so the failure path can strip this connection's own password out of
+  // whatever the driver says. recordTest() persists that message and
+  // toPublicConnection serves it to viewers, so an unscrubbed driver error here
+  // is a credential disclosure with a long shelf life.
+  const config = toConnectionConfig(row);
 
   try {
-    const adapters = registry.get(toConnectionConfig(row).type);
-    const connection = adapters.createConnection(toConnectionConfig(row));
+    const adapters = registry.get(config.type);
+    const connection = adapters.createConnection(config);
     try {
       await Promise.race([
         connection.connect(),
@@ -39,8 +45,13 @@ export default defineEventHandler(async (event) => {
       await connection.end().catch(() => {});
     }
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    await repos.connections.recordTest(id, { ok: false, error: message });
-    return { ok: false, error: message, latencyMs: Date.now() - startedAt };
+    const failure = describeConnectionFailure(err, config);
+    await repos.connections.recordTest(id, { ok: false, error: failure.text });
+    return {
+      ok: false,
+      error: failure.text,
+      errorKind: failure.kind,
+      latencyMs: Date.now() - startedAt,
+    };
   }
 });

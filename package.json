@@ -15,7 +15,8 @@
     "db:migrate": "pnpm --filter @movy/web db:migrate",
     "db:generate": "pnpm --filter @movy/web db:generate",
     "seed:dev": "pnpm --filter @movy/web exec tsx --env-file=.env scripts/seed-dev.ts",
-    "simulate": "tsx --tsconfig apps/runner/tsconfig.dev.json apps/runner/src/main.ts"
+    "simulate": "tsx --tsconfig apps/runner/tsconfig.dev.json apps/runner/src/main.ts",
+    "test:e2e": "pnpm --filter @movy/web test:e2e"
   },
   "keywords": [],
   "author": "",

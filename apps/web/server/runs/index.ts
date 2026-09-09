@@ -71,6 +71,8 @@ export function useRunManager(): RunManager {
       { apply: (runId, projection) => applyProjection(db, runId, projection) },
       {
         onError: (err, runId) => console.error(`[runs] event write failed for ${runId}:`, err.message),
+        onTruncated: (runId, atSeq) =>
+          console.warn(`[runs] ${runId} exceeded its log-event cap at seq ${atSeq}; later log lines are not stored.`),
         // After the durable write, never before — see EventWriter.onFlushed.
         //
         // Converted to the SAME WireEvent shape the snapshot sends. An earlier
@@ -101,6 +103,14 @@ export function useRunManager(): RunManager {
       {
         runnerEntry: resolveRunnerEntry(),
         onError: (err, runId) => console.error(`[runs] runner error for ${runId}:`, err.message),
+        // Reported, not settled: a live-but-silent run must keep its
+        // concurrency slot, or a second run launches into a destination the
+        // first is still writing. See RunManager.follow().
+        onStalled: (runId, silentMs) =>
+          console.warn(
+            `[runs] ${runId} has produced no events for ${Math.round(silentMs / 60_000)} minute(s) ` +
+              'but its process is still alive. It may be blocked on a database lock.'
+          ),
       }
     );
   }

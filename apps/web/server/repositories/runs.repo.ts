@@ -343,3 +343,48 @@ export async function finaliseRunIfUnsettled(
 export async function findUnsettledRuns(db: Db): Promise<RunRow[]> {
   return db.select().from(runs).where(notInArray(runs.status, [...TERMINAL_RUN_STATUSES]));
 }
+
+/**
+ * Deletes `run_events` rows older than the owning org's retention window.
+ *
+ * Unscoped by design: retention is a background sweep across every org, and the
+ * per-org window comes from the join rather than from a caller — an
+ * org-scoped version would need the caller to already know which orgs exist,
+ * which is exactly the loop this replaces.
+ *
+ * Only `run_events` is pruned. `runs`, `run_steps` and `run_table_progress` are
+ * the ledger and stay forever: they are small, bounded by the number of runs
+ * and tables rather than by the size of the data, and deleting them would make
+ * a year of history vanish rather than merely lose its narration. What a
+ * pruned run loses is its log lines and its per-batch samples; what it keeps is
+ * every number the history, comparison and drift screens draw.
+ *
+ * A run still in flight is never touched, however old its first events are:
+ * pruning underneath a live reader would make the timeline it is watching go
+ * backwards.
+ */
+export async function pruneRunEvents(
+  db: Db,
+  options: { now?: Date; limit?: number } = {}
+): Promise<number> {
+  const now = options.now ?? new Date();
+  // Bounded so one sweep cannot hold a lock long enough to stall live writes.
+  // The sweep runs daily and is idempotent, so an incomplete pass simply
+  // continues tomorrow.
+  const limit = options.limit ?? 50_000;
+
+  const deleted = await db.execute(sql`
+    DELETE FROM run_events
+    WHERE (run_id, seq) IN (
+      SELECT e.run_id, e.seq
+      FROM run_events e
+      JOIN runs r ON r.id = e.run_id
+      JOIN organizations o ON o.id = r.org_id
+      WHERE r.status IN ('succeeded', 'failed', 'cancelled')
+        AND e.at < ${now}::timestamptz - make_interval(days => o.retention_days)
+      LIMIT ${limit}
+    )
+  `);
+
+  return typeof deleted.rowCount === 'number' ? deleted.rowCount : 0;
+}

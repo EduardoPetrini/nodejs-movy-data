@@ -23,7 +23,7 @@ phase is indistinguishable from one that was never started.
 
 ## Status board
 
-*Last reviewed: 2026-09-08. 1129 tests, 81 files, green.*
+*Last reviewed: 2026-09-09. 1188 unit tests (86 files) + 8 Playwright E2E, green.*
 
 | Phase | State | Notes |
 |-------|-------|-------|
@@ -33,46 +33,44 @@ phase is indistinguishable from one that was never started.
 | 3a — live timeline, simulated | **DONE** | runner, RunManager, socket, UI |
 | 3b — real runs | **DONE** (2026-09-08) | definitions, PairSelector, preview; real PG→PG verified |
 | 4 — history, replay, stats, drift | **DONE** (2026-09-08) | keyset ledger, comparisons, drift, org home; verified live |
-| 5 — hardening | **TODO** | light theme + reduced-motion landed early |
+| 5 — hardening | **DONE** (2026-09-09) | redaction, cancellation, E2E, retention, taxonomy, docs |
 
 ### Remaining work
 
-**Phase 4 is closed** (2026-09-08). Write-up under *Phase 4 — history,
-comparison and drift* below. What it deliberately did **not** do: scrub a
-finished run's timeline. `/runs/:id` already replays a finished run through the
-same reducer from its stored events, and a time-scrubber over that is a nicety
-the phase did not need to carry alongside four new surfaces.
+**Phase 5 is closed** (2026-09-09). Write-up under *Phase 5 — hardening* below.
+All five phases are now DONE. What is left is not a phase:
 
-**Phase 5 — nothing except the theme work.** Full `AbortSignal` plumbing +
-`WorkerPool.terminate()`, retention task, per-run event cap, heartbeat
-watchdog, an error taxonomy (auth failure vs unreachable host vs missing
-permission), keyboard-navigation and focus-ring pass, ratchet coverage toward
-80 % (now 62.04 / 46.46 / 65.94 / 62.82), and the docs: ADR 0002 (run
-execution), ADR 0003 (org tenancy), `CONTEXT.md` (Org, Run, Timeline,
-Definition and Comparison are all still undefined there), `README.md`.
-`CLAUDE.md` needs the Phase 4 surfaces added.
-
-**A comparison of a large database will time out.** `POST …/validations` counts
-synchronously inside the request: `COUNT(*)` per table, no child process, no
-event stream. That is right for the fixtures (150ms for 315k rows across five
-tables) and wrong for a database where a single `COUNT(*)` takes minutes. The
+**A comparison of a large database will still time out.** `POST …/validations`
+counts synchronously inside the request: `COUNT(*)` per table, no child
+process, no event stream. Right for the fixtures (150ms for 315k rows across
+five tables), wrong for a database where one `COUNT(*)` takes minutes. The
 `running` status and the `finished_at` / `duration_ms` columns are already
-shaped for an out-of-band comparison; nothing else is. Move it behind the runner
-before pointing this at anything large.
+shaped for an out-of-band version; nothing else is. **Explicitly descoped from
+Phase 5** and recorded as such at the start: it needs a second runner mode
+rather than hardening, and doing it there would have crowded out seven items.
+Move it behind the runner before pointing this at anything large.
 
-**Verification gaps.** No Playwright and no E2E anywhere in the repo, so the
-plan's end-to-end gate (sign in → org → connection → run → reload mid-run →
-catch up) is unwritten — Phase 3b's real run was driven by hand and by curl,
-not by a test that will run again tomorrow. There is also **no
-credential-redaction test**, which the plan calls the worst plausible bug in
-this project. Google SSO is wired but
-needs `NUXT_OAUTH_GOOGLE_CLIENT_ID` / `SECRET`.
+**A stalled run is reported to the server log and nowhere else.** The watchdog
+deliberately does not settle a live-but-silent run — that would free the org's
+concurrency slot and let a second run launch into a destination the first is
+still writing to. But surfacing it in the UI needs a `stalled` flag on `runs`
+and a migration, which Phase 5 did not add. Today an operator learns about it
+from `console.warn`.
+
+**Coverage is 63.28 / 48.02 / 66.99 / 64.06** against a target of 80. Phase 5
+moved every axis up (from 62.04 / 46.46 / 65.94 / 62.82) and re-ratcheted the
+thresholds. The largest remaining gaps are `apps/cli/src/presentation/cli/cli.ts`
+at 0% and the Vue components, neither of which is unit-tested at all.
+
+**No `prefers-contrast` or screen-reader pass.** Phase 5 did keyboard and focus:
+a skip link, focus rings verified in a browser, and three Playwright tests. It
+did not audit with a screen reader, and `docs/agents/` records no commitment to.
 
 **Known bugs, tracked.** [#5](https://github.com/EduardoPetrini/nodejs-movy-data/issues/5)
 query migration crashes on a non-PostgreSQL destination,
 [#4](https://github.com/EduardoPetrini/nodejs-movy-data/issues/4) `MssqlQueryAnalyzer`
 unreachable, [#3](https://github.com/EduardoPetrini/nodejs-movy-data/issues/3)
-MSSQL sequence reset assumes an `id` column.
+MSSQL sequence reset assumes an `id` column. All three are CLI-side.
 
 ---
 
@@ -85,9 +83,10 @@ apps/runner/     @movy/runner  the run driver: argv, stdin, signals, IPC, journa
 apps/web/        @movy/web     Nuxt 4: orgs, RBAC, connections, definitions, runs
 ```
 
-`pnpm` workspaces. 1094 tests. Coverage 62.04 / 46.46 / 65.94 / 62.82 over core +
-CLI + runner, ratcheted upward only; `apps/web` ratchets separately so a young
-app neither dilutes the core number nor hands it a free jump.
+`pnpm` workspaces. 1188 unit tests, plus 8 Playwright E2E behind `pnpm test:e2e`.
+Coverage 63.28 / 48.02 / 66.99 / 64.06 over core + CLI + runner, ratcheted
+upward only; `apps/web` ratchets separately so a young app neither dilutes the
+core number nor hands it a free jump.
 
 ### Phase 0 — monorepo restructure
 Split `src/` into three workspaces. 106 renames, so `git log --follow` still
@@ -140,6 +139,17 @@ no-op:
 Refusals were exercised against the running server: query-mode launch → 422 with
 the reason, same-database run → 400, duplicate definition name → 409, deleting a
 connection two definitions use → 409 naming the count.
+
+### Phase 5 — hardening
+**Closed 2026-09-09.** A password can no longer reach a screen, Cancel actually
+cancels, the event store is bounded, failures say which failure they were, and
+the end-to-end path is a test rather than a memory. Full write-up under
+*Phase 5* below.
+
+`RedactingSink` in `composeSink`, `classifyConnectionError`, `throwIfCancelled`
+and `WorkerPool.terminate()`, a per-run log cap and a retention sweep,
+`server/utils/safe-error.ts`, a skip link, Playwright with 8 specs, ADR 0002 and
+ADR 0003, and the web vocabulary in `CONTEXT.md`.
 
 ### Phase 4 — history, comparison and drift
 **Closed 2026-09-08.** The ledger pages properly, a comparison is a stored
@@ -881,5 +891,129 @@ design, and nothing else catches it.
   column-scoped `ON DELETE SET NULL (<column>)`, hand-edited because drizzle-kit
   emits a bare `SET NULL` that would try to null `org_id`. `migration-sql.test.ts`
   fails if a regenerated migration drops it.
-- Docs still to update in Phase 5: `CONTEXT.md` (Org, Run, Timeline, Definition),
-  `README.md`, and ADRs 0002 (run execution) and 0003 (org tenancy).
+- Docs are current as of Phase 5: `CONTEXT.md` gained Organization, Definition,
+  Run, Timeline, Comparison and Drift; `README.md` describes the workspace and
+  the web console; ADR 0002 (run execution) and ADR 0003 (org tenancy) exist.
+
+
+---
+
+## Phase 5 — decisions
+
+**Redaction is the net, not the design.** The design is that events carry
+progress and never configuration — `SafeEndpoint` has engine and database and
+nothing else, precisely so there is no field for a password to sit in. But two
+strings on every event are written by code that has never heard of that rule:
+`log.message` and a `SerialisedError`'s `message`. A driver quoting its DSN back
+on a failed handshake lands a password on a stream read-only viewers subscribe
+to. `RedactingSink` goes inside `SafeSink` and outside the throttle, at the one
+seam that feeds the journal, IPC and the socket alike, so no consumer has to
+remember to scrub for itself.
+
+**Secrets under four characters are deliberately not redacted.** A
+two-character password appears inside ordinary words — "at", "in", a table
+called "orders" — and redacting it would shred every message on the stream while
+advertising, by the placement of the marks, exactly what the password was. A net
+that destroys the timeline is worse than the hole it leaves, and the hole is
+bounded because the primary defence is still that no event has a field for a
+credential.
+
+**The redaction test asserts output, not implementation.** It drives a real
+orchestrator whose driver throws the DSN back at it and then searches every
+emitted byte, so it does not know which field the password would have travelled
+in. Verified by disabling redaction: four of the ten assertions fail, including
+the run-level one. A test that passes either way proves nothing, and this was
+checked rather than assumed.
+
+**Cancellation checks the signal before the TRUNCATE, not only before the
+copy.** Emptying the destination is the single most destructive thing a run
+does, and a cancellation arriving while the schema step was still finishing must
+not be answered by wiping five tables and then stopping.
+
+**`WorkerPool` resolves rather than rejects when it was terminated.** A killed
+worker exits non-zero, indistinguishable by code alone from a crash — so without
+the flag, cancelling a PG→PG run surfaces "Worker exited with code 1" as the
+reason it failed, when the reason is that someone pressed Cancel.
+`PgDataMigrator` then re-checks the signal itself, because a pool that resolves
+would otherwise return a partial result that reads as success.
+
+**The taxonomy answers `unknown` rather than guessing.** A wrong classification
+is worse than none: telling someone their password is wrong when the host is
+unreachable sends them to rotate a working credential. Matched on driver codes
+first and prose only as a fallback — codes are stable, and a PostgreSQL server
+with `lc_messages = fr_FR` says "l'authentification par mot de passe a échoué",
+which no English substring will ever match, while `28P01` is the same
+everywhere. The driver's own words are kept, redacted, beside the summary.
+
+**Only `log` events are capped.** It is the one unbounded type: the throttle
+coalesces progress to four a second per key and the plan bounds the structural
+events, but `SinkLogger` puts every `logger.*` call on the stream and
+`MigrateDataUseCase` logs once per 500-row batch, so a 50-million-row migration
+writes ~100k log rows for one run. Dropping a `step_finished` or a
+`run_finished` would leave a run permanently unsettled with a half-drawn
+timeline — far worse than a large table.
+
+**At the cap the event is replaced, not skipped.** The notice carries the same
+`seq`. The client de-dupes by seq and requires only monotonicity, so a hole
+would have been legal — but a log pane that simply stops has no way to say why,
+and a person watching would read it as a hang.
+
+**A stalled run is reported, never settled.** Marking a live-but-silent run
+failed frees its org's concurrency slot and lets a second run launch into a
+destination the first is still writing to, which turns a stall into corruption.
+And silence is not proof of a stall: `CREATE INDEX` over tens of millions of
+rows emits nothing for as long as it takes, which is what set the 30-minute
+threshold. A watchdog nobody believes is worse than none.
+
+**Retention prunes `run_events` and nothing else.** `runs`, `run_steps` and
+`run_table_progress` are the ledger — small, bounded by the number of runs
+rather than the size of the data — and deleting them would make a year of
+history vanish rather than merely lose its narration. A run still in flight is
+never touched however old its first events are: pruning underneath a live reader
+would make the timeline it is watching go backwards.
+
+**The E2E run is simulated.** The bundled fixture replayed through the real
+runner, socket, writer and reducer, so all the machinery is exercised without
+depending on two throwaway databases existing on whoever's machine runs it. The
+mid-run reload is the point: every other step is covered by unit tests against
+mocks, and none of them can cover a real browser losing its WebSocket,
+re-fetching a snapshot and continuing from the same `seq`.
+
+## Phase 5 — what the work found
+
+**Nuxt hydration silently swallows form input.** Server-rendered inputs exist
+and accept text a beat before Vue has bound `v-model` to them. Playwright's
+`fill` and `click` both "succeed", the model stays empty, the submit posts
+nothing, and the test dies 90 seconds later with no error anywhere on screen.
+`waitForLoadState('networkidle')` before touching the form is the fix. Worth
+knowing beyond the tests: a real user on a slow connection can do the same
+thing.
+
+**Playwright's top-level `request` fixture carries no session cookie.** It 401s
+in a way that reads exactly like a permission bug in the handler. `page.request`
+shares the browser context.
+
+**A ledger row shows no run id.** It shows the definition's name and the two
+databases; the id is only in the `href` of the link it wraps. Asserting on
+`runId.slice(0, 8)` was wrong about the UI, not about the data.
+
+**The coverage columns are statements / branches / functions / lines**, which is
+not the order the `thresholds` object lists them in. Setting them by position
+made the gate fail against numbers that had actually improved.
+
+**`CLAUDE.md` was already current on Phase 4.** The *Remaining work* list said
+otherwise. Struck after checking — a handoff file that is wrong about itself is
+the specific failure this document's working agreement exists to prevent.
+
+## Phase 5 — verified
+
+- `pnpm test` — 1188 unit tests across 86 files, green, no database.
+- `pnpm typecheck` — clean across all four workspaces.
+- `pnpm test:coverage` — 63.28 / 48.02 / 66.99 / 64.06, thresholds re-ratcheted
+  and passing.
+- `pnpm test:e2e` — 8 Playwright specs against the real app on :3000 with the
+  dev seed, including a simulated run reloaded mid-flight and caught up, a
+  finished run replayed cold from stored events alone, a viewer shown no log
+  lines, and the skip link reached by the first Tab.
+- Redaction proved by removal: disabling `RedactingSink` fails 4 of the 10
+  assertions in `credential-redaction.test.ts`.

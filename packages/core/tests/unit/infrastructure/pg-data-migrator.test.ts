@@ -52,6 +52,8 @@ describe('PgDataMigrator', () => {
       ['users'],
       2,
       undefined,
+      undefined,
+      // The cancellation signal, absent here: migrate() was called without one.
       undefined
     );
   });

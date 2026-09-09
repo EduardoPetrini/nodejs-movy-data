@@ -8,7 +8,8 @@ import {
   SchemaDiffSummary,
   StepDetail,
 } from '../../domain/types/events.types.js';
-import { MigrationCancelledError } from '../../domain/errors/migration.errors.js';
+import { MigrationCancelledError, ConnectionError } from '../../domain/errors/migration.errors.js';
+import { classifyConnectionError } from '../../domain/errors/connection-failure.js';
 import { CreateDatabaseUseCase } from '../use-cases/create-database.use-case.js';
 import { CompareSchemasUseCase } from '../use-cases/compare-schemas.use-case.js';
 import { SyncSchemaUseCase } from '../use-cases/sync-schema.use-case.js';
@@ -60,20 +61,8 @@ export class MigrationOrchestrator {
     try {
       await this.step(ctx, 'validate_connections', async () => {
         this.logger.info('Validating connections...');
-        await retryWithBackoff(
-          () => sourceConnection.connect(),
-          MAX_CONNECT_RETRIES,
-          CONNECT_BASE_DELAY_MS,
-          (attempt, err, delayMs) =>
-            this.logger.warn(`Source connection attempt ${attempt} failed: ${err.message}. Retrying in ${delayMs}ms...`)
-        );
-        await retryWithBackoff(
-          () => adminConnection.connect(),
-          MAX_CONNECT_RETRIES,
-          CONNECT_BASE_DELAY_MS,
-          (attempt, err, delayMs) =>
-            this.logger.warn(`Admin connection attempt ${attempt} failed: ${err.message}. Retrying in ${delayMs}ms...`)
-        );
+        await this.connectOrExplain('Source', () => sourceConnection.connect());
+        await this.connectOrExplain('Admin', () => adminConnection.connect());
       });
 
       // Step 1: Create database if needed, then connect to it
@@ -84,13 +73,7 @@ export class MigrationOrchestrator {
           const createDb = new CreateDatabaseUseCase(destAdapters, this.logger);
           const created = await createDb.execute(adminConnection, destConfig.database);
 
-          await retryWithBackoff(
-            () => destConnection.connect(),
-            MAX_CONNECT_RETRIES,
-            CONNECT_BASE_DELAY_MS,
-            (attempt, err, delayMs) =>
-              this.logger.warn(`Destination connection attempt ${attempt} failed: ${err.message}. Retrying in ${delayMs}ms...`)
-          );
+          await this.connectOrExplain('Destination', () => destConnection.connect());
           return created;
         },
         (created): StepDetail => ({ kind: 'create_database', database: destConfig.database, created })
@@ -222,6 +205,40 @@ export class MigrationOrchestrator {
         destConnection.end(),
         adminConnection.end(),
       ]);
+    }
+  }
+
+  /**
+   * Connects with the standard retry, and on final failure replaces the
+   * driver's message with one that says what kind of failure it was.
+   *
+   * The driver's own text is kept after the summary rather than discarded: it
+   * is what an operator pastes into a search engine, and the classifier returns
+   * `unknown` often enough that dropping it would make some failures
+   * undiagnosable. The summary goes FIRST because that is the half a
+   * non-specialist can act on.
+   */
+  private async connectOrExplain(role: string, connect: () => Promise<void>): Promise<void> {
+    try {
+      await retryWithBackoff(
+        connect,
+        MAX_CONNECT_RETRIES,
+        CONNECT_BASE_DELAY_MS,
+        (attempt, err, delayMs) =>
+          this.logger.warn(
+            `${role} connection attempt ${attempt} failed: ${err.message}. Retrying in ${delayMs}ms...`
+          )
+      );
+    } catch (err) {
+      const { kind, summary } = classifyConnectionError(err);
+      const detail = err instanceof Error ? err.message : String(err);
+      const failure = new ConnectionError(
+        `${role} connection failed (${kind}). ${summary} The database said: ${detail}`
+      );
+      // The original is kept reachable for anything that wants the driver's own
+      // shape; only the message a human reads has been rewritten.
+      (failure as Error & { cause?: unknown }).cause = err;
+      throw failure;
     }
   }
 

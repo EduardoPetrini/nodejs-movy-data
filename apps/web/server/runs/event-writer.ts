@@ -29,7 +29,30 @@ export interface EventWriterOptions {
   readonly onFlushed?: (runId: string, projection: Projection) => void;
   readonly setTimer?: (fn: () => void, ms: number) => NodeJS.Timeout | number;
   readonly clearTimer?: (handle: NodeJS.Timeout | number) => void;
+  /**
+   * Ceiling on `log` events stored for one run. Structural events are never
+   * capped — see `push`.
+   */
+  readonly maxLogEventsPerRun?: number;
+  /** Called once per run, when the cap is first reached. */
+  readonly onTruncated?: (runId: string, atSeq: number) => void;
 }
+
+/**
+ * Log events past this are replaced by one notice and then dropped.
+ *
+ * `log` is the only unbounded event type. `table_progress` and
+ * `overall_progress` are coalesced by `ThrottledSink` to four a second per key,
+ * and the structural events are bounded by the plan — but `SinkLogger` puts
+ * every `logger.*` call on the stream, and `MigrateDataUseCase` logs once per
+ * progress callback, which is once per 500-row batch. A 50-million-row
+ * migration therefore writes ~100k log rows into `run_events` for one run, and
+ * nothing in the system stops it.
+ *
+ * 20k is chosen to be far above any run a person will read through and far
+ * below a number that makes the table a problem.
+ */
+const DEFAULT_MAX_LOG_EVENTS_PER_RUN = 20_000;
 
 /**
  * Batches run events into the metadata database.
@@ -46,6 +69,8 @@ export interface EventWriterOptions {
 export class EventWriter {
   private readonly buffers = new Map<string, MigrationEvent[]>();
   private readonly inFlight = new Map<string, Promise<void>>();
+  /** Per-run log-event tally, for the cap. Cleared when the run is forgotten. */
+  private readonly logCounts = new Map<string, number>();
   private timer: NodeJS.Timeout | number | null = null;
 
   private readonly maxBatch: number;
@@ -54,6 +79,8 @@ export class EventWriter {
   private readonly onFlushed: (runId: string, projection: Projection) => void;
   private readonly setTimer: NonNullable<EventWriterOptions['setTimer']>;
   private readonly clearTimer: NonNullable<EventWriterOptions['clearTimer']>;
+  private readonly maxLogEventsPerRun: number;
+  private readonly onTruncated: (runId: string, atSeq: number) => void;
 
   constructor(
     private readonly store: ProjectionStore,
@@ -65,9 +92,34 @@ export class EventWriter {
     this.onFlushed = options.onFlushed ?? (() => {});
     this.setTimer = options.setTimer ?? ((fn, ms) => setTimeout(fn, ms));
     this.clearTimer = options.clearTimer ?? ((h) => clearTimeout(h as NodeJS.Timeout));
+    this.maxLogEventsPerRun = options.maxLogEventsPerRun ?? DEFAULT_MAX_LOG_EVENTS_PER_RUN;
+    this.onTruncated = options.onTruncated ?? (() => {});
   }
 
+  /** Release a settled run's tally. Without this the map grows for the host's lifetime. */
+  forget(runId: string): void {
+    this.logCounts.delete(runId);
+  }
+
+  /**
+   * Accepts one event, unless this run has already logged too much.
+   *
+   * Only `log` is capped. Dropping a `step_finished` or a `run_finished` would
+   * leave a run permanently unsettled with a half-drawn timeline, which is a
+   * far worse outcome than an unbounded table; dropping a progress sample would
+   * freeze the bar. So the cap applies to the one type that is unbounded in the
+   * size of the source database and useless in bulk.
+   *
+   * At the boundary the offending event is REPLACED by a notice carrying the
+   * same `seq`, rather than skipped. The client de-dupes by seq and requires
+   * only monotonicity, so a hole would be legal — but a log pane that simply
+   * stops has no way to say why, and a person watching would read it as a hang.
+   */
   push(runId: string, event: MigrationEvent): void {
+    const stored = this.recordAndMaybeCap(runId, event);
+    if (stored === null) return;
+    event = stored;
+
     const buffer = this.buffers.get(runId);
     if (buffer) buffer.push(event);
     else this.buffers.set(runId, [event]);
@@ -77,6 +129,38 @@ export class EventWriter {
       return;
     }
     this.arm();
+  }
+
+  /**
+   * Counts this run's log events and decides what, if anything, to store.
+   *
+   * Returns the event to store, a substituted truncation notice, or null to
+   * drop it. The counter is per run and lives only as long as the process,
+   * which is the right lifetime: after a restart the run is re-read from its
+   * journal, and re-capping from zero writes at most one more notice — versus
+   * a persisted counter that would need a column and a migration to save
+   * duplicate rows that `ON CONFLICT DO NOTHING` already discards.
+   */
+  private recordAndMaybeCap(runId: string, event: MigrationEvent): MigrationEvent | null {
+    if (event.type !== 'log') return event;
+
+    const seen = (this.logCounts.get(runId) ?? 0) + 1;
+    this.logCounts.set(runId, seen);
+
+    if (seen < this.maxLogEventsPerRun) return event;
+
+    if (seen === this.maxLogEventsPerRun) {
+      this.onTruncated(runId, event.seq);
+      return {
+        ...event,
+        level: 'warn',
+        message:
+          `Log output for this run passed ${this.maxLogEventsPerRun.toLocaleString()} lines and is no longer being ` +
+          'recorded. The migration is unaffected and its progress and outcome are still tracked; ' +
+          'the full log is in the run journal on the host.',
+      };
+    }
+    return null;
   }
 
   /**

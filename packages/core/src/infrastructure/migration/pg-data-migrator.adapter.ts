@@ -5,6 +5,7 @@ import { WorkerPool } from './worker-pool.js';
 import { PgConnection } from '../database/pg/pg-connection.adapter.js';
 import { IDatabaseConnection } from '../../domain/ports/database.port.js';
 import { truncatePgTables } from './pg-truncate.js';
+import { throwIfCancelled } from './cancellation.js';
 
 /** Injectable so tests can drive this without opening a real connection. */
 export type DestConnectionFactory = (config: ConnectionConfig) => IDatabaseConnection;
@@ -24,9 +25,16 @@ export class PgDataMigrator implements IDataMigrator {
     plan: TableMigrationPlan,
     workerCount: number,
     rowEstimates?: Map<string, number>,
-    onProgress?: MigrationProgressCallback
+    onProgress?: MigrationProgressCallback,
+    signal?: AbortSignal
   ): Promise<MigrationResult> {
     const start = Date.now();
+
+    // Before the TRUNCATE, not only before the copy: emptying the destination
+    // is the single most destructive thing a run does, and a cancellation that
+    // arrives while the schema step was still finishing must not be answered by
+    // wiping five tables and then stopping.
+    throwIfCancelled(signal, 'before clearing the destination');
 
     // Clear the destination in one statement before any worker starts.
     // Per-table clearing inside the workers failed for every FK-parent on a
@@ -46,8 +54,13 @@ export class PgDataMigrator implements IDataMigrator {
       plan.loadOrder,
       workerCount,
       rowEstimates,
-      onProgress
+      onProgress,
+      signal
     );
+
+    // The pool resolves rather than rejects when it was terminated, so without
+    // this a cancelled run returns a partial result that reads as success.
+    throwIfCancelled(signal, 'during the data copy');
 
     return {
       tables: tableResults,

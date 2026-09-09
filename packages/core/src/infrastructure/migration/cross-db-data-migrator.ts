@@ -12,6 +12,7 @@ import { DataMigrationError } from '../../domain/errors/migration.errors.js';
 import { MysqlConnection } from '../database/mysql/mysql-connection.adapter.js';
 import { PgConnection } from '../database/pg/pg-connection.adapter.js';
 import { truncatePgTables } from './pg-truncate.js';
+import { throwIfCancelled } from './cancellation.js';
 
 const BATCH_SIZE = 500;
 
@@ -31,7 +32,8 @@ export class CrossDbDataMigrator implements IDataMigrator {
     plan: TableMigrationPlan,
     _workerCount: number,
     rowEstimates?: Map<string, number>,
-    onProgress?: MigrationProgressCallback
+    onProgress?: MigrationProgressCallback,
+    signal?: AbortSignal
   ): Promise<MigrationResult> {
     this.assertSupportedPair(sourceConfig.type, destConfig.type);
 
@@ -58,6 +60,7 @@ export class CrossDbDataMigrator implements IDataMigrator {
 
       try {
         for (const table of plan.loadOrder) {
+          throwIfCancelled(signal, `before copying "${table}"`);
           const tableStart = Date.now();
           const estimated = rowEstimates?.get(table) ?? 0;
           let rowsCopied = 0;
@@ -66,14 +69,15 @@ export class CrossDbDataMigrator implements IDataMigrator {
 
           try {
             if (isMysqlToPg(sourceConfig.type, destConfig.type)) {
-              rowsCopied = await this.copyMysqlToPg(sourceConfig, destConfig, table, estimated, onProgress);
+              rowsCopied = await this.copyMysqlToPg(sourceConfig, destConfig, table, estimated, onProgress, signal);
             } else {
               rowsCopied = await this.copyPgToMysql(
                 sourceConfig,
                 table,
                 estimated,
                 mysqlDestClient!,
-                onProgress
+                onProgress,
+                signal
               );
             }
             onProgress?.(table, rowsCopied, rowsCopied);
@@ -110,7 +114,8 @@ export class CrossDbDataMigrator implements IDataMigrator {
     destConfig: ConnectionConfig,
     table: string,
     estimatedRows: number,
-    onProgress?: MigrationProgressCallback
+    onProgress?: MigrationProgressCallback,
+    signal?: AbortSignal
   ): Promise<number> {
     const mysqlPool = mysql.createPool({
       host: sourceConfig.host,
@@ -138,6 +143,7 @@ export class CrossDbDataMigrator implements IDataMigrator {
       let lastReportedPct = -1;
 
       while (true) {
+        throwIfCancelled(signal, `mid-copy of "${table}"`);
         const [rows] = await mysqlPool.execute(
           `SELECT * FROM ${safeTable} LIMIT ${BATCH_SIZE} OFFSET ${offset}`
         );
@@ -182,7 +188,8 @@ export class CrossDbDataMigrator implements IDataMigrator {
     table: string,
     estimatedRows: number,
     destClient: Awaited<ReturnType<MysqlConnection['getClient']>>,
-    onProgress?: MigrationProgressCallback
+    onProgress?: MigrationProgressCallback,
+    signal?: AbortSignal
   ): Promise<number> {
     const pgConn = new PgConnection(sourceConfig);
     await pgConn.connect();
@@ -209,6 +216,7 @@ export class CrossDbDataMigrator implements IDataMigrator {
       let lastReportedPct = -1;
 
       while (true) {
+        throwIfCancelled(signal, `mid-copy of "${table}"`);
         const pgColList = columns.map((c) => `"${c.replace(/"/g, '""')}"`).join(', ');
         const rows = await pgConn.query<Record<string, unknown>>(
           `SELECT ${pgColList} FROM ${safePgTable} LIMIT ${BATCH_SIZE} OFFSET ${offset}`

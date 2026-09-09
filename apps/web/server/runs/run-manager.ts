@@ -34,6 +34,13 @@ export interface RunManagerOptions {
   readonly onError?: (err: Error, runId: string) => void;
   /** How often to re-read an orphan's journal. */
   readonly followIntervalMs?: number;
+  /**
+   * How long a followed run may produce nothing before it is reported stalled.
+   * Generous by default: see `follow()`.
+   */
+  readonly stallAfterMs?: number;
+  /** Reported once per silent stretch, never more. */
+  readonly onStalled?: (runId: string, silentMs: number) => void;
 }
 
 /** One run this host is watching through its journal because IPC is gone. */
@@ -59,6 +66,16 @@ interface Handle {
   sawTerminal: boolean;
 }
 
+/**
+ * Thirty minutes of silence before a followed run is called stalled.
+ *
+ * Chosen against the longest legitimately silent operation Movy performs: a
+ * `CREATE INDEX` in step 8 over a table with tens of millions of rows, which
+ * emits nothing at all while it runs. A threshold below that would cry wolf on
+ * every large migration, and a watchdog nobody believes is worse than none.
+ */
+const DEFAULT_STALL_AFTER_MS = 30 * 60 * 1000;
+
 const EXIT_STATUS: Record<number, 'succeeded' | 'failed' | 'cancelled'> = {
   [RUNNER_EXIT.succeeded]: 'succeeded',
   [RUNNER_EXIT.failed]: 'failed',
@@ -78,6 +95,8 @@ export class RunManager {
   /** Orphans being followed through their journals: runId -> poll timer. */
   private readonly followers = new Map<string, NodeJS.Timeout>();
   private readonly followIntervalMs: number;
+  private readonly stallAfterMs: number;
+  private readonly onStalled: (runId: string, silentMs: number) => void;
   private readonly runnerEntry: string;
   private readonly spawn: NonNullable<RunManagerOptions['spawn']>;
   private readonly onError: (err: Error, runId: string) => void;
@@ -89,6 +108,8 @@ export class RunManager {
   ) {
     this.runnerEntry = options.runnerEntry;
     this.followIntervalMs = options.followIntervalMs ?? 1000;
+    this.stallAfterMs = options.stallAfterMs ?? DEFAULT_STALL_AFTER_MS;
+    this.onStalled = options.onStalled ?? (() => {});
     this.onError = options.onError ?? (() => {});
     this.spawn = options.spawn ?? defaultSpawn;
   }
@@ -250,12 +271,28 @@ export class RunManager {
     return { read, cursor, outcome: null };
   }
 
-  /** Poll an orphan's journal until it ends. Idempotent per run. */
+  /**
+   * Poll an orphan's journal until it ends. Idempotent per run.
+   *
+   * Also the heartbeat watchdog. A run whose PROCESS vanished is settled by
+   * `catchUp`; this covers the other failure — a runner that is alive but
+   * wedged, waiting on a lock that will never be released, writing nothing.
+   *
+   * It REPORTS rather than settles, deliberately. Marking a live run failed
+   * would free its org's concurrency slot and let a second run launch against a
+   * destination the first one is still writing to, which turns a stall into
+   * corruption. And silence is not proof of a stall: `CREATE INDEX` on a large
+   * table emits nothing for as long as it takes. So the watchdog says "this has
+   * been quiet for a long time" to whoever is watching the server, and leaves
+   * the decision to a person who can look at the database.
+   */
   private follow(run: UnsettledRun, fromSeq: number): void {
     if (this.followers.has(run.id)) return;
 
     let cursor = fromSeq;
     let busy = false;
+    let lastEventAt = Date.now();
+    let reportedStall = false;
 
     const tick = async (): Promise<void> => {
       // A slow pass must not overlap the next tick and re-read the same range.
@@ -264,8 +301,20 @@ export class RunManager {
       try {
         const caught = await this.catchUp(run, cursor);
         cursor = caught.cursor;
+
+        if (caught.read > 0) {
+          lastEventAt = Date.now();
+          // A run that speaks again was not stalled after all; arm the report
+          // for the next silent stretch rather than staying quiet forever.
+          reportedStall = false;
+        } else if (!reportedStall && Date.now() - lastEventAt >= this.stallAfterMs) {
+          reportedStall = true;
+          this.onStalled(run.id, Date.now() - lastEventAt);
+        }
+
         if (caught.outcome) {
           this.unfollow(run.id);
+          this.writer.forget(run.id);
           await this.settleRun(run.id, caught.outcome);
         }
       } finally {
@@ -357,6 +406,9 @@ export class RunManager {
   }
 
   private async settle(handle: Handle, outcome: Outcome): Promise<void> {
+    // Release the writer's per-run log tally: a settled run will never push
+    // again, and the map would otherwise grow for the host's whole lifetime.
+    this.writer.forget(handle.runId);
     await this.settleRun(handle.runId, outcome);
   }
 }

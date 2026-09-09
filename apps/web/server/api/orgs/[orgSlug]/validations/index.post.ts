@@ -1,10 +1,14 @@
 import { randomUUID } from 'node:crypto';
-import { ConsoleLogger, ValidateCountsUseCase, buildRegistry, type IDatabaseConnection } from '@movy/core';
+import {
+  ConsoleLogger, ValidateCountsUseCase, buildRegistry,
+  type ConnectionConfig, type IDatabaseConnection,
+} from '@movy/core';
 import { createRepos } from '~~/server/repositories';
 import { requirePermission } from '~~/server/utils/rbac';
 import { parseEngine, toConnectionConfig } from '~~/server/utils/connection-config';
 import { resolveRunTarget, type RunTargetBody } from '~~/server/runs/resolve-target';
 import { toPublicValidationDetail } from '~~/server/serializers/validation.serializer';
+import { describeConnectionFailure, safeErrorMessage } from '~~/server/utils/safe-error';
 
 /**
  * Count every table on both sides and record the answer.
@@ -73,9 +77,9 @@ export default defineEventHandler(async (event) => {
   const startedAt = Date.now();
 
   try {
-    await connectOrFail(sourceConnection, 'source', target.source.engine);
+    await connectOrFail(sourceConnection, 'source', target.source.engine, sourceConfig);
     open.push(sourceConnection);
-    await connectOrFail(destConnection, 'destination', target.target.engine);
+    await connectOrFail(destConnection, 'destination', target.target.engine, destConfig);
     open.push(destConnection);
 
     // A real logger, so a failing comparison leaves a trace in the server log.
@@ -107,7 +111,10 @@ export default defineEventHandler(async (event) => {
     // even though the caller also gets the error.
     await repos.validations.fail(
       validation.id,
-      { name: error.name, message: error.message },
+      // Stored, and later served to viewers, so it is scrubbed of both
+      // passwords first — a COUNT(*) that fails mid-comparison raises the same
+      // driver errors the connect path does.
+      { name: error.name, message: safeErrorMessage(error, sourceConfig, destConfig) },
       Date.now() - startedAt
     );
     throw err;
@@ -127,20 +134,23 @@ export default defineEventHandler(async (event) => {
  *
  * Which end is the diagnosis: "could not reach the destination" sends the
  * operator to a different screen than "could not reach the source". The same
- * shape `runs/preview.post.ts` uses, for the same reason.
+ * shape `runs/preview.post.ts` uses, for the same reason — including passing
+ * the config so the driver's words can have the password taken out of them.
  */
 async function connectOrFail(
   connection: IDatabaseConnection,
   side: 'source' | 'destination',
-  engine: string
+  engine: string,
+  config: ConnectionConfig
 ): Promise<void> {
   try {
     await connection.connect();
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const failure = describeConnectionFailure(err, config);
     throw createError({
       statusCode: 502,
-      statusMessage: `Could not reach the ${side} ${engine} database: ${message}`,
+      statusMessage: `Could not reach the ${side} ${engine} database. ${failure.text}`,
+      data: { side, errorKind: failure.kind },
     });
   }
 }

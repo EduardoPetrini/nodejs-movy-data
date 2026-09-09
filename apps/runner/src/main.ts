@@ -114,7 +114,13 @@ async function main(): Promise<number> {
         signal: controller.signal,
       });
     } else {
-      const sink = composeSink(runId, publish);
+      // The two passwords are the only secrets the runner holds, and this is
+      // the one place that has both the spec and the sink. Everything
+      // downstream — journal, IPC, socket — is fed from here, so scrubbing at
+      // this seam covers all three without any of them knowing about it.
+      const sink = composeSink(runId, publish, {
+        secrets: [spec!.source.password, spec!.target.password],
+      });
       flush = sink.flush;
       status = await executeRun(spec!, { emit: sink, signal: controller.signal });
     }

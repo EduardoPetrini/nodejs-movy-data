@@ -7,6 +7,7 @@ import {
   TableMigrationResult,
 } from '../../domain/types/migration.types.js';
 import { MssqlConnection } from '../database/mssql/mssql-connection.adapter.js';
+import { throwIfCancelled } from './cancellation.js';
 
 const BATCH_SIZE = 500;
 const DEFAULT_SCHEMA = 'dbo';
@@ -22,7 +23,8 @@ export class MssqlDataMigrator implements IDataMigrator {
     plan: TableMigrationPlan,
     _workerCount: number,
     rowEstimates?: Map<string, number>,
-    onProgress?: MigrationProgressCallback
+    onProgress?: MigrationProgressCallback,
+    signal?: AbortSignal
   ): Promise<MigrationResult> {
     const start = Date.now();
     const source = new MssqlConnection(sourceConfig);
@@ -43,6 +45,7 @@ export class MssqlDataMigrator implements IDataMigrator {
         const results: TableMigrationResult[] = [];
 
         for (const table of plan.loadOrder) {
+          throwIfCancelled(signal, `before copying "${table}"`);
           const tableStart = Date.now();
           const estimated = rowEstimates?.get(table) ?? 0;
           let rowsCopied = 0;
@@ -52,7 +55,7 @@ export class MssqlDataMigrator implements IDataMigrator {
           try {
             rowsCopied = await this.copyTable(source, destClient, table, estimated, (done, total) => {
               onProgress?.(table, done, total);
-            });
+            }, signal);
             onProgress?.(table, rowsCopied, rowsCopied);
           } catch (err) {
             success = false;
@@ -105,7 +108,8 @@ export class MssqlDataMigrator implements IDataMigrator {
     destClient: IDbClient,
     table: string,
     estimatedRows: number,
-    onProgress: (done: number, total: number) => void
+    onProgress: (done: number, total: number) => void,
+    signal?: AbortSignal
   ): Promise<number> {
     const columns = await this.getColumnNames(source, table);
     if (columns.length === 0) return 0;
@@ -127,6 +131,7 @@ export class MssqlDataMigrator implements IDataMigrator {
 
     try {
       while (true) {
+        throwIfCancelled(signal, `mid-copy of "${table}"`);
         const rows = await source.query<Record<string, unknown>>(
           `SELECT ${colList} FROM ${escapedTable}
            ORDER BY (SELECT NULL)

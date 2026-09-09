@@ -80,11 +80,13 @@ export default defineConfig({
       // Ratchet baseline: set to the measured floor so the build stays green and
       // can only improve. Goal is 80% (see docs/implementation-plan.md); raise
       // these numbers as coverage climbs, never lower them.
+      // Raised 2026-09-08 (Phase 5) from 62/65/46/62 by the redaction,
+      // cancellation and error-taxonomy tests.
       thresholds: {
-        lines: 62,
-        functions: 65,
-        branches: 46,
-        statements: 62,
+        lines: 64,
+        functions: 66,
+        branches: 48,
+        statements: 63,
       },
     },
   },
