@@ -161,6 +161,13 @@ advertises the password by the gaps. `credential-redaction.test.ts` drives a rea
 orchestrator whose driver echoes the DSN and searches every emitted byte; it fails if
 someone widens `SafeEndpoint`.
 
+The sink is not the only path. The runner's `fatal` frame bypasses it entirely and the
+host persists it to `runs.error_message`, so both fatal paths in `main.ts` scrub through
+`specNeedles(spec)` before touching stderr or IPC. And `redactValue` fails **closed**
+past its depth cap: it replaces any string *or container* it could not walk, because
+forwarding a subtree it never searched is a hole at exactly the depth someone would aim
+for. Scalars pass through — a number cannot carry a password.
+
 On the web side the same rule is `safeErrorMessage` / `describeConnectionFailure`
 (`server/utils/safe-error.ts`), used by the five handlers that report a failed connection
 as data — Test, list databases, list tables, preview, compare. `recordTest` **persists**
@@ -181,6 +188,16 @@ in the parent is invisible to a worker running a blocking `COPY` in another real
 pool resolves rather than rejects when terminated, so `PgDataMigrator` re-checks the
 signal itself; otherwise a cancelled run reads as a partial success. A cancelled run
 leaves the destination partly written, and every surface reporting one must say so.
+
+**A cancellation is not a table outcome — it ends the run.** Each sequential migrator
+wraps a table's copy in a try/catch that turns a failure into a `TableMigrationResult`,
+so `rethrowIfCancelled` has to head that catch: swallowed, it recorded a cancelled table
+as a FAILED one, and when that table was last in `loadOrder` there was nothing left to
+re-check, so `migrate()` returned `success: true` for a cancelled run. Each iteration
+also ends with `throwIfCancelled`, because the copy loop breaks on a short final batch
+without re-reading the signal. Do not rely on `MigrationOrchestrator` gating the steps
+that follow to notice — that accident is what masked both bugs. Every migrator also
+checks before clearing the destination, which is the most destructive thing a run does.
 
 `--json-events[=<path>]` on the CLI records the stream as NDJSON beside the log file.
 
@@ -211,11 +228,18 @@ never capped: losing a `run_finished` leaves a run permanently unsettled. Separa
 `run-retention.ts` sweeps daily and honours `organizations.retention_days` — only
 `run_events`, never `runs`/`run_steps`/`run_table_progress`, which are the ledger.
 
-**A stalled run is reported, not settled.** `RunManager.follow()` calls `onStalled` after
-30 minutes of silence from a process that is still alive. It does not fail the run:
-marking a live run failed frees its org's concurrency slot and lets a second run launch
-into a destination the first is still writing to. Thirty minutes is chosen against a
-`CREATE INDEX` over tens of millions of rows, which emits nothing while it runs.
+**A stalled run is reported, not settled.** `onStalled` fires after 30 minutes of
+silence from a process that is still alive. It does not fail the run: marking a live run
+failed frees its org's concurrency slot and lets a second run launch into a destination
+the first is still writing to. Thirty minutes is chosen against a `CREATE INDEX` over
+tens of millions of rows, which emits nothing while it runs.
+
+**Both cohorts of run are watched, by two different mechanisms.** `follow()` covers runs
+ADOPTED after a restart, checking each journal read; a shared unref'd sweep
+(`stallCheckIntervalMs`, 60s) covers the ones this host FORKED, whose `Handle` carries
+`lastEventAt`. For a while only the first existed, which left the ordinary case
+unwatched — a runner wedged on a lock holds its IPC channel open, writes nothing and
+never exits, so neither the exit handler nor the journal tailer has anything to fire on.
 
 **`run_events` is keyed on `(run_id, seq)`.** Events arrive from IPC *and* from
 the journal tailer, so delivery is at-least-once from two sources. That key is

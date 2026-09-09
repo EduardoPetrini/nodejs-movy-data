@@ -23,7 +23,7 @@ phase is indistinguishable from one that was never started.
 
 ## Status board
 
-*Last reviewed: 2026-09-09. 1188 unit tests (86 files) + 8 Playwright E2E, green.*
+*Last reviewed: 2026-09-09. 1199 unit tests (86 files) + 8 Playwright E2E, green.*
 
 | Phase | State | Notes |
 |-------|-------|-------|
@@ -34,6 +34,7 @@ phase is indistinguishable from one that was never started.
 | 3b — real runs | **DONE** (2026-09-08) | definitions, PairSelector, preview; real PG→PG verified |
 | 4 — history, replay, stats, drift | **DONE** (2026-09-08) | keyset ledger, comparisons, drift, org home; verified live |
 | 5 — hardening | **DONE** (2026-09-09) | redaction, cancellation, E2E, retention, taxonomy, docs |
+| 5r — review of Phase 5 | **DONE** (2026-09-09) | five defects found in `1329ca1` and fixed in `6f13fcd` |
 
 ### Remaining work
 
@@ -55,12 +56,17 @@ deliberately does not settle a live-but-silent run — that would free the org's
 concurrency slot and let a second run launch into a destination the first is
 still writing to. But surfacing it in the UI needs a `stalled` flag on `runs`
 and a migration, which Phase 5 did not add. Today an operator learns about it
-from `console.warn`.
+from `console.warn`. The review closed the other half of this: until `6f13fcd`
+the watchdog only ever watched runs ADOPTED after a restart, never the ones
+this host forked itself. See *Bugs found reviewing Phase 5* below.
 
-**Coverage is 63.28 / 48.02 / 66.99 / 64.06** against a target of 80. Phase 5
-moved every axis up (from 62.04 / 46.46 / 65.94 / 62.82) and re-ratcheted the
-thresholds. The largest remaining gaps are `apps/cli/src/presentation/cli/cli.ts`
-at 0% and the Vue components, neither of which is unit-tested at all.
+**Coverage is 63.35 / 48.35 / 67.04 / 64.09** against a target of 80. Phase 5
+moved every axis up (from 62.04 / 46.46 / 65.94 / 62.82), the review moved each
+up again, and the thresholds are re-ratcheted to the floor — set by NAME, since
+the report prints statements/branches/functions/lines and the `thresholds`
+object does not list them in that order. The largest remaining gaps are
+`apps/cli/src/presentation/cli/cli.ts` at 0% and the Vue components, neither of
+which is unit-tested at all.
 
 **No `prefers-contrast` or screen-reader pass.** Phase 5 did keyboard and focus:
 a skip link, focus rings verified in a browser, and three Playwright tests. It
@@ -1017,3 +1023,92 @@ the specific failure this document's working agreement exists to prevent.
   lines, and the skip link reached by the first Tab.
 - Redaction proved by removal: disabling `RedactingSink` fails 4 of the 10
   assertions in `credential-redaction.test.ts`.
+
+---
+
+## Bugs found reviewing Phase 5
+
+**Reviewed 2026-09-09, immediately after `1329ca1` was committed. Five defects,
+four of them in the hardening that commit added. All fixed in `6f13fcd`.**
+
+The review is recorded because Phase 5's own tests passed throughout: the first
+two below were invisible to a suite whose every cancellation case used a
+two-table plan.
+
+**A cancellation did not escape `migrate()` when the cancelled table was last in
+`loadOrder`.** All four sequential migrators wrapped a table's copy in a
+try/catch that turns a failure into a `TableMigrationResult` — correct for a
+driver error, wrong for a cancellation. Reproduced against the real migrator in
+two shapes before fixing:
+
+| Abort lands during | `migrate()` returned | Threw |
+|---|---|---|
+| a full 500-row batch | `success: false`, table **`failed`**, error `Migration cancelled mid-copy of "parent"` | nothing |
+| the final short batch | **`success: true`** | nothing |
+
+The second is the serious one: a cancelled, partly-written destination reporting
+a clean success. The first is the visible one: `run_table_progress` showing a
+table failed while the run showed cancelled — two surfaces disagreeing about the
+same event, which is exactly what "every surface reporting one must say so" is
+meant to prevent.
+
+Both were survivable **only** because `MigrationOrchestrator.step` gates steps
+7–9 and throws there. That is a downstream accident, not the migrator's own
+contract. Call `MigrateDataUseCase` with nothing after it, or reorder the steps,
+and the accident stops saving it. `rethrowIfCancelled` now heads every per-table
+catch and a `throwIfCancelled` closes each iteration — the second is what
+catches the short-batch case, because the copy loop breaks on
+`rows.length < BATCH_SIZE` without ever re-reading the signal. The rethrow is
+deliberately narrow, and a test asserts an ordinary driver error is still
+reported as a table outcome rather than thrown.
+
+**MySQL and MSSQL cleared the destination without checking the signal first.**
+Found while fixing the above. `PgDataMigrator` guarded its TRUNCATE in Phase 5
+on the reasoning that emptying the destination is the most destructive thing a
+run does; the other two would empty every table on an already-cancelled run and
+only then stop. Same guard, same reason.
+
+**The stall watchdog only ever watched re-attached runs.** `follow()` is called
+from `reattach()` and nowhere else, so the ordinary case — a run this host
+forked itself — had no stall detection at all. That is backwards: a runner
+wedged on a lock it will never get keeps its IPC channel open, writes nothing
+and never exits, so neither the exit handler nor the journal tailer has anything
+to react to. A single unref'd sweep now scans live handles against the same
+30-minute window and reports through the same `onStalled`, which needed no
+rewiring. It still reports and never settles.
+
+**Retention read `retention_days` with no floor.** Nothing writes that column,
+so it is always the default 30 and the bug is latent — but the day it becomes an
+org setting, `make_interval(days => 0)` deletes every finished run's events on
+the next sweep. `AND o.retention_days > 0` fixes the reading: a zero window
+means keep everything, never delete everything.
+
+**Two redaction paths were open, both latent.** The runner's `fatal` frame never
+went through `composeSink`, and the host persists it to `runs.error_message` and
+serves it to viewers — `executeRun` catches every migration error into a status,
+so nothing credential-bearing reaches it today, but that is a property of a
+function two files away rather than a guarantee the seam makes for itself. And
+`redactValue` failed **open** past its depth cap, forwarding a subtree it had
+not searched. The first attempt at that fix replaced only deep *strings* and
+still leaked, because at the cap the value is the containing object, not the
+string inside it; it now replaces any string or container it cannot walk and
+passes scalars through. A net that fails open at a known depth is worth less
+than the depth cap saves.
+
+## Phase 5 review — verified
+
+- `pnpm test` — 1199 unit tests across 86 files, green, no database (was 1188).
+- `pnpm typecheck` — exit 0 across all four workspaces.
+- `pnpm build` — exit 0.
+- `pnpm exec vitest run apps/runner/tests` — 62 green, including the process
+  tests that fork the rebuilt binary, which is what exercises the `fatal` change.
+- `pnpm test:coverage` — 63.35 / 48.35 / 67.04 / 64.09, up on every axis;
+  `functions` re-ratcheted 66 → 67.
+- Proved by removal, not merely by passing: reverting
+  `mysql-data-migrator.adapter.ts` to `1329ca1` fails exactly 3 of the new
+  tests. A test that passes either way proves nothing, so this was checked
+  rather than assumed — the same standard Phase 5 set for `RedactingSink`.
+
+**Not filed as issues.** All five were fixed in the same session as they were
+found, so a tracker entry would have been opened and closed unread. The three
+open issues (#3, #4, #5) remain CLI-side and untouched.
