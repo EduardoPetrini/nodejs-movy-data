@@ -7,6 +7,7 @@ const orgSlug = computed(() => route.params.orgSlug as string | undefined)
 const activeOrg = computed(() => me.value?.orgs.find((o) => o.slug === orgSlug.value))
 const orgs = computed(() => me.value?.orgs ?? [])
 const mayReadMembers = computed(() => activeOrg.value?.permissions.includes('member:read') ?? false)
+const mayCompare = computed(() => activeOrg.value?.permissions.includes('validation:read') ?? false)
 
 /**
  * Switching org keeps you on the same kind of page rather than dumping you at
@@ -15,11 +16,13 @@ const mayReadMembers = computed(() => activeOrg.value?.permissions.includes('mem
  */
 const section = computed(() => {
   const path = route.path.split('/')
-  return orgSlug.value ? (path[3] ?? 'connections') : 'connections'
+  // '' is the org's home, and a valid destination in the other org too.
+  return orgSlug.value ? (path[3] ?? '') : ''
 })
 
 function switchOrg(slug: string) {
-  if (slug !== orgSlug.value) navigateTo(`/o/${slug}/${section.value}`)
+  if (slug === orgSlug.value) return
+  navigateTo(section.value ? `/o/${slug}/${section.value}` : `/o/${slug}`)
 }
 
 async function signOut() {
@@ -63,6 +66,9 @@ async function signOut() {
 
     <div class="body">
       <aside v-if="orgSlug" class="rail">
+        <NuxtLink :to="`/o/${orgSlug}`" class="nav" :class="{ on: route.path === `/o/${orgSlug}` }">
+          Overview
+        </NuxtLink>
         <NuxtLink :to="`/o/${orgSlug}/connections`" class="nav" :class="{ on: route.path.endsWith('/connections') }">
           Connections
         </NuxtLink>
@@ -84,7 +90,14 @@ async function signOut() {
         >
           People
         </NuxtLink>
-        <span class="nav soon">Compare<em>Phase 5</em></span>
+        <NuxtLink
+          v-if="mayCompare"
+          :to="`/o/${orgSlug}/compare`"
+          class="nav"
+          :class="{ on: route.path.endsWith('/compare') }"
+        >
+          Compare
+        </NuxtLink>
       </aside>
 
       <main class="content"><slot /></main>
@@ -141,10 +154,8 @@ async function signOut() {
   font-size: var(--mv-fs-sm); color: var(--mv-fg-muted); text-decoration: none;
   transition: background var(--mv-dur-1) var(--mv-ease-out);
 }
-.nav:hover:not(.soon) { background: var(--mv-bg-raised); color: var(--mv-fg); text-decoration: none; }
+.nav:hover { background: var(--mv-bg-raised); color: var(--mv-fg); text-decoration: none; }
 .nav.on { background: var(--mv-accent-dim); color: var(--mv-accent); font-weight: var(--mv-fw-medium); }
-.soon { color: var(--mv-fg-subtle); cursor: default; }
-.soon em { font-style: normal; font-size: var(--mv-fs-micro); opacity: 0.7; }
 
 .content { flex: 1; min-width: 0; padding: var(--mv-s-5); }
 
@@ -158,7 +169,6 @@ async function signOut() {
     overflow-x: auto;
   }
   .nav { justify-content: flex-start; gap: var(--mv-s-2); white-space: nowrap; }
-  .soon em { display: none; }
   .content { padding: var(--mv-s-4); }
   .bar { gap: var(--mv-s-3); }
   .email { display: none; }

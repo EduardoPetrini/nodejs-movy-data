@@ -68,6 +68,16 @@ export interface WireRun {
   startedAt: string | null;
   finishedAt: string | null;
   durationMs: number | null;
+  /**
+   * The saved migration this run came from, when it came from one.
+   *
+   * The NAME is joined live rather than snapshotted, unlike the endpoints: a
+   * definition is archived and never deleted, so renaming a migration renames
+   * it across its whole history at once, which is what someone renaming it
+   * meant. A run launched ad hoc has neither.
+   */
+  definitionId: string | null;
+  definitionName: string | null;
   /** Editor and admin only — absent for a viewer, never null. */
   sourceConnectionId?: string | null;
   targetConnectionId?: string | null;

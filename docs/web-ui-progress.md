@@ -23,7 +23,7 @@ phase is indistinguishable from one that was never started.
 
 ## Status board
 
-*Last reviewed: 2026-09-08. 1094 tests, 79 files, green.*
+*Last reviewed: 2026-09-08. 1129 tests, 81 files, green.*
 
 | Phase | State | Notes |
 |-------|-------|-------|
@@ -32,23 +32,33 @@ phase is indistinguishable from one that was never started.
 | 2 — web shell, auth, orgs, connections | **DONE** (2026-09-08) | org creation, members, invitations, org switcher |
 | 3a — live timeline, simulated | **DONE** | runner, RunManager, socket, UI |
 | 3b — real runs | **DONE** (2026-09-08) | definitions, PairSelector, preview; real PG→PG verified |
-| 4 — history, replay, stats, drift | **TODO** | nothing built |
+| 4 — history, replay, stats, drift | **DONE** (2026-09-08) | keyset ledger, comparisons, drift, org home; verified live |
 | 5 — hardening | **TODO** | light theme + reduced-motion landed early |
 
 ### Remaining work
 
-**Phase 4 — nothing built.** Keyset pagination + sparklines on the run ledger
-(today: a plain list on a 3s poll), `validation_runs` + the compare page +
-`CountComparisonTable`, `SchemaDiffView`, `/api/stats/summary` and an org
-dashboard — there is no org home page at all; sign-in lands on `/connections`.
+**Phase 4 is closed** (2026-09-08). Write-up under *Phase 4 — history,
+comparison and drift* below. What it deliberately did **not** do: scrub a
+finished run's timeline. `/runs/:id` already replays a finished run through the
+same reducer from its stored events, and a time-scrubber over that is a nicety
+the phase did not need to carry alongside four new surfaces.
 
 **Phase 5 — nothing except the theme work.** Full `AbortSignal` plumbing +
 `WorkerPool.terminate()`, retention task, per-run event cap, heartbeat
 watchdog, an error taxonomy (auth failure vs unreachable host vs missing
 permission), keyboard-navigation and focus-ring pass, ratchet coverage toward
 80 % (now 62.04 / 46.46 / 65.94 / 62.82), and the docs: ADR 0002 (run
-execution), ADR 0003 (org tenancy), `CONTEXT.md` (Org, Run, Timeline are still
-undefined there), `README.md`. `CLAUDE.md` is current.
+execution), ADR 0003 (org tenancy), `CONTEXT.md` (Org, Run, Timeline,
+Definition and Comparison are all still undefined there), `README.md`.
+`CLAUDE.md` needs the Phase 4 surfaces added.
+
+**A comparison of a large database will time out.** `POST …/validations` counts
+synchronously inside the request: `COUNT(*)` per table, no child process, no
+event stream. That is right for the fixtures (150ms for 315k rows across five
+tables) and wrong for a database where a single `COUNT(*)` takes minutes. The
+`running` status and the `finished_at` / `duration_ms` columns are already
+shaped for an out-of-band comparison; nothing else is. Move it behind the runner
+before pointing this at anything large.
 
 **Verification gaps.** No Playwright and no E2E anywhere in the repo, so the
 plan's end-to-end gate (sign in → org → connection → run → reload mid-run →
@@ -131,6 +141,20 @@ Refusals were exercised against the running server: query-mode launch → 422 wi
 the reason, same-database run → 400, duplicate definition name → 409, deleting a
 connection two definitions use → 409 naming the count.
 
+### Phase 4 — history, comparison and drift
+**Closed 2026-09-08.** The ledger pages properly, a comparison is a stored
+artefact rather than a screenful, drift is read the same way before and after a
+migration, and the organisation finally has a home page. Full write-up under
+*Phase 4* below.
+
+`validation_runs` + `validation_table_counts` (migration `0003`),
+`ValidationsRepository`, `StatsRepository`, keyset pagination on both ledgers,
+`GET …/stats/summary`, `SchemaDiffView` extracted from `PreviewPanel`,
+`CountComparisonTable`, `DurationSparkline`, and the pages `/o/:slug` and
+`/o/:slug/compare`. Sign-in now lands on the org home instead of `/connections`.
+
+---
+
 ## Phase 3b — decisions
 
 **Query mode can be SAVED but not LAUNCHED, and those are two different gates.**
@@ -174,6 +198,165 @@ frees the name for reuse; the connection FKs are `restrict` so a delete can neve
 orphan one.
 
 ---
+
+## Phase 4 — decisions
+
+**Keyset, not `OFFSET`, and the tie-break is the whole point.** The run ledger is
+a list with rows arriving at its head while it is being read — that is what a run
+ledger *is*. Under `OFFSET 50`, a run launched between page one and page two
+shifts every later row down by one, so the reader sees a run twice and never
+sees another, on the one screen whose job is to be a complete record. The cursor
+is `(created_at, id)` because two runs created in the same millisecond are not
+hypothetical: launching a definition twice is one click apart, and `created_at`
+alone would repeat or skip one at exactly the page boundary.
+
+**A malformed cursor is a 400, never a silent page one.** A paging client handed
+the first page when it asked for the third loops forever. `decodeCursor` returns
+`undefined` for anything it did not write — never throws, never guesses — and
+the route turns that into a refusal.
+
+**The definition NAME is joined; the endpoints stay snapshotted.** Opposite
+choices in the same row, deliberately. A definition is archived and never
+deleted, so the join always finds it, and renaming a migration renames it across
+its whole history at once — which is what renaming means. A database is a fact
+about what ran, and must not change when the connection is re-pointed.
+
+**Sparklines ride on the first page only.** They describe the definitions, not
+the page; sending them again with page two would be a payload repeating itself,
+which is a payload that will eventually disagree with itself. One windowed query
+rather than one per definition, because the alternative is N+1 on a page that
+already renders N rows — `runs_definition_idx` exists to serve exactly that
+partition.
+
+**A comparison is stored, not rendered and forgotten.** "The counts matched on
+the 8th" is a claim someone will need to make later, and a screenful supports
+nothing. The row is written *before* the counting starts, so a comparison that
+fails halfway is a `failed` row naming the reason rather than no record at all —
+and a comparison that produced no record is indistinguishable from one nobody
+ran.
+
+**Comparisons resolve through `resolveRunTarget`, with the launch gate turned
+off.** "Compare what I just migrated" must name the two databases the migration
+actually used, so it goes through the same resolver preview and launch use. But
+the launch gate does not apply: a comparison runs no migration. Applying it
+would have refused a query definition with a sentence about the timeline staying
+blank — true of a run, irrelevant here. `checkMode: false`, and the caller
+states its own reason: a query migration writes one table, so comparing every
+table would report all the others as missing. **Both 422s were exercised live
+and they say different, correct things.**
+
+**Drift is `POST /runs/preview` read the other way round.** A preview answers
+"what would a run change?"; after a migration that is exactly "what did the
+migration not apply?". One endpoint and one `SchemaDiffView`, so the two screens
+cannot develop two ideas of what a difference is. An all-zero diff renders as
+*"The two schemas match"* — the answer, not an empty state, and precisely what
+someone opening the compare page wants to be told.
+
+**A percentile over nothing is null, never zero.** `durationP50Ms` is `null` for
+an org with no settled runs and renders as an em dash. A dashboard that says
+"p95: 0ms" tells a new organisation its migrations are instant.
+
+**The comparison bar diverges from a centre line rather than filling from the
+left.** The question is not "how far did it get" but "did it land on the
+number", and a left-filled bar makes 99.9 % look like success at a glance —
+exactly the case the table exists to catch. Over-100 % is drawn as an overshoot
+rather than clipped, because a destination with more rows than its source is a
+real outcome (a re-run that appended instead of replacing) and clipping it would
+read as "matched".
+
+**The mismatch filter defaults ON when anything mismatched.** Someone opening a
+failed comparison wants the one row that is wrong, not to scroll past four
+hundred that are right. Someone opening a clean one has nothing to filter and
+sees everything.
+
+**Sign-in lands on the org home, not `/connections`.** What someone opening Movy
+wants to know is whether anything is running and whether the last thing that ran
+worked — not which credentials are saved. No card grid: a 240px summary rail
+beside the ledger, because the ledger *is* the page and the numbers are context
+for it.
+
+**`validation_table_counts` carries no `org_id`.** It keys on its parent alone,
+exactly as `run_table_progress` does, and every read goes through
+`requireValidation` — the org-scoped lookup and the only way in. The plan
+sketched an `org_id` on it; a second copy of a scope is a second thing that can
+disagree with the first.
+
+---
+
+## Bugs found in Phase 4
+
+1. **drizzle-kit emitted migration `0003` in an order that cannot run.**
+   `runs_org_id_uq` — the unique key `validation_runs_run_fk` references — was
+   emitted *after* that foreign key. As generated, the migration fails on its
+   third statement. Statement order is not something a schema snapshot can
+   express, so `migration-sql.test.ts` now asserts it directly rather than
+   relying on the snapshot.
+
+2. **All four of `validation_runs`' composite foreign keys came back with a bare
+   `ON DELETE set null`** — the same hand-edit `0001` and `0002` each needed,
+   for the third time. It would try to null `org_id`, which is NOT NULL, so
+   deleting any run, definition or connection a comparison referenced would fail
+   outright. The guard in `migration-sql.test.ts` now covers `run_id` as well.
+   **This one is now a pattern, not an accident**: any new composite FK with
+   `SET NULL` will need the same edit, and the test is the only thing that
+   catches it.
+
+3. **`useFetch(url, { immediate: false, watch: [openId] })` silently never
+   fired.** Opening a stored comparison by `?v=` left an empty pane where a
+   result should be — no error, no console warning, nothing. Replaced with an
+   explicit `watch` calling `useRequestFetch()`, which states plainly when it
+   runs and forwards the session cookie during SSR. **No unit test could have
+   caught this**; it needed a browser and a click.
+
+4. **A ledger row grew taller whenever its database pair wrapped**, breaking the
+   rhythm of the whole list — the same class of bug as the timeline colliding
+   with itself on a wrapped label in Phase 3a. Rows are a fixed 40px now and
+   every cell that can be long truncates.
+
+5. Smaller: "1 do not match" for a single table.
+
+---
+
+## Phase 4 — verified live
+
+Against the PostgreSQL on :5432, `movy_fixture_src` → `movy_fixture_dst`, in a
+browser at 1440 and 375 and by curl:
+
+- **Paging is exact.** Walked the whole 22-run ledger in eight pages of three:
+  22 ids, 22 unique, identical to the single-request list and in the same order.
+  Sparklines arrived on page one and on no other page.
+- **Paging survives a row arriving at the head.** Inserted a run between reading
+  page one and page two: it did not leak into page two, page two continued
+  exactly where page one stopped, and the new run was at the head of a fresh
+  read. Deleted afterwards.
+- **The comparison detects both states, so a pass cannot be a no-op.** Deleted
+  750 rows from the destination's `order_items`: 99.76 %, `allMatch: false`, one
+  table mismatched, reported as 150,000 → 149,250 on exactly that table. Ran the
+  real migration; compared again: 100 %, all five tables, `allMatch: true`.
+- **Drift and counts disagree independently, which is the point of the pairing.**
+  With rows missing but structure intact, the schema diff correctly said the two
+  schemas match while the counts said they did not.
+- **Percentiles came back as numbers**, not the strings that made every overall
+  percentage 0 for PostgreSQL sources in Phase 1. `percentile_cont` returns
+  double precision and node-pg hands that back as a string; it is parsed, not
+  trusted.
+- **Refusals**, each returning what it should: a viewer POSTing a comparison
+  403, reading one 200; an editor 201; `stats/summary` 200 for a viewer; another
+  org 404; a bad cursor 400; an unknown status 400; source and destination the
+  same database 400; a query definition 422 with the comparison-specific reason,
+  and the same definition launched 422 with the run-specific one; a validation
+  id that does not exist 404.
+- **A viewer's comparison payload carries no connection ids, no org id and no
+  requester** — asserted in `validation-serializer.test.ts` and confirmed on the
+  wire.
+- In the browser as admin and as viewer, in dark theme, at 1440 and 375: the
+  dashboard, the ledger with its filters, the compare page and a stored result
+  all render with **no console errors and no hydration warnings** — including
+  the ledger, whose `toLocaleString()` mismatch is now fixed.
+
+The five comparisons and the one extra run left behind are ordinary history of
+the kind the ledger already held, and the fixture databases are back in a
+matching state.
 
 ## Bugs found in Phase 3b
 
@@ -689,9 +872,11 @@ design, and nothing else catches it.
   partially applied — say that in the UI too.
 - **`maxConcurrentRuns` is per org and defaults to 1.** A second launch gets a
   409. That is also what stops two runs clearing each other's destination.
-- **`runs/index.vue` renders dates through `toLocaleString()`**, which resolves
-  against Node's locale on the server and the browser's on the client and warns
-  on hydration. `members.vue` pins `en-CA`; do the same there.
+- **Composite foreign keys with `SET NULL` need a hand-edit every single time.**
+  Three migrations, three edits; `0003` needed four in one file, plus a
+  statement reorder. drizzle-kit cannot emit the column-scoped form, so assume
+  the next one is wrong too and read the generated SQL before applying it.
+  `migration-sql.test.ts` is the only thing that catches a regression.
 - **Composite FKs on `runs` need PostgreSQL 15+.** `0001` uses the
   column-scoped `ON DELETE SET NULL (<column>)`, hand-edited because drizzle-kit
   emits a bare `SET NULL` that would try to null `org_id`. `migration-sql.test.ts`

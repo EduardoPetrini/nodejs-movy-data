@@ -51,9 +51,24 @@ const trimmed = (value: unknown): string | undefined => {
   return text.length > 0 ? text : undefined;
 };
 
+export interface ResolveOptions {
+  /**
+   * Whether to refuse a mode the runner cannot currently drive.
+   *
+   * True for preview and launch, which is the rule the whole module exists to
+   * enforce. False for a row-count comparison, which does not run a migration
+   * at all — it opens two connections and counts. Applying the launch gate
+   * there would refuse a query definition with a sentence about the timeline
+   * being blank, which is true of a run and irrelevant to a comparison. The
+   * caller that opts out states its own reason instead.
+   */
+  checkMode?: boolean;
+}
+
 export async function resolveRunTarget(
   event: H3Event,
-  body: RunTargetBody | undefined
+  body: RunTargetBody | undefined,
+  options: ResolveOptions = {}
 ): Promise<ResolvedRunTarget> {
   const repos = createRepos(event);
 
@@ -103,8 +118,10 @@ export async function resolveRunTarget(
   // its first step is noise in the history, and the reason is one the operator
   // can act on now. The same predicate the form used to disable the control,
   // so the two never tell different stories.
-  const availability = modeAvailability(pairs(), source.engine, target.engine, mode);
-  if (!availability.ok) throw createError({ statusCode: 422, statusMessage: availability.reason });
+  if (options.checkMode !== false) {
+    const availability = modeAvailability(pairs(), source.engine, target.engine, mode);
+    if (!availability.ok) throw createError({ statusCode: 422, statusMessage: availability.reason });
+  }
 
   return { definition: definition ?? null, source, target, sourceDatabase, targetDatabase, mode };
 }

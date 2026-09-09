@@ -1,10 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import type { RunRow } from '../../server/repositories/runs.repo';
-import { mayReadLogs, toPublicRun } from '../../server/serializers/run.serializer';
+import { mayReadLogs, toPublicRun, toPublicRunListItem } from '../../server/serializers/run.serializer';
 
 const row: RunRow = {
   id: 'run-1',
   orgId: 'org-1',
+  definitionId: 'def-1',
   sourceConnectionId: 'conn-src',
   targetConnectionId: 'conn-dst',
   sourceEngine: 'postgres',
@@ -102,5 +103,35 @@ describe('mayReadLogs', () => {
     expect(mayReadLogs('viewer')).toBe(false);
     expect(mayReadLogs('editor')).toBe(true);
     expect(mayReadLogs('admin')).toBe(true);
+  });
+});
+
+describe('the definition a run came from', () => {
+  it('carries the id to every role, including a viewer', () => {
+    // It is not credential metadata: a viewer already sees the run itself, and
+    // without the id their ledger cannot group a migration's history at all.
+    for (const role of ['viewer', 'editor', 'admin'] as const) {
+      expect(toPublicRun(row, role).definitionId).toBe('def-1');
+    }
+  });
+
+  it('reports no name when the caller holds only the row', () => {
+    // The launch handler and the socket hub have a RunRow and no join. Null is
+    // the truthful answer there; a lie the type forced would be worse.
+    expect(toPublicRun(row, 'admin').definitionName).toBeNull();
+  });
+
+  it('takes the name from the join when the list handler supplies it', () => {
+    const wire = toPublicRunListItem({ run: row, definitionName: 'Nightly reporting' }, 'viewer');
+    expect(wire.definitionName).toBe('Nightly reporting');
+  });
+
+  it('reports both as null for an ad-hoc run, which is a first-class run', () => {
+    const adhoc = toPublicRunListItem(
+      { run: { ...row, definitionId: null }, definitionName: null },
+      'editor'
+    );
+    expect(adhoc.definitionId).toBeNull();
+    expect(adhoc.definitionName).toBeNull();
   });
 });

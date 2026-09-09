@@ -70,33 +70,13 @@ const takenAt = computed(() => new Date(props.preview.takenAt).toLocaleTimeStrin
       </li>
     </ul>
 
-    <dl class="counts">
-      <div><dt>Tables to create</dt><dd class="mv-num">{{ preview.diff.tablesToCreate }}</dd></div>
-      <div><dt>Columns to add</dt><dd class="mv-num">{{ preview.diff.columnsToAdd }}</dd></div>
-      <div><dt>Columns to alter</dt><dd class="mv-num">{{ preview.diff.columnsToAlter }}</dd></div>
-      <div><dt>Constraints</dt><dd class="mv-num">{{ preview.diff.constraintsToAdd }}</dd></div>
-      <div><dt>Indexes</dt><dd class="mv-num">{{ preview.diff.indexesToCreate }}</dd></div>
-      <div><dt>Sequences</dt><dd class="mv-num">{{ preview.diff.sequencesToCreate }}</dd></div>
-      <div><dt>Enums</dt><dd class="mv-num">{{ preview.diff.enumsToCreate }}</dd></div>
-    </dl>
-
-    <details v-if="preview.typeChanges.length" class="drawer">
-      <summary>{{ preview.typeChanges.length }} columns change type</summary>
-      <div class="scroller">
-        <table class="grid">
-          <thead>
-            <tr><th>Column</th><th>From</th><th>To</th></tr>
-          </thead>
-          <tbody>
-            <tr v-for="c in preview.typeChanges" :key="`${c.tableName}.${c.columnName}`">
-              <td class="mv-mono">{{ c.tableName }}.{{ c.columnName }}</td>
-              <td class="mv-mono from">{{ c.sourceType }}</td>
-              <td class="mv-mono to">{{ c.targetType }}</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </details>
+    <!-- The same component the compare page uses, so "what this run will
+         change" and "what a run has not applied" are read the same way. -->
+    <SchemaDiffView
+      :diff="preview.diff"
+      :type-changes="preview.typeChanges"
+      :extra-tables="untouched.map((t) => t.tableName)"
+    />
 
     <details class="drawer">
       <summary>Copy order — {{ preview.loadOrder.length }} tables, parents before children</summary>
@@ -107,11 +87,6 @@ const takenAt = computed(() => new Date(props.preview.takenAt).toLocaleTimeStrin
           <span class="rows mv-num">{{ num.format(rowsFor(name)) }}</span>
         </li>
       </ol>
-    </details>
-
-    <details v-if="untouched.length" class="drawer">
-      <summary>{{ untouched.length }} tables in the destination Movy will not touch</summary>
-      <p class="order-note mv-mono">{{ untouched.map((t) => t.tableName).join(', ') }}</p>
     </details>
   </section>
 </template>
@@ -159,14 +134,6 @@ const takenAt = computed(() => new Date(props.preview.takenAt).toLocaleTimeStrin
   word-break: break-word;
 }
 
-.counts { display: flex; flex-wrap: wrap; gap: var(--mv-s-5); margin: 0; }
-.counts div { display: flex; flex-direction: column; gap: 2px; }
-.counts dt {
-  font-size: var(--mv-fs-micro); text-transform: uppercase;
-  letter-spacing: var(--mv-track-label); color: var(--mv-fg-subtle);
-}
-.counts dd { margin: 0; font-size: var(--mv-fs-md); font-variant-numeric: var(--mv-numeric); }
-
 .drawer { border-top: 1px solid var(--mv-line); padding-top: var(--mv-s-3); }
 .drawer summary {
   cursor: pointer; font-size: var(--mv-fs-xs); color: var(--mv-fg-muted);
@@ -174,19 +141,6 @@ const takenAt = computed(() => new Date(props.preview.takenAt).toLocaleTimeStrin
 }
 .drawer summary:hover { color: var(--mv-fg); }
 .drawer summary:focus-visible { outline: 2px solid var(--mv-focus); outline-offset: 2px; }
-
-/* Wide content scrolls inside its own box; the page never scrolls sideways. */
-.scroller { overflow-x: auto; }
-.grid { width: 100%; border-collapse: collapse; margin-top: var(--mv-s-3); font-size: var(--mv-fs-xs); }
-.grid th {
-  text-align: left; padding: 4px var(--mv-s-2);
-  font-size: var(--mv-fs-micro); text-transform: uppercase;
-  letter-spacing: var(--mv-track-label); color: var(--mv-fg-subtle);
-  border-bottom: 1px solid var(--mv-line);
-}
-.grid td { padding: 4px var(--mv-s-2); border-bottom: 1px solid var(--mv-line); white-space: nowrap; }
-.from { color: var(--mv-fg-subtle); }
-.to { color: var(--mv-accent); }
 
 .order { list-style: none; margin: var(--mv-s-3) 0 0; padding: 0; max-height: 320px; overflow-y: auto; }
 .order li {
@@ -196,8 +150,4 @@ const takenAt = computed(() => new Date(props.preview.takenAt).toLocaleTimeStrin
 }
 .idx { width: 3ch; text-align: right; color: var(--mv-fg-subtle); }
 .rows { margin-left: auto; color: var(--mv-fg-subtle); }
-.order-note {
-  margin-top: var(--mv-s-3);
-  font-size: var(--mv-fs-micro); color: var(--mv-fg-subtle); word-break: break-word;
-}
 </style>

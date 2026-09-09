@@ -23,14 +23,15 @@ describe('generated migrations', () => {
     expect(sql.length).toBeGreaterThan(100);
   });
 
-  for (const column of ['source_connection_id', 'target_connection_id', 'definition_id'] as const) {
+  for (const column of ['source_connection_id', 'target_connection_id', 'definition_id', 'run_id'] as const) {
     it(`scopes SET NULL to ${column}, never to the whole composite key`, () => {
       expect(sql).toContain(`ON DELETE SET NULL ("${column}")`);
     });
   }
 
   it('has no bare composite SET NULL left anywhere', () => {
-    const bare = /FOREIGN KEY \("org_id","(?:source_connection_id|target_connection_id|definition_id)"\)[^;]*ON DELETE set null(?!\s*\()/i;
+    const bare =
+      /FOREIGN KEY \("org_id","(?:source_connection_id|target_connection_id|definition_id|run_id)"\)[^;]*ON DELETE set null(?!\s*\()/i;
     expect(bare.test(sql)).toBe(false);
   });
 
@@ -63,5 +64,35 @@ describe('generated migrations', () => {
     // Both IPC and the journal tailer deliver the same events. Without this
     // key the second delivery is a duplicate row, not a no-op.
     expect(sql).toContain('CONSTRAINT "run_events_run_id_seq_pk" PRIMARY KEY("run_id","seq")');
+  });
+});
+
+/**
+ * The second hand-edit in `0003`, which is about ORDER rather than syntax.
+ *
+ * drizzle-kit emitted `runs_org_id_uq` last, after the foreign key that
+ * references `runs(org_id, id)` — so as generated the migration does not run at
+ * all. Statement order is not something a schema snapshot can express, which is
+ * why it is asserted here instead.
+ */
+describe('migration 0003 — statement order', () => {
+  const validations = readFileSync(join(DIR, '0003_validations.sql'), 'utf8');
+
+  it('creates the unique key on runs before the FK that references it', () => {
+    const unique = validations.indexOf('"runs_org_id_uq" UNIQUE("org_id","id")');
+    const fk = validations.indexOf('"validation_runs_run_fk"');
+    expect(unique).toBeGreaterThan(-1);
+    expect(fk).toBeGreaterThan(-1);
+    expect(unique).toBeLessThan(fk);
+  });
+
+  it('keeps validation_table_counts keyed on its parent and table name', () => {
+    // No surrogate id and no org_id: the parent lookup is the org scope, and a
+    // second copy of a scope is a second thing that can disagree with it.
+    expect(validations).toContain(
+      'CONSTRAINT "validation_table_counts_validation_run_id_table_name_pk" ' +
+        'PRIMARY KEY("validation_run_id","table_name")'
+    );
+    expect(validations).not.toMatch(/CREATE TABLE "validation_table_counts"[^;]*"org_id"/);
   });
 });

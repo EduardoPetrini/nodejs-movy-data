@@ -4,6 +4,8 @@ import { ConnectionsRepository } from './connections.repo';
 import { DefinitionsRepository } from './definitions.repo';
 import { MembersRepository } from './members.repo';
 import { RunsRepository } from './runs.repo';
+import { StatsRepository } from './stats.repo';
+import { ValidationsRepository } from './validations.repo';
 import type { OrgContext } from '../utils/rbac';
 
 /**
@@ -24,8 +26,13 @@ export function createRepos(event: H3Event) {
     definitions: new DefinitionsRepository(db, org.orgId),
     members: new MembersRepository(db, org.orgId),
     runs: new RunsRepository(db, org.orgId),
+    stats: new StatsRepository(db, org.orgId),
+    validations: new ValidationsRepository(db, org.orgId),
   };
 }
 
 export type Repos = ReturnType<typeof createRepos>;
-export { ConnectionsRepository, DefinitionsRepository, MembersRepository, RunsRepository };
+export {
+  ConnectionsRepository, DefinitionsRepository, MembersRepository,
+  RunsRepository, StatsRepository, ValidationsRepository,
+};

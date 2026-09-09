@@ -30,6 +30,8 @@ export default defineNuxtRouteMiddleware(async (to) => {
     const me = await requestFetch<{ orgs: Array<{ slug: string }> }>('/api/me').catch(() => null)
     const slug = me?.orgs?.[0]?.slug
     if (!slug) return to.path === '/no-access' ? undefined : navigateTo('/no-access')
-    if (to.path === '/') return navigateTo(`/o/${slug}/connections`)
+    // The org's home, not its connections: what someone opening Movy wants to
+    // know is what has been running, not which credentials are saved.
+    if (to.path === '/') return navigateTo(`/o/${slug}`)
   }
 })

@@ -1,6 +1,6 @@
 import {
   pgTable, text, integer, bigint, smallint, real, boolean, jsonb, timestamp, uuid,
-  index, primaryKey, foreignKey,
+  index, primaryKey, unique, foreignKey,
 } from 'drizzle-orm/pg-core';
 import { organizations } from './orgs';
 import { connections } from './connections';
@@ -116,7 +116,14 @@ export const runs = pgTable(
       foreignColumns: [connections.orgId, connections.id],
       name: 'runs_target_connection_fk',
     }).onDelete('set null'),
-    // The history list: newest first, one org at a time.
+    // Lets `validation_runs` carry a composite FK on (org_id, run_id), the
+    // same structural isolation `runs` itself gets from `connections` and
+    // `migration_definitions`.
+    unique('runs_org_id_uq').on(t.orgId, t.id),
+    // The history list: newest first, one org at a time. Also the order the
+    // ledger's keyset cursor pages along — `(created_at, id)` descending, with
+    // `id` breaking the tie, so two runs created in the same millisecond
+    // cannot make a page repeat or skip one.
     index('runs_org_created_idx').on(t.orgId, t.createdAt),
     // "How has this migration behaved over its last ten runs?" — the Phase 4
     // sparkline, and the reason definition_id is worth carrying at all.

@@ -1,14 +1,21 @@
-import { and, desc, eq, gt, inArray, notInArray, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, lt, notInArray, or, sql } from 'drizzle-orm';
 import type { Db } from '../db/client';
-import { runEvents, runSteps, runTableProgress, runs, TERMINAL_RUN_STATUSES } from '../db/schema';
+import { migrationDefinitions, runEvents, runSteps, runTableProgress, runs, TERMINAL_RUN_STATUSES } from '../db/schema';
 import type { RunStatus } from '../db/schema';
 import type { Projection } from '../runs/run-projection';
+import { clampLimit, toPage, type Page, type PageCursor } from './paging';
 
 export type RunRow = typeof runs.$inferSelect;
 export type NewRun = typeof runs.$inferInsert;
 export type RunStepRow = typeof runSteps.$inferSelect;
 export type RunTableRow = typeof runTableProgress.$inferSelect;
 export type RunEventRow = typeof runEvents.$inferSelect;
+
+/** A run plus the name of the definition it came from, when it came from one. */
+export interface RunListRow {
+  run: RunRow;
+  definitionName: string | null;
+}
 
 /**
  * Like ConnectionsRepository: the org id arrives through the constructor and is
@@ -24,13 +31,81 @@ export class RunsRepository {
     private readonly orgId: string
   ) {}
 
-  async list(limit = 50): Promise<RunRow[]> {
-    return this.db
-      .select()
+  /**
+   * One page of run history, newest first.
+   *
+   * Keyset, not `OFFSET`: this is a list with rows arriving at its head while
+   * it is being read. Under an offset, a run launched between page one and page
+   * two shifts everything down by one, so the reader sees a run twice and never
+   * sees another — on the one screen whose job is to be a complete record.
+   *
+   * The definition name is joined rather than snapshotted onto the row. A
+   * definition is archived and never deleted, so the join always finds it, and
+   * a renamed migration reads under its current name across all of history at
+   * once. The endpoint columns go the other way for the opposite reason: a
+   * name is a label, a database is a fact about what ran.
+   */
+  async page(options: { limit?: number; cursor?: PageCursor; status?: RunStatus; definitionId?: string } = {}): Promise<Page<RunListRow>> {
+    const limit = clampLimit(options.limit);
+    const filters = [eq(runs.orgId, this.orgId)];
+    if (options.status) filters.push(eq(runs.status, options.status));
+    if (options.definitionId) filters.push(eq(runs.definitionId, options.definitionId));
+    if (options.cursor) filters.push(beforeRunCursor(options.cursor));
+
+    // One more than asked for, so the existence of a next page is answered by
+    // the rows themselves rather than by a COUNT that would not agree with them.
+    const rows = await this.db
+      .select({ run: runs, definitionName: migrationDefinitions.name })
       .from(runs)
-      .where(eq(runs.orgId, this.orgId))
-      .orderBy(desc(runs.createdAt))
-      .limit(limit);
+      .leftJoin(migrationDefinitions, eq(migrationDefinitions.id, runs.definitionId))
+      .where(and(...filters))
+      .orderBy(desc(runs.createdAt), desc(runs.id))
+      .limit(limit + 1);
+
+    return toPage(rows, limit, (row) => row.run);
+  }
+
+  /**
+   * The last `perDefinition` durations of every definition that has ever run,
+   * newest first — the ledger's sparklines, in one query.
+   *
+   * One query rather than one per definition because the alternative is N+1 on
+   * a page that already renders N rows. `runs_definition_idx` is
+   * `(org_id, definition_id, created_at)`, which is exactly what the window
+   * partition walks.
+   *
+   * Only settled runs with a duration count. A run still in flight has no
+   * duration yet, and charting a zero for it would draw a cliff that says
+   * "this migration got instantly faster" every time one starts.
+   */
+  async durationsByDefinition(perDefinition = 10): Promise<Map<string, number[]>> {
+    const limit = Math.max(1, Math.min(Math.floor(perDefinition), 50));
+
+    // Raw SQL rather than the query builder: a windowed subquery is where
+    // Drizzle's typing stops helping and starts needing casts, and a cast
+    // around a query that must stay org-scoped is exactly the wrong place to
+    // silence the compiler. The org id is still bound, as a parameter.
+    const result = await this.db.execute<{ definition_id: string; durations: number[] }>(sql`
+      SELECT definition_id, array_agg(duration_ms ORDER BY rank DESC) AS durations
+      FROM (
+        SELECT
+          definition_id,
+          duration_ms,
+          row_number() OVER (
+            PARTITION BY definition_id ORDER BY created_at DESC, id DESC
+          ) AS rank
+        FROM runs
+        WHERE org_id = ${this.orgId}
+          AND definition_id IS NOT NULL
+          AND duration_ms IS NOT NULL
+      ) ranked
+      WHERE rank <= ${limit}
+      GROUP BY definition_id
+    `);
+
+    // `rank DESC` inside array_agg puts the oldest first, which is the
+    // direction a sparkline is read: left is then, right is now.
+    return new Map(result.rows.map((row) => [row.definition_id, row.durations]));
   }
 
   /** Undefined for a run in another org — indistinguishable from absent. */
@@ -123,6 +198,19 @@ export class RunsRepository {
     if (!run) throw createError({ statusCode: 404, statusMessage: 'Not Found' });
     return run;
   }
+}
+
+/**
+ * "Strictly older than the cursor", in the order the index is already in.
+ *
+ * The tie-break on `id` is what makes the boundary exact. Two runs created in
+ * the same millisecond is not a hypothetical — launching a definition twice is
+ * one click apart — and without the tie-break a pair straddling the boundary
+ * is either returned twice or skipped entirely.
+ */
+function beforeRunCursor(cursor: PageCursor) {
+  const at = new Date(cursor.createdAt);
+  return or(lt(runs.createdAt, at), and(eq(runs.createdAt, at), lt(runs.id, cursor.id)))!;
 }
 
 /**

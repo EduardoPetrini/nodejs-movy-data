@@ -1,5 +1,5 @@
 import type { OrgRole } from '../db/schema';
-import type { RunRow, RunStepRow, RunTableRow, RunEventRow } from '../repositories/runs.repo';
+import type { RunRow, RunListRow, RunStepRow, RunTableRow, RunEventRow } from '../repositories/runs.repo';
 import type { WireEvent, WireRun, WireStep, WireTable } from '../../shared/run-wire';
 
 /**
@@ -16,7 +16,13 @@ import type { WireEvent, WireRun, WireStep, WireTable } from '../../shared/run-w
  */
 export type PublicRun = WireRun;
 
-export function toPublicRun(row: RunRow, role: OrgRole): PublicRun {
+/**
+ * `definitionName` is separate from the row because it is a joined value, not a
+ * column: a caller holding only a `RunRow` — the launch handler, the socket
+ * hub — has no name to give, and passing `null` there is the truthful answer
+ * rather than a lie the type would have forced.
+ */
+export function toPublicRun(row: RunRow, role: OrgRole, definitionName: string | null = null): PublicRun {
   const base: PublicRun = {
     id: row.id,
     status: row.status,
@@ -39,6 +45,8 @@ export function toPublicRun(row: RunRow, role: OrgRole): PublicRun {
     startedAt: row.startedAt?.toISOString() ?? null,
     finishedAt: row.finishedAt?.toISOString() ?? null,
     durationMs: row.durationMs,
+    definitionId: row.definitionId,
+    definitionName,
   };
 
   if (role === 'viewer') return base;
@@ -90,4 +98,9 @@ export function toPublicEvent(row: RunEventRow): WireEvent {
  */
 export function mayReadLogs(role: OrgRole): boolean {
   return role !== 'viewer';
+}
+
+/** The list form: one joined row in, one wire row out. */
+export function toPublicRunListItem(row: RunListRow, role: OrgRole): PublicRun {
+  return toPublicRun(row.run, role, row.definitionName);
 }

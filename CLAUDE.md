@@ -156,7 +156,8 @@ viewers.
 The web app forks the runner once per run and rebuilds run state from its
 events. Five tables: `migration_definitions` (the saved, repeatable migration)
 and `runs`, plus `run_events` and the two projections `run_steps` /
-`run_table_progress`.
+`run_table_progress`. Two more hold comparisons: `validation_runs` and
+`validation_table_counts`.
 
 | Module | Purpose |
 |--------|---------|
@@ -185,6 +186,43 @@ because Movy has no resume.
 events route and the snapshot loader ask only for the non-`log` types — there is
 no filtered-out row to leak. `cohortFor(role)` in `run-hub.ts` is the same
 predicate for the socket rooms.
+
+### History, comparison and drift
+
+| Module | Purpose |
+|--------|---------|
+| `shared/keyset-cursor.ts` | **Pure.** The ledger's `(createdAt, id)` page cursor, encoded. Returns `undefined` for anything it did not write — never throws, never guesses. |
+| `server/repositories/paging.ts` | `clampLimit` and `toPage`, shared by both ledgers so "one page" means the same thing in each. |
+| `server/repositories/validations.repo.ts` | Org-scoped comparisons. Children key on the parent alone, so `requireValidation` is the only way in. |
+| `server/repositories/stats.repo.ts` | The org home's counts and percentiles. Crosses tables, so it owns none of them. |
+| `app/components/compare/CountComparisonTable.vue` | Two counts per table, diverging bar centred on 100 %. |
+| `app/components/run/SchemaDiffView.vue` | The diff, read the same way by the run review screen and the compare page. |
+
+**The ledger pages by keyset, never `OFFSET`.** Rows arrive at its head while it
+is being read — that is what a run ledger is — and under an offset a run
+launched between two pages shifts every later row down by one, so the reader
+sees one twice and never sees another. The cursor carries `id` as well as
+`created_at` because two runs launched a click apart share a millisecond. A
+cursor that does not decode is a **400**, never a silent page one: a paging
+client handed page one when it asked for page three loops forever.
+
+**A run's `definitionName` is joined; its endpoints stay snapshotted.** Opposite
+choices in one row, deliberately: definitions are archived and never deleted, so
+renaming a migration renames it across all of history at once, which is what
+renaming means — while a database is a fact about what ran.
+
+**Comparisons resolve through `resolveRunTarget` with `checkMode: false`.** They
+run no migration, so the launch gate does not apply; a query definition is
+refused by the handler with the reason that is true of a comparison rather than
+the one about a blank timeline. Both 422s exist and say different things.
+
+**Drift is `POST …/runs/preview` read the other way round** — "what would a run
+change?" is, after a migration, "what did it not apply?". One endpoint and one
+`SchemaDiffView`, so the two screens cannot develop two ideas of a difference.
+
+**`POST …/validations` counts inside the request.** Fine for the fixtures,
+wrong for a database where one `COUNT(*)` takes minutes; the `running` status
+is shaped for an out-of-band version that does not exist yet.
 
 ### The live stream
 
