@@ -1,4 +1,5 @@
 import { createRepos } from '~~/server/repositories';
+import { isUniqueViolation } from '~~/server/repositories/pg-errors';
 import { requirePermission } from '~~/server/utils/rbac';
 import { toPublicConnection } from '~~/server/serializers/connection.serializer';
 import { encryptSecret, secretAad } from '~~/server/utils/crypto';
@@ -26,7 +27,21 @@ export default defineEventHandler(async (event) => {
     patch.secret = encryptSecret(body.password, secretAad(org.orgId, id));
   }
 
-  const updated = await repos.connections.update(id, patch);
-  if (!updated) throw createError({ statusCode: 404, statusMessage: 'Not Found' });
-  return { connection: toPublicConnection(updated, org.role) };
+  try {
+    const updated = await repos.connections.update(id, patch);
+    if (!updated) throw createError({ statusCode: 404, statusMessage: 'Not Found' });
+    return { connection: toPublicConnection(updated, org.role) };
+  } catch (err) {
+    // `connections_org_name_uq`. Renaming onto a name already in use is an
+    // ordinary mistake now that the list has an edit form, and the operator can
+    // act on it — so it is a 409, not a 500 quoting the constraint.
+    if (isUniqueViolation(err)) {
+      throw createError({
+        statusCode: 409,
+        statusMessage: `A connection called "${patch.name}" already exists.`,
+        data: { field: 'name' },
+      });
+    }
+    throw err;
+  }
 });

@@ -328,7 +328,8 @@ demoted mid-session, so without it they never learn why their log pane is empty.
 
 ### The run UI
 
-`shared/run-wire.ts` and `shared/definition-wire.ts` (Nuxt 4's `shared/`,
+`shared/run-wire.ts`, `shared/definition-wire.ts` and `shared/connection-wire.ts`
+(Nuxt 4's `shared/`,
 imported by both halves) are the one declaration of the wire contract — frames, row shapes, step ids and labels. The
 serializer's return types are annotated with it, so a field the server stops
 sending is a type error in the client. It restates the nine step ids rather than
@@ -384,6 +385,41 @@ Journals go to `apps/web/.movy/runs/` (`MOVY_JOURNAL_DIR` overrides), each with 
 `.stderr.log` beside it. The runner entry resolves to `@movy/runner`'s built
 `dist/main.js` first, so **`pnpm build` after editing the runner** or the stale
 build is what actually runs.
+
+### The connections screen
+
+| Module | Purpose |
+|--------|---------|
+| `shared/connection-wire.ts` | The connection shape, the engine list and its default ports. `toPublicConnection` is annotated with it. |
+| `app/utils/connection-form.ts` | **Pure.** Form values → request body, and the delete gate. Both rules below live here, so both are tested without a browser. |
+| `app/components/connections/ConnectionForm.vue` | One form for create and edit. |
+| `app/components/connections/DeleteConnectionPanel.vue` | The typed confirmation. |
+
+**One drawer per row, keyed `{ id, kind }`.** Four things open under a
+connection — databases, edit, delete, and why the last test failed — and they
+are mutually exclusive by nature. A single nullable pair makes that
+structurally true rather than true until someone adds a fifth.
+
+**A blank password field means "keep the stored one".** It cannot mean anything
+else: the stored password is never sent to a client, so the edit form has
+nothing to prefill it with. `toConnectionInput` therefore OMITS the key rather
+than sending `''` — the PATCH handler distinguishes the two by length today and
+a future one might not. For the same reason the ENGINE is fixed once saved: the
+handler does not accept it, and changing it would leave every field beneath it
+describing a different dialect.
+
+**Deleting takes the connection's name, typed.** Opening the panel is the first
+confirmation and a click can be a misfire; typing the name cannot be satisfied
+by muscle memory, and it forces a reader to look at which row they are on.
+Trimmed but case-sensitive — two connections can differ only in case. A
+connection a definition still names is refused by the FK with a 409 counting
+them, which the panel shows in place.
+
+**A failed test expands its own reason under the row**, and the `failed` badge
+toggles it back — the sentence `describeConnectionFailure` writes is the outcome
+of pressing Test, and it spent Phase 2 in a `title` tooltip. The drawer reads
+`lastTest.error` from the refreshed list, not the POST response, so a reload
+shows the same string.
 
 ### The runner (@movy/runner)
 

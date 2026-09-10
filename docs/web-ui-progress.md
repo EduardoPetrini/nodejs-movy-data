@@ -23,7 +23,7 @@ phase is indistinguishable from one that was never started.
 
 ## Status board
 
-*Last reviewed: 2026-09-09. 1199 unit tests (86 files) + 8 Playwright E2E, green.*
+*Last reviewed: 2026-09-09. 1227 unit tests (88 files) + 8 Playwright E2E, green.*
 
 | Phase | State | Notes |
 |-------|-------|-------|
@@ -35,6 +35,7 @@ phase is indistinguishable from one that was never started.
 | 4 — history, replay, stats, drift | **DONE** (2026-09-08) | keyset ledger, comparisons, drift, org home; verified live |
 | 5 — hardening | **DONE** (2026-09-09) | redaction, cancellation, E2E, retention, taxonomy, docs |
 | 5r — review of Phase 5 | **DONE** (2026-09-09) | five defects found in `1329ca1` and fixed in `6f13fcd` |
+| — connection lifecycle | **DONE** (2026-09-09) | edit, delete behind a typed confirmation, failure reason inline |
 
 ### Remaining work
 
@@ -1112,3 +1113,86 @@ than the depth cap saves.
 **Not filed as issues.** All five were fixed in the same session as they were
 found, so a tracker entry would have been opened and closed unread. The three
 open issues (#3, #4, #5) remain CLI-side and untouched.
+
+
+---
+
+## Connections — edit, delete, and the reason a test failed (2026-09-09)
+
+Not a phase. Three gaps in the one screen an operator uses before anything else
+works, all of them the same shape: the API could already do it and the UI could
+not reach it.
+
+**The PATCH and DELETE handlers existed from Phase 2 and had no caller.** A
+connection could be created and tested and never corrected — a typo in a host
+meant deleting the row and retyping the password, and there was no way to delete
+it either. Both handlers were already written, already permission-gated, already
+returning the right 404s. The work was a form and a confirmation, not an
+endpoint.
+
+**One drawer per row, holding `{ id, kind }` rather than four booleans.** Four
+things want to open under a connection — its databases, its edit form, its
+delete confirmation, and why its last test failed — and they are mutually
+exclusive by nature: nobody edits a connection and confirms deleting it at once.
+A single nullable pair makes that structurally true instead of true until
+somebody adds a fifth.
+
+**A failed test opens its own reason.** The outcome of pressing Test is a
+sentence, not a red dot; `describeConnectionFailure` has been writing that
+sentence since Phase 2 and it lived in a `title` tooltip. It now expands under
+the row the moment the result arrives, and the `failed` badge is a button that
+toggles it back — the reason must stay reachable after the auto-expand is
+dismissed, or the tooltip was better. The drawer renders `lastTest.error` from
+the refreshed list rather than the POST response, so there is one source for
+that string and a reload shows the same thing.
+
+**The second confirmation is the connection's own name, typed.** Opening the
+panel is the first, and a click can be a misfire. Typing the name cannot be
+satisfied by muscle memory, and it forces a reader to look at WHICH row they are
+on — the mistake actually worth preventing in a table where forty-five rows look
+alike. Trimmed but case-sensitive: two connections can differ only in case.
+The panel also says what is lost and what is not, because "delete" on a screen
+full of databases is ambiguous in the one direction that matters — Movy deletes
+the saved credential, not the database.
+
+**One form component for create and edit.** Two would drift, and the drift would
+be silent: a field added to create and forgotten on edit does not break
+anything, it just quietly makes that field uneditable forever. The two modes
+differ in exactly two ways and both are about identity — the ENGINE is fixed
+once saved (changing it would leave every field beneath it describing a
+different dialect, and the PATCH handler does not accept it), and the PASSWORD
+is required on create and optional on edit.
+
+**A blank password field means "keep the stored one".** It cannot mean anything
+else — the stored password is never sent to a client, so the field has nothing
+to prefill with. `toConnectionInput` omits the key entirely rather than sending
+`''`; the PATCH handler distinguishes the two by length today and a future one
+might not. That rule and the delete gate are the two in `app/utils/
+connection-form.ts` — pure, so both are tested without a browser.
+
+**`shared/connection-wire.ts` joins the other two wire contracts.** The page had
+its own hand-written copy of the connection shape, which was already missing two
+fields the serializer sends. `toPublicConnection` is annotated with
+`WireConnection` now, so a field the server stops sending is a type error rather
+than `undefined` on the screen where someone points a migration at a database.
+It also owns the engine list — three, not the four `parseEngine` accepts, since
+Snowflake has a `DatabaseType` and no registered Adapter Set.
+
+**Renaming onto a taken name was a 500.** `connections_org_name_uq` was never
+caught in the connection handlers, which did not matter while there was no edit
+form and no easy way to hit it. Both POST and PATCH now answer 409 with the
+sentence, the way the definition handlers already did.
+
+### Verified live
+
+- `pnpm test` — 1227 across 88 files (was 1199/86); 16 new in
+  `connection-form.test.ts`.
+- `pnpm typecheck`, `pnpm build` — exit 0.
+- Driven in a real browser against the dev database, signed in as `editor@`:
+  a failed test auto-expanded with the `unreachable` sentence; the badge
+  collapsed and re-expanded it; edit showed the engine fixed and the password
+  placeholder `Unchanged`, and a rename landed; the delete button stayed
+  disabled for an empty box and for the wrong name, enabled on the exact one,
+  and the row was gone after; and deleting a connection a definition still uses
+  answered *"1 saved migration still uses this connection. Archive it first."*
+  in the panel rather than a 500.

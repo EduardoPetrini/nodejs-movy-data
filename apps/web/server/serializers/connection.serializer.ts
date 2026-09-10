@@ -1,3 +1,4 @@
+import type { WireConnection } from '#shared/connection-wire';
 import type { ConnectionRow } from '../repositories/connections.repo';
 import type { OrgRole } from '../db/schema';
 
@@ -7,23 +8,11 @@ import type { OrgRole } from '../db/schema';
  * Built up, never torn down: there is no `delete row.secret` anywhere, because
  * a field that is never copied cannot be forgotten. `secret` has no branch that
  * emits it — decryption happens only when opening a connection, server-side.
+ *
+ * The shape itself lives in `#shared/connection-wire`, so the client is typed
+ * against what this function actually returns.
  */
-export interface PublicConnection {
-  id: string;
-  name: string;
-  engine: string;
-  database: string;
-  schemaName: string;
-  hasSecret: true;
-  createdAt: string;
-  updatedAt: string;
-  lastTest: { at: string; ok: boolean; latencyMs: number | null; error: string | null } | null;
-  /** Present for editor and admin only. Viewers do not see connection targets. */
-  host?: string;
-  port?: number;
-  username?: string;
-  ssl?: boolean;
-}
+export type PublicConnection = WireConnection;
 
 export function toPublicConnection(row: ConnectionRow, role: OrgRole): PublicConnection {
   const base: PublicConnection = {
