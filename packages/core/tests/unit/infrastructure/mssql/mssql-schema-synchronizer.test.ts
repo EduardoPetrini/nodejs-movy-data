@@ -204,24 +204,29 @@ describe('MssqlSchemaSynchronizer', () => {
   });
 
   describe('resetSequences()', () => {
-    it('calls DBCC CHECKIDENT for tables with identity columns', async () => {
+    const vfn = (c: any) => c.query as ReturnType<typeof import('vitest').vi.fn>;
+
+    it('reads MAX from the destination and reseeds from it', async () => {
       const source = createMockConnection();
       const dest = createMockConnection();
-      (source.query as ReturnType<typeof import('vitest').vi.fn>).mockResolvedValueOnce([{ max_id: 100 }]);
+      vfn(dest).mockResolvedValueOnce([{ max_id: 100 }]);
 
-      const table = makeTable('users');
-      await sync.resetSequences(source, dest, [], [table]);
+      await sync.resetSequences(source, dest, [], [makeTable('users')]);
 
-      const destCalls = (dest.query as ReturnType<typeof import('vitest').vi.fn>).mock.calls;
-      expect(destCalls[0][0]).toContain('DBCC CHECKIDENT');
-      expect(destCalls[0][0]).toContain('users');
-      expect(destCalls[0][0]).toContain('100');
+      const destCalls = vfn(dest).mock.calls;
+      expect(destCalls[0][0]).toContain('MAX');
+      expect(destCalls[1][0]).toContain('DBCC CHECKIDENT');
+      expect(destCalls[1][0]).toContain('users');
+      expect(destCalls[1][0]).toContain('100');
+      // The source may be MySQL or PostgreSQL, where [bracket] quoting is a
+      // syntax error — this step must not touch it.
+      expect(vfn(source)).not.toHaveBeenCalled();
     });
 
     it('queries MAX on the actual identity column, not a hardcoded "id"', async () => {
       const source = createMockConnection();
       const dest = createMockConnection();
-      (source.query as ReturnType<typeof import('vitest').vi.fn>).mockResolvedValueOnce([{ max_id: 42 }]);
+      vfn(dest).mockResolvedValueOnce([{ max_id: 42 }]);
 
       const table = makeTable('orders', {
         columns: [
@@ -239,23 +244,21 @@ describe('MssqlSchemaSynchronizer', () => {
       });
       await sync.resetSequences(source, dest, [], [table]);
 
-      const sourceSql = (source.query as ReturnType<typeof import('vitest').vi.fn>).mock.calls[0][0];
-      expect(sourceSql).toContain('[OrderID]');
-      expect(sourceSql).not.toContain('[id]');
-
-      const destCalls = (dest.query as ReturnType<typeof import('vitest').vi.fn>).mock.calls;
-      expect(destCalls).toHaveLength(1);
-      expect(destCalls[0][0]).toContain('RESEED, 42');
+      const destCalls = vfn(dest).mock.calls;
+      expect(destCalls[0][0]).toContain('[OrderID]');
+      expect(destCalls[0][0]).not.toContain('[id]');
+      expect(destCalls).toHaveLength(2);
+      expect(destCalls[1][0]).toContain('RESEED, 42');
     });
 
-    it('does not reseed when the source table is empty', async () => {
+    it('does not reseed when the destination table is empty', async () => {
       const source = createMockConnection();
       const dest = createMockConnection();
-      (source.query as ReturnType<typeof import('vitest').vi.fn>).mockResolvedValueOnce([{ max_id: null }]);
+      vfn(dest).mockResolvedValueOnce([{ max_id: null }]);
 
       await sync.resetSequences(source, dest, [], [makeTable('users')]);
 
-      expect((dest.query as ReturnType<typeof import('vitest').vi.fn>).mock.calls).toHaveLength(0);
+      expect(vfn(dest).mock.calls).toHaveLength(1);
     });
 
     it('skips tables without identity columns', async () => {
@@ -267,8 +270,7 @@ describe('MssqlSchemaSynchronizer', () => {
       });
       await sync.resetSequences(source, dest, [], [table]);
 
-      const destCalls = (dest.query as ReturnType<typeof import('vitest').vi.fn>).mock.calls;
-      expect(destCalls).toHaveLength(0);
+      expect(vfn(dest).mock.calls).toHaveLength(0);
     });
   });
 });

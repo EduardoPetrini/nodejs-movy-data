@@ -27,6 +27,8 @@ const props = defineProps<{
   saving: boolean
   error: string | null
   submitLabel: string
+  /** Base connections URL for this org, e.g. `/api/orgs/acme/connections`. Only needed in create mode, to test before saving. */
+  testBase?: string
 }>()
 
 const emit = defineEmits<{
@@ -39,6 +41,37 @@ const isEdit = computed(() => props.mode === 'edit')
 const engineLabel = computed(
   () => CONNECTION_ENGINES.find((e) => e.value === props.values.engine)?.label ?? props.values.engine
 )
+
+/**
+ * Test the credentials on screen before there is a row to test against.
+ *
+ * Only offered in create mode: on edit, a blank password means "keep the
+ * stored one", and this form never sees that secret, so a test here could
+ * only test the *new* fields against a password the form does not have. The
+ * per-row Test button on the list already covers a saved connection.
+ */
+const testing = ref(false)
+const testResult = ref<{ ok: boolean; latencyMs: number | null; error?: string } | null>(null)
+
+async function testConnection() {
+  if (!props.testBase) return
+  testing.value = true
+  testResult.value = null
+  try {
+    testResult.value = await $fetch<{ ok: boolean; latencyMs: number | null; error?: string }>(
+      `${props.testBase}/test`,
+      { method: 'POST', body: toConnectionInput(props.values) }
+    )
+  } catch (err) {
+    testResult.value = {
+      ok: false,
+      latencyMs: null,
+      error: (err as { statusMessage?: string }).statusMessage ?? 'Could not run the test.',
+    }
+  } finally {
+    testing.value = false
+  }
+}
 
 /**
  * Choosing an engine offers its default port — but `retargetPort` refuses to
@@ -122,9 +155,18 @@ function onSubmit() {
 
     <p v-if="error" class="error" role="alert">{{ error }}</p>
 
+    <p v-if="testResult" class="test-result" :class="{ ok: testResult.ok }" role="status">
+      <StatusDot :status="testResult.ok ? 'ok' : 'failed'" />
+      <span v-if="testResult.ok">Connected in {{ testResult.latencyMs }}ms.</span>
+      <span v-else>{{ testResult.error ?? 'The test failed, but reported no reason.' }}</span>
+    </p>
+
     <div class="actions">
       <AppButton type="submit" variant="primary" :disabled="saving">
         {{ saving ? 'Saving…' : submitLabel }}
+      </AppButton>
+      <AppButton v-if="!isEdit && testBase" type="button" :disabled="testing" @click="testConnection">
+        {{ testing ? 'Testing…' : 'Test connection' }}
       </AppButton>
       <AppButton v-if="isEdit" @click="emit('cancel')">Cancel</AppButton>
     </div>
@@ -141,5 +183,7 @@ input:focus, select:focus { outline: none; box-shadow: var(--mv-focus); border-c
 .check { flex-direction: row; align-items: center; gap: var(--mv-s-2); align-self: end; padding-bottom: 6px; font-size: var(--mv-fs-xs); color: var(--mv-fg-muted); }
 .check input { width: auto; }
 .error { color: var(--mv-danger); font-size: var(--mv-fs-xs); margin-top: var(--mv-s-2); }
+.test-result { display: flex; align-items: center; gap: var(--mv-s-2); color: var(--mv-danger); font-size: var(--mv-fs-xs); margin-top: var(--mv-s-2); }
+.test-result.ok { color: var(--mv-fg-muted); }
 .actions { display: flex; gap: var(--mv-s-2); margin-top: var(--mv-s-4); }
 </style>

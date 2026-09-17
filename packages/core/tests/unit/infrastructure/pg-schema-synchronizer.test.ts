@@ -253,5 +253,118 @@ describe('PgSchemaSynchronizer', () => {
       expect(warnSpy).toHaveBeenCalled();
       warnSpy.mockRestore();
     });
+
+    it('resets an owned sequence from the destination data, not the stale source counter', async () => {
+      const source = createMockConnection();
+      const dest = createMockConnection();
+      // The source counter is stuck at 4 while its rows run to 121 — a restore
+      // that copied rows without advancing the sequence.
+      (source.query as any).mockResolvedValue([{ last_value: '4' }]);
+      (dest.query as any).mockResolvedValueOnce([
+        { sequence_name: 'history_id_seq', table_name: 'history', column_name: 'id' },
+      ]);
+
+      await sync.resetSequences(
+        source,
+        dest,
+        [{ name: 'history_id_seq', startValue: '1', minValue: '1', maxValue: '9999', incrementBy: '1', cycleOption: false, lastValue: '4' }],
+        [makeTable('history')]
+      );
+
+      // MAX("id") is a bound PostgreSQL resolves — 121 there beats the source's 5.
+      const setvalCalls = (dest.query as any).mock.calls.filter((c: any[]) => String(c[0]).includes('setval'));
+      expect(setvalCalls).toHaveLength(1);
+      expect(setvalCalls[0][0]).toContain('MAX("id")');
+      expect(setvalCalls[0][0]).toContain('"history"');
+      expect(setvalCalls[0][1]).toEqual(['history_id_seq', '5']);
+    });
+
+    it('keeps the source counter as a floor, so a sequence never moves backward', async () => {
+      const source = createMockConnection();
+      const dest = createMockConnection();
+      // A live sequence runs ahead of MAX(id): rolled-back inserts burn values.
+      (source.query as any).mockResolvedValue([{ last_value: '900', is_called: true }]);
+      (dest.query as any).mockResolvedValueOnce([
+        { sequence_name: 'users_id_seq', table_name: 'users', column_name: 'id' },
+      ]);
+
+      await sync.resetSequences(
+        source,
+        dest,
+        [{ name: 'users_id_seq', startValue: '1', minValue: '1', maxValue: '9999', incrementBy: '1', cycleOption: false, lastValue: '900' }],
+        [makeTable('users')]
+      );
+
+      const setvalCalls = (dest.query as any).mock.calls.filter((c: any[]) => String(c[0]).includes('setval'));
+      expect(setvalCalls[0][0]).toContain('GREATEST');
+      expect(setvalCalls[0][1]).toEqual(['users_id_seq', '901']);
+    });
+
+    it('takes an unused source sequence at face value rather than skipping its first id', async () => {
+      const source = createMockConnection();
+      const dest = createMockConnection();
+      (source.query as any).mockResolvedValue([{ last_value: '1', is_called: false }]);
+      (dest.query as any).mockResolvedValueOnce([
+        { sequence_name: 'users_id_seq', table_name: 'users', column_name: 'id' },
+      ]);
+
+      await sync.resetSequences(
+        source,
+        dest,
+        [{ name: 'users_id_seq', startValue: '1', minValue: '1', maxValue: '9999', incrementBy: '1', cycleOption: false, lastValue: '1' }],
+        [makeTable('users')]
+      );
+
+      const setvalCalls = (dest.query as any).mock.calls.filter((c: any[]) => String(c[0]).includes('setval'));
+      expect(setvalCalls[0][1]).toEqual(['users_id_seq', '1']);
+    });
+
+    it('falls back to the source counter for a sequence no column owns', async () => {
+      const source = createMockConnection();
+      const dest = createMockConnection();
+      (source.query as any).mockResolvedValue([{ last_value: 99 }]);
+      (dest.query as any).mockResolvedValueOnce([]); // nothing owned
+
+      await sync.resetSequences(
+        source,
+        dest,
+        [{ name: 'invoice_no_seq', startValue: '1', minValue: '1', maxValue: '9999', incrementBy: '1', cycleOption: false, lastValue: null }],
+        [makeTable('invoices')]
+      );
+
+      expect(dest.query).toHaveBeenCalledWith(expect.stringContaining('setval'), ['invoice_no_seq', 99]);
+    });
+
+    it('leaves a sequence owned by a table outside the migration set alone', async () => {
+      const source = createMockConnection();
+      const dest = createMockConnection();
+      (dest.query as any).mockResolvedValueOnce([
+        { sequence_name: 'audit_id_seq', table_name: 'audit', column_name: 'id' },
+      ]);
+
+      await sync.resetSequences(source, dest, [], [makeTable('users')]);
+
+      const setvalCalls = (dest.query as any).mock.calls.filter((c: any[]) => String(c[0]).includes('setval'));
+      expect(setvalCalls).toHaveLength(0);
+    });
+
+    it('still resets the remaining sequences when one owned reset fails', async () => {
+      const source = createMockConnection();
+      const dest = createMockConnection();
+      (dest.query as any)
+        .mockResolvedValueOnce([
+          { sequence_name: 'a_id_seq', table_name: 'a', column_name: 'id' },
+          { sequence_name: 'b_id_seq', table_name: 'b', column_name: 'id' },
+        ])
+        .mockRejectedValueOnce(new Error('permission denied'));
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      await sync.resetSequences(source, dest, [], [makeTable('a'), makeTable('b')]);
+
+      const setvalCalls = (dest.query as any).mock.calls.filter((c: any[]) => String(c[0]).includes('setval'));
+      expect(setvalCalls).toHaveLength(2);
+      expect(warnSpy).toHaveBeenCalled();
+      warnSpy.mockRestore();
+    });
   });
 });

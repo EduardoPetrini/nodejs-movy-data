@@ -180,8 +180,15 @@ export class MssqlSchemaSynchronizer implements ISchemaSynchronizer {
     }
   }
 
+  /**
+   * Reseeds from the rows in the DESTINATION, never the source. Two reasons,
+   * either one sufficient: the source may be MySQL or PostgreSQL, where
+   * `SELECT MAX([id]) FROM [users]` is a syntax error — so this step warned and
+   * reseeded nothing for the whole MySQL→MSSQL Pair — and a source whose
+   * counter drifted from its own rows is not the authority on what was loaded.
+   */
   async resetSequences(
-    source: IDatabaseConnection,
+    _source: IDatabaseConnection,
     dest: IDatabaseConnection,
     _sequences: SequenceSchema[],
     tables: TableSchema[] = []
@@ -192,7 +199,7 @@ export class MssqlSchemaSynchronizer implements ISchemaSynchronizer {
       if (!identityColumn) continue;
 
       try {
-        const rows = await source.query<{ max_id: number | null }>(
+        const rows = await dest.query<{ max_id: number | null }>(
           `SELECT MAX(${escapeId(identityColumn.name)}) AS max_id FROM ${escapeId(table.name)}`
         );
         const maxId = rows[0]?.max_id;

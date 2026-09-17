@@ -20,6 +20,74 @@ const PG_LENGTH_SUPPORTING_TYPES = new Set([
   'bit', 'bit varying', 'varbit',
 ]);
 
+/** What the source sequence would hand out next, if it could be read. */
+interface SourceCounter {
+  lastValue: string;
+  isCalled: boolean;
+}
+
+/** The next value a source counter would produce, as a bigint literal. */
+function nextValueOf(counter: SourceCounter | undefined): string | undefined {
+  if (!counter) return undefined;
+  try {
+    return (BigInt(counter.lastValue) + (counter.isCalled ? 1n : 0n)).toString();
+  } catch {
+    return undefined; // not a number we can reason about; the rows still bound it
+  }
+}
+
+interface RawColumnSequence {
+  sequence_name: string;
+  table_name: string;
+  column_name: string;
+}
+
+/**
+ * Every sequence in the current schema that stands behind a column, in the two
+ * shapes PostgreSQL records them. A `serial` or identity column OWNS its
+ * sequence — pg_depend 'a' or 'i' from the sequence to the column — but a
+ * column carrying a plain `DEFAULT nextval('…')`, which is what Movy's own
+ * CREATE TABLE emits, owns nothing: its only link is a dependency from the
+ * default expression. Matching the first shape alone missed exactly the tables
+ * this tool creates. UNION de-duplicates serial columns, which have both.
+ *
+ * Ascending only: MAX() is the wrong watermark for a descending sequence.
+ */
+const COLUMN_SEQUENCES_SQL = `
+  SELECT seq.relname AS sequence_name,
+         tbl.relname AS table_name,
+         att.attname AS column_name
+  FROM pg_class seq
+  JOIN pg_namespace ns ON ns.oid = seq.relnamespace
+  JOIN pg_sequence s ON s.seqrelid = seq.oid
+  JOIN pg_depend dep ON dep.classid = 'pg_class'::regclass
+                    AND dep.objid = seq.oid
+                    AND dep.deptype IN ('a', 'i')
+  JOIN pg_class tbl ON tbl.oid = dep.refobjid
+  JOIN pg_attribute att ON att.attrelid = tbl.oid AND att.attnum = dep.refobjsubid
+  WHERE seq.relkind = 'S'
+    AND ns.nspname = current_schema()
+    AND tbl.relnamespace = ns.oid
+    AND s.seqincrement > 0
+
+  UNION
+
+  SELECT seq.relname AS sequence_name,
+         tbl.relname AS table_name,
+         att.attname AS column_name
+  FROM pg_attrdef ad
+  JOIN pg_depend dep ON dep.classid = 'pg_attrdef'::regclass
+                    AND dep.objid = ad.oid
+                    AND dep.refclassid = 'pg_class'::regclass
+  JOIN pg_class seq ON seq.oid = dep.refobjid AND seq.relkind = 'S'
+  JOIN pg_namespace ns ON ns.oid = seq.relnamespace
+  JOIN pg_sequence s ON s.seqrelid = seq.oid
+  JOIN pg_class tbl ON tbl.oid = ad.adrelid
+  JOIN pg_attribute att ON att.attrelid = ad.adrelid AND att.attnum = ad.adnum
+  WHERE ns.nspname = current_schema()
+    AND tbl.relnamespace = ns.oid
+    AND s.seqincrement > 0`;
+
 export class PgSchemaSynchronizer implements ISchemaSynchronizer {
   diff(source: DatabaseSchema, target: DatabaseSchema): SchemaDiff {
     const targetTableMap = new Map(target.tables.map((t) => [t.name, t]));
@@ -205,26 +273,140 @@ export class PgSchemaSynchronizer implements ISchemaSynchronizer {
     }
   }
 
+  /**
+   * A sequence that backs a column is reset from the rows that landed in the
+   * DESTINATION, not from the source's `last_value` alone. A source restored by
+   * a dump that copied rows without advancing its sequences hands us a counter
+   * below `MAX(id)` — n8n's `workflow_publish_history_id_seq` sat at 4 against
+   * ids up to 121 — and copying that verbatim reproduces the duplicate-key
+   * failure on the destination instead of leaving it behind. PostgreSQL is the
+   * only destination where this bites: an explicit-id INSERT never advances a
+   * sequence, where InnoDB and IDENTITY_INSERT both carry their counters along.
+   *
+   * The source counter stays in as a FLOOR rather than being discarded. A live
+   * sequence normally runs AHEAD of `MAX(id)` — every rolled-back insert burns
+   * a value — and handing those ids out again on the destination would undo
+   * that. So the step takes the greatest of the source counter, the rows, and
+   * the sequence's own START, and can only ever move a counter forward.
+   *
+   * A standalone sequence backs no column, so there is no `MAX()` to read and
+   * the source counter is the only value there is — those still copy across.
+   */
   async resetSequences(
     source: IDatabaseConnection,
     dest: IDatabaseConnection,
     sequences: SequenceSchema[],
-    _tables?: unknown
+    tables?: TableSchema[]
   ): Promise<void> {
+    const sourceCounters = await this.readSourceCounters(source, sequences);
+    const resetFromData = await this.resetColumnSequences(dest, tables, sourceCounters);
+
     for (const seq of sequences) {
+      if (resetFromData.has(seq.name)) continue;
+      const counter = sourceCounters.get(seq.name);
+      if (counter === undefined) continue; // unreadable on the source; already warned
       try {
-        const rows = await source.query<{ last_value: string }>(
-          `SELECT last_value::text FROM ${escapeIdentifier(seq.name)}`
-        );
-        const lastValue = rows[0]?.last_value;
-        if (lastValue !== undefined && lastValue !== null) {
-          await dest.query(`SELECT setval($1, $2, true)`, [seq.name, lastValue]);
-        }
+        await dest.query(`SELECT setval($1, $2, true)`, [seq.name, counter.lastValue]);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.warn(`WARN: Failed to reset sequence ${seq.name}: ${message}`);
       }
     }
+  }
+
+  /**
+   * The source's own counter per sequence, read once. `is_called` is what makes
+   * it a number rather than an ambiguity: a fresh sequence reports
+   * `last_value = 1, is_called = false` and will hand out 1, while a used one
+   * reporting 1 will hand out 2.
+   */
+  private async readSourceCounters(
+    source: IDatabaseConnection,
+    sequences: SequenceSchema[]
+  ): Promise<Map<string, SourceCounter>> {
+    const counters = new Map<string, SourceCounter>();
+
+    for (const seq of sequences) {
+      try {
+        const rows = await source.query<{ last_value: string; is_called?: boolean }>(
+          `SELECT last_value::text, is_called FROM ${escapeIdentifier(seq.name)}`
+        );
+        const row = rows[0];
+        if (row?.last_value === undefined || row.last_value === null) continue;
+        counters.set(seq.name, { lastValue: row.last_value, isCalled: row.is_called !== false });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(`WARN: Failed to read sequence ${seq.name} from source: ${message}`);
+      }
+    }
+
+    return counters;
+  }
+
+  /**
+   * Advances every destination sequence that backs a migrated column past the
+   * rows now in that column, and answers which ones it handled.
+   *
+   * Driven off the DESTINATION catalogue rather than the source's sequence
+   * list: that is what makes this work for a MySQL or MSSQL source, whose
+   * inspectors report no sequences at all, and for an identity column, whose
+   * sequence the source may not report either. Tables outside the migration
+   * set are left alone — this run did not write them.
+   *
+   * Returns an empty set when the catalogue read fails, so the caller falls
+   * back to the source counter rather than leaving every sequence untouched.
+   */
+  private async resetColumnSequences(
+    dest: IDatabaseConnection,
+    tables?: TableSchema[],
+    sourceCounters: Map<string, SourceCounter> = new Map()
+  ): Promise<Set<string>> {
+    const reset = new Set<string>();
+    if (!tables || tables.length === 0) return reset;
+    const migrated = new Set(tables.map((t) => t.name));
+
+    let owned: RawColumnSequence[];
+    try {
+      owned = await dest.query<RawColumnSequence>(COLUMN_SEQUENCES_SQL);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`WARN: Failed to resolve column-backed sequences: ${message}`);
+      return reset;
+    }
+
+    for (const row of owned) {
+      if (!migrated.has(row.table_name)) continue;
+      const table = escapeIdentifier(row.table_name);
+      const column = escapeIdentifier(row.column_name);
+
+      // is_called = false, so nextval() returns the value set. An empty table
+      // falls back to the sequence's own START value.
+      const bounds = [
+        `COALESCE((SELECT MAX(${column}) FROM ${table}), 0) + 1`,
+        `(SELECT seqstart FROM pg_sequence WHERE seqrelid = $1::regclass)`,
+      ];
+      const params: unknown[] = [row.sequence_name];
+      const sourceFloor = nextValueOf(sourceCounters.get(row.sequence_name));
+      if (sourceFloor !== undefined) {
+        bounds.push(`$${params.length + 1}::bigint`);
+        params.push(sourceFloor);
+      }
+
+      try {
+        await dest.query(
+          `SELECT setval($1::regclass, GREATEST(${bounds.join(', ')}), false)`,
+          params
+        );
+        reset.add(row.sequence_name);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(
+          `WARN: Failed to reset sequence ${row.sequence_name} from ${row.table_name}.${row.column_name}: ${message}`
+        );
+      }
+    }
+
+    return reset;
   }
 
   private diffColumns(

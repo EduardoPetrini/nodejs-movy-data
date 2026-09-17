@@ -124,6 +124,40 @@ Logs are written to both the console and a timestamped file under `logs/` (`movy
 8. Create indexes
 9. Reset auto-increment state (PG: `setval()`; MySQL: `ALTER TABLE … AUTO_INCREMENT`; MSSQL: `DBCC CHECKIDENT … RESEED`)
 
+**Step 9 reads the destination's rows, not the source's counter alone.** A
+PostgreSQL sequence or an MSSQL IDENTITY is reseeded from `MAX(col)` on the
+DESTINATION, because a source restored by a dump that copied rows without advancing
+its sequences carries a counter below its own `MAX(id)` — copying that verbatim hands
+the destination the duplicate-key failure the migration was supposed to leave behind.
+**PostgreSQL is the only destination where this is fatal**: an explicit-id `INSERT`
+never advances a sequence, whereas InnoDB and `IDENTITY_INSERT` both carry their
+counters along as rows load. On the other two the reset is the safety net, not the
+mechanism.
+
+The source counter stays in as a FLOOR, never discarded: a live sequence normally runs
+AHEAD of `MAX(id)` — every rolled-back insert burns a value — so PG takes
+`GREATEST(source next, MAX + 1, START)` and the step can only move a counter forward.
+
+`COLUMN_SEQUENCES_SQL` resolves PG's sequences from the DESTINATION catalogue in
+**both** shapes PostgreSQL records them: the `pg_depend` ownership a `serial` or
+identity column has, and the default-expression dependency that is all a column
+created by Movy's own `CREATE TABLE` has. Matching only the first missed exactly the
+tables this tool creates. Reading the destination is also what makes the step work for
+a MySQL or MSSQL source, whose inspectors report no sequences at all. Sequences no
+column backs have no `MAX()` to read, so those still copy the source's `last_value`;
+tables outside the migration set are left alone.
+
+The MSSQL reseed reads the destination for a second reason: `SELECT MAX([id]) FROM
+[users]` is a syntax error on a MySQL or PostgreSQL source, so querying the source
+there warned and reseeded nothing for the entire MySQL→MSSQL Pair.
+
+**Known gap — auto-increment is not carried across engines.** `ColumnSchema.autoIncrement`
+is set only by the MySQL and MSSQL inspectors, and only MySQL's and MSSQL's
+`buildColumnDef` act on it. So a PG `serial` arrives at MySQL/MSSQL as a plain integer
+(with `DEFAULT nextval(…)` passed through untranslated), and a MySQL/MSSQL identity
+arrives at PG with no sequence at all. Nothing in step 9 can fix that — there is no
+counter on the destination to reset.
+
 ### Run events (the observable contract)
 
 `MigrationOrchestrator.run()` and `MigrateDataUseCase.execute()` take an **optional

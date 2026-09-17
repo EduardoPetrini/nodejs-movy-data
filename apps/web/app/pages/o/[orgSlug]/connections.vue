@@ -229,6 +229,7 @@ async function remove(id: string) {
       :values="createValues"
       :saving="creating"
       :error="formError"
+      :test-base="base"
       submit-label="Save connection"
       @submit="create"
     />
