@@ -20,3 +20,6 @@ package-lock.json
 test-results/
 playwright-report/
 .playwright/
+
+# Local editor/agent tooling state.
+.serena/

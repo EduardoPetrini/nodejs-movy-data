@@ -717,7 +717,7 @@ The remaining five maps are unwritten.
 
 - **[#4](https://github.com/EduardoPetrini/nodejs-movy-data/issues/4) — `MssqlQueryAnalyzer` and `MysqlQueryAnalyzer` are unreachable.** Both are implemented and wired into their adapter sets, but query migration is PostgreSQL-only by construction, so neither can run. Open question: implement portable query migration, or delete them. `needs-triage`.
 
-### Fixed in this pass
+### Fixed in this pass (issues closed on GitHub 2026-10-22)
 
 - **[#3](https://github.com/EduardoPetrini/nodejs-movy-data/issues/3) — MSSQL reseed assumed an identity column named `id`.** `resetSequences()` now queries `MAX()` on the column found via `column.autoIncrement` instead of a hardcoded `[id]`. Regression tests added.
 - **[#5](https://github.com/EduardoPetrini/nodejs-movy-data/issues/5) — query migration crashed on a non-PostgreSQL destination.** The CLI guard checked only the source while `streamData()` casts both connections; it now rejects any non-PostgreSQL source *or* destination. The guard itself is still untested — `cli.ts` sits at 0% coverage.

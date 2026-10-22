@@ -1,7 +1,9 @@
 # Web UI — progress and handoff
 
 Working branch: **`feat/monorepo-restructure`**.
-Plan: `~/.claude-personal/plans/let-s-a-web-ui-vectorized-codd.md`.
+Plan: `~/.claude-personal/plans/let-s-a-web-ui-vectorized-codd.md` — **no longer
+on disk** (checked 2026-10-22). Every phase it described is closed; this file is
+now the only record of them.
 
 > This covers the **web UI** work. `docs/implementation-plan.md` remains the
 > CLI-side plan (engine roadmap, type maps, Pair status) and is unaffected.
@@ -23,7 +25,7 @@ phase is indistinguishable from one that was never started.
 
 ## Status board
 
-*Last reviewed: 2026-09-09. 1227 unit tests (88 files) + 8 Playwright E2E, green.*
+*Last reviewed: 2026-10-22. 1233 unit tests (88 files) + 8 Playwright E2E, green.*
 
 | Phase | State | Notes |
 |-------|-------|-------|
@@ -36,6 +38,7 @@ phase is indistinguishable from one that was never started.
 | 5 — hardening | **DONE** (2026-09-09) | redaction, cancellation, E2E, retention, taxonomy, docs |
 | 5r — review of Phase 5 | **DONE** (2026-09-09) | five defects found in `1329ca1` and fixed in `6f13fcd` |
 | — connection lifecycle | **DONE** (2026-09-09) | edit, delete behind a typed confirmation, failure reason inline |
+| — sequence reseed + test before save | **DONE** (2026-09-17) | step 9 reads the destination's `MAX()`; create form tests unsaved credentials |
 
 ### Remaining work
 
@@ -73,11 +76,23 @@ which is unit-tested at all.
 a skip link, focus rings verified in a browser, and three Playwright tests. It
 did not audit with a screen reader, and `docs/agents/` records no commitment to.
 
-**Known bugs, tracked.** [#5](https://github.com/EduardoPetrini/nodejs-movy-data/issues/5)
-query migration crashes on a non-PostgreSQL destination,
+**Known bugs, tracked.** One open, CLI-side:
 [#4](https://github.com/EduardoPetrini/nodejs-movy-data/issues/4) `MssqlQueryAnalyzer`
-unreachable, [#3](https://github.com/EduardoPetrini/nodejs-movy-data/issues/3)
-MSSQL sequence reset assumes an `id` column. All three are CLI-side.
+and `MysqlQueryAnalyzer` are unreachable — still `needs-triage` on implement
+portable query migration versus delete them.
+[#3](https://github.com/EduardoPetrini/nodejs-movy-data/issues/3) (MSSQL reseed
+assumed an `id` column) and [#5](https://github.com/EduardoPetrini/nodejs-movy-data/issues/5)
+(query migration crashed on a non-PostgreSQL destination) were fixed in code
+earlier and left open on GitHub; both closed 2026-10-22.
+
+**Auto-increment is not carried across engines.** A PG `serial` lands on
+MySQL/MSSQL as a plain integer, and a MySQL/MSSQL identity lands on PG with no
+sequence. Step 9 cannot fix that — there is no counter to reset. See CLAUDE.md,
+*Migration flow*.
+
+**The test-before-save endpoint has no unit test.**
+`connections/test.post.ts` (2026-09-17) was verified by hand only. See the
+section at the end of this file.
 
 ---
 
@@ -90,7 +105,7 @@ apps/runner/     @movy/runner  the run driver: argv, stdin, signals, IPC, journa
 apps/web/        @movy/web     Nuxt 4: orgs, RBAC, connections, definitions, runs
 ```
 
-`pnpm` workspaces. 1188 unit tests, plus 8 Playwright E2E behind `pnpm test:e2e`.
+`pnpm` workspaces. 1233 unit tests, plus 8 Playwright E2E behind `pnpm test:e2e`.
 Coverage 63.28 / 48.02 / 66.99 / 64.06 over core + CLI + runner, ratcheted
 upward only; `apps/web` ratchets separately so a young app neither dilutes the
 core number nor hands it a free jump.
@@ -1196,3 +1211,52 @@ sentence, the way the definition handlers already did.
   and the row was gone after; and deleting a connection a definition still uses
   answered *"1 saved migration still uses this connection. Archive it first."*
   in the panel rather than a 500.
+
+---
+
+## Sequence reseed, and testing a connection before it is saved (2026-09-17)
+
+Not a phase. Commit `5ee90bf`. Recorded here 2026-10-22, after the fact — the
+commit landed without this file being updated, which the working agreement
+above exists to prevent.
+
+**Step 9 now reseeds from the DESTINATION's rows.** A PostgreSQL sequence or an
+MSSQL IDENTITY is set from `MAX(col)` on the destination, with the source
+counter kept as a floor: PG takes `GREATEST(source next, MAX + 1, START)`, so
+the step only ever moves a counter forward. The trigger was a source restored
+from a dump whose sequences sat below its own `MAX(id)` — copied verbatim, that
+handed the destination the duplicate-key failure the migration was meant to
+leave behind. PostgreSQL is the only destination where this was fatal; InnoDB
+and `IDENTITY_INSERT` advance their counters as rows load.
+
+`COLUMN_SEQUENCES_SQL` reads the destination catalogue in both shapes PG
+records a sequence: `pg_depend` ownership (`serial`, identity) and the
+default-expression dependency, which is all a table created by Movy's own
+`CREATE TABLE` has. Matching only the first missed exactly the tables Movy
+creates. Reading the destination is also what makes the step work for a MySQL
+or MSSQL source, whose inspectors report no sequences.
+
+The MSSQL reseed reads the destination too: `SELECT MAX([id]) FROM [users]` is a
+syntax error on a MySQL or PG source, so the whole MySQL→MSSQL Pair warned and
+reseeded nothing. Full write-up in CLAUDE.md, *Migration flow*.
+
+**The create form can test credentials before they are saved.**
+`POST /api/orgs/:slug/connections/test` takes the form's body, opens a
+connection with a 10s timeout, closes it, and reports a failure through
+`describeConnectionFailure` like the per-row Test does. Nothing is persisted —
+there is no row, so no `lastTest`, and the plaintext password never outlives
+the request. Gated on `connection:test`.
+
+Offered in **create mode only**. On edit, a blank password means "keep the
+stored one" and the form never holds that secret, so a test there could only
+test new fields against a password it does not have. The per-row Test button
+already covers a saved connection.
+
+### Verified
+
+- `pnpm test` — 1233 across 88 files (was 1227). The six new tests are the PG
+  and MSSQL synchronizer reseed cases.
+- **Gap:** `connections/test.post.ts` has no unit test; it was exercised by
+  hand in the browser only. Its timeout `setTimeout` is also never cleared, so
+  a fast connect leaves a 10s timer pending — harmless, but worth fixing when a
+  test is written for it.
