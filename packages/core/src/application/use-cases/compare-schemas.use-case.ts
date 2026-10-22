@@ -1,0 +1,49 @@
+import { ISchemaInspector } from '../../domain/ports/schema-inspector.port.js';
+import { ISchemaSynchronizer } from '../../domain/ports/schema-synchronizer.port.js';
+import { IDatabaseConnection } from '../../domain/ports/database.port.js';
+import { ILogger } from '../../domain/ports/logger.port.js';
+import { DatabaseSchema } from '../../domain/types/schema.types.js';
+import { SchemaDiff } from '../../domain/types/migration.types.js';
+
+export interface CompareSchemaResult {
+  sourceSchema: DatabaseSchema;
+  targetSchema: DatabaseSchema;
+  diff: SchemaDiff;
+}
+
+export class CompareSchemasUseCase {
+  constructor(
+    private readonly sourceInspector: ISchemaInspector,
+    private readonly destInspector: ISchemaInspector,
+    private readonly synchronizer: ISchemaSynchronizer,
+    private readonly logger: ILogger
+  ) {}
+
+  async execute(
+    sourceConnection: IDatabaseConnection,
+    destConnection: IDatabaseConnection
+  ): Promise<CompareSchemaResult> {
+    this.logger.info('Inspecting source schema...');
+    const sourceSchema = await this.sourceInspector.inspect(sourceConnection);
+
+    this.logger.info('Inspecting destination schema...');
+    const targetSchema = await this.destInspector.inspect(destConnection);
+
+    this.logger.info(
+      `Source: ${sourceSchema.tables.length} tables, ${sourceSchema.sequences.length} sequences`
+    );
+
+    const diff = this.synchronizer.diff(sourceSchema, targetSchema);
+
+    this.logger.info(
+      `Source enums: ${sourceSchema.enums.length} (${sourceSchema.enums.map((e) => e.name).join(', ') || 'none'})`
+    );
+    this.logger.info(
+      `Diff: +${diff.tablesToCreate.length} tables, -${diff.tablesToDrop.length} tables, ` +
+      `+${diff.columnsToAdd.length} cols, -${diff.columnsToDrop.length} cols, ` +
+      `+${diff.enumsToCreate.length} enums`
+    );
+
+    return { sourceSchema, targetSchema, diff };
+  }
+}

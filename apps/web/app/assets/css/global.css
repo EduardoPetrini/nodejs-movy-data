@@ -1,0 +1,44 @@
+@import './tokens.css';
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--mv-bg-sunken);
+  color: var(--mv-fg);
+  font-family: var(--mv-font-sans);
+  font-size: var(--mv-fs-sm);
+  line-height: var(--mv-lh-body);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Anything the database said is mono; anything Movy said is sans. */
+code, pre, kbd, samp, .mv-mono { font-family: var(--mv-font-mono); }
+
+/* Numbers must not jitter as they tick. */
+.mv-num { font-variant-numeric: var(--mv-numeric); }
+
+h1, h2, h3, h4 { margin: 0; font-weight: var(--mv-fw-semibold); line-height: var(--mv-lh-tight); }
+p { margin: 0; }
+a { color: var(--mv-accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+button, input, select, textarea { font: inherit; color: inherit; }
+
+:focus-visible { outline: none; box-shadow: var(--mv-focus); border-radius: var(--mv-r-sm); }
+
+img, svg { max-width: 100%; }
+
+/* Uppercase micro-label used for field and column headings. */
+.mv-label {
+  font-size: var(--mv-fs-micro);
+  letter-spacing: var(--mv-track-label);
+  text-transform: uppercase;
+  color: var(--mv-fg-subtle);
+  font-weight: var(--mv-fw-medium);
+}
+
+/* Wide content scrolls inside its own container; the page never scrolls sideways. */
+.mv-scroll-x { overflow-x: auto; }

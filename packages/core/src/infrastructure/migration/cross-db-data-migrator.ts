@@ -1,0 +1,314 @@
+import { pipeline } from 'stream/promises';
+import { from as copyFrom, to as copyTo } from 'pg-copy-streams';
+import mysql from 'mysql2/promise';
+import { IDataMigrator, MigrationProgressCallback } from '../../domain/ports/data-migrator.port.js';
+import { ConnectionConfig, DatabaseType } from '../../domain/types/connection.types.js';
+import {
+  MigrationResult,
+  TableMigrationPlan,
+  TableMigrationResult,
+} from '../../domain/types/migration.types.js';
+import { DataMigrationError } from '../../domain/errors/migration.errors.js';
+import { MysqlConnection } from '../database/mysql/mysql-connection.adapter.js';
+import { PgConnection } from '../database/pg/pg-connection.adapter.js';
+import { truncatePgTables } from './pg-truncate.js';
+import { throwIfCancelled, rethrowIfCancelled } from './cancellation.js';
+
+const BATCH_SIZE = 500;
+
+/**
+ * Migrates data between two different database types (MySQL ↔ PostgreSQL).
+ *
+ * MySQL → PG:  streams SELECT rows from MySQL, batch-inserts into PG.
+ * PG → MySQL:  reads PG rows via SELECT, batch-inserts into MySQL.
+ *
+ * Tables are processed sequentially. No worker threads are used, keeping
+ * the implementation straightforward and correct.
+ */
+export class CrossDbDataMigrator implements IDataMigrator {
+  async migrate(
+    sourceConfig: ConnectionConfig,
+    destConfig: ConnectionConfig,
+    plan: TableMigrationPlan,
+    _workerCount: number,
+    rowEstimates?: Map<string, number>,
+    onProgress?: MigrationProgressCallback,
+    signal?: AbortSignal
+  ): Promise<MigrationResult> {
+    this.assertSupportedPair(sourceConfig.type, destConfig.type);
+
+    const start = Date.now();
+    const results: TableMigrationResult[] = [];
+    const mysqlDest =
+      isPgToMysql(sourceConfig.type, destConfig.type) ? new MysqlConnection(destConfig) : null;
+
+    // Before emptying anything. Clearing the destination is the most
+    // destructive thing this migrator does, and a cancellation that arrived
+    // while the schema step was still finishing must not be answered by wiping
+    // the load set and only then stopping.
+    throwIfCancelled(signal, 'before clearing the destination');
+
+    try {
+      const mysqlDestClient = mysqlDest ? await this.prepareMysqlDestination(mysqlDest, plan.cleanupOrder) : null;
+
+      // PostgreSQL destination: clear the whole load set in one statement.
+      // Doing it per table failed for every FK-parent on a re-run, because
+      // PostgreSQL will not clear a table another table references.
+      if (isMysqlToPg(sourceConfig.type, destConfig.type)) {
+        const pgDest = new PgConnection(destConfig);
+        try {
+          await pgDest.connect();
+          await truncatePgTables(pgDest, plan.loadOrder);
+        } finally {
+          await pgDest.end();
+        }
+      }
+
+      try {
+        for (const table of plan.loadOrder) {
+          throwIfCancelled(signal, `before copying "${table}"`);
+          const tableStart = Date.now();
+          const estimated = rowEstimates?.get(table) ?? 0;
+          let rowsCopied = 0;
+          let success = true;
+          let error: string | undefined;
+
+          try {
+            if (isMysqlToPg(sourceConfig.type, destConfig.type)) {
+              rowsCopied = await this.copyMysqlToPg(sourceConfig, destConfig, table, estimated, onProgress, signal);
+            } else {
+              rowsCopied = await this.copyPgToMysql(
+                sourceConfig,
+                table,
+                estimated,
+                mysqlDestClient!,
+                onProgress,
+                signal
+              );
+            }
+            onProgress?.(table, rowsCopied, rowsCopied);
+          } catch (err) {
+            // A cancellation is not a table outcome — it ends the run.
+            rethrowIfCancelled(err);
+            success = false;
+            error = err instanceof Error ? err.message : String(err);
+          }
+
+          results.push({ tableName: table, rowsCopied, durationMs: Date.now() - tableStart, success, error });
+
+          // The copy loop breaks out on a short final batch without looking at
+          // the signal again, so an abort landing during the last batch of the
+          // last table would otherwise never be seen and this would return
+          // success: true for a run somebody cancelled.
+          throwIfCancelled(signal, `after copying "${table}"`);
+        }
+
+        return {
+          tables: results,
+          totalDurationMs: Date.now() - start,
+          success: results.every((r) => r.success),
+        };
+      } finally {
+        if (mysqlDestClient) {
+          await mysqlDestClient.query('SET SESSION FOREIGN_KEY_CHECKS = 1');
+          mysqlDestClient.release();
+        }
+      }
+    } finally {
+      if (mysqlDest) await mysqlDest.end();
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // MySQL → PostgreSQL
+  // ---------------------------------------------------------------------------
+
+  private async copyMysqlToPg(
+    sourceConfig: ConnectionConfig,
+    destConfig: ConnectionConfig,
+    table: string,
+    estimatedRows: number,
+    onProgress?: MigrationProgressCallback,
+    signal?: AbortSignal
+  ): Promise<number> {
+    const mysqlPool = mysql.createPool({
+      host: sourceConfig.host,
+      port: sourceConfig.port,
+      user: sourceConfig.user,
+      password: sourceConfig.password,
+      database: sourceConfig.database,
+    });
+    const pgConn = new PgConnection(destConfig);
+    await pgConn.connect();
+
+    try {
+      const safeTable = '`' + table.replace(/`/g, '``') + '`';
+
+      // Get column names from MySQL
+      const [fieldRows] = await mysqlPool.execute(`SHOW COLUMNS FROM ${safeTable}`);
+      const columns = (fieldRows as Array<{ Field: string }>).map((r) => r.Field);
+      if (columns.length === 0) return 0;
+
+      const pgColList = columns.map((c) => `"${c.replace(/"/g, '""')}"`).join(', ');
+      const placeholders = columns.map((_, i) => `$${i + 1}`).join(', ');
+
+      let offset = 0;
+      let totalCopied = 0;
+      let lastReportedPct = -1;
+
+      while (true) {
+        throwIfCancelled(signal, `mid-copy of "${table}"`);
+        const [rows] = await mysqlPool.execute(
+          `SELECT * FROM ${safeTable} LIMIT ${BATCH_SIZE} OFFSET ${offset}`
+        );
+        const rowArray = rows as Array<Record<string, unknown>>;
+        if (rowArray.length === 0) break;
+
+        // Batch INSERT into PG
+        for (const row of rowArray) {
+          const values = columns.map((c) => row[c] ?? null);
+          await pgConn.query(
+            `INSERT INTO "${table.replace(/"/g, '""')}" (${pgColList}) VALUES (${placeholders})`,
+            values
+          );
+        }
+
+        totalCopied += rowArray.length;
+        offset += rowArray.length;
+
+        if (estimatedRows > 0) {
+          const pct = Math.floor((totalCopied / estimatedRows) * 100);
+          if (pct !== lastReportedPct && pct % 10 === 0) {
+            onProgress?.(table, totalCopied, estimatedRows);
+            lastReportedPct = pct;
+          }
+        }
+
+        if (rowArray.length < BATCH_SIZE) break;
+      }
+
+      return totalCopied;
+    } finally {
+      await Promise.allSettled([mysqlPool.end(), pgConn.end()]);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // PostgreSQL → MySQL
+  // ---------------------------------------------------------------------------
+
+  private async copyPgToMysql(
+    sourceConfig: ConnectionConfig,
+    table: string,
+    estimatedRows: number,
+    destClient: Awaited<ReturnType<MysqlConnection['getClient']>>,
+    onProgress?: MigrationProgressCallback,
+    signal?: AbortSignal
+  ): Promise<number> {
+    const pgConn = new PgConnection(sourceConfig);
+    await pgConn.connect();
+
+    try {
+      const safePgTable = `"${table.replace(/"/g, '""')}"`;
+      const safeMysqlTable = '`' + table.replace(/`/g, '``') + '`';
+
+      // Get column names from PG
+      const colRows = await pgConn.query<{ column_name: string }>(
+        `SELECT column_name FROM information_schema.columns
+         WHERE table_schema = 'public' AND table_name = $1
+         ORDER BY ordinal_position`,
+        [table]
+      );
+      const columns = colRows.map((r) => r.column_name);
+      if (columns.length === 0) return 0;
+
+      const mysqlColList = columns.map((c) => '`' + c.replace(/`/g, '``') + '`').join(', ');
+      const placeholders = columns.map(() => '?').join(', ');
+
+      let offset = 0;
+      let totalCopied = 0;
+      let lastReportedPct = -1;
+
+      while (true) {
+        throwIfCancelled(signal, `mid-copy of "${table}"`);
+        const pgColList = columns.map((c) => `"${c.replace(/"/g, '""')}"`).join(', ');
+        const rows = await pgConn.query<Record<string, unknown>>(
+          `SELECT ${pgColList} FROM ${safePgTable} LIMIT ${BATCH_SIZE} OFFSET ${offset}`
+        );
+
+        if (rows.length === 0) break;
+
+        // Batch INSERT into MySQL
+        const rowPlaceholders = rows.map(() => `(${placeholders})`).join(', ');
+        const values: unknown[] = [];
+        for (const row of rows) {
+          for (const col of columns) values.push(row[col] ?? null);
+        }
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await destClient.query(
+          `INSERT INTO ${safeMysqlTable} (${mysqlColList}) VALUES ${rowPlaceholders}`,
+          values as any
+        );
+
+        totalCopied += rows.length;
+        offset += rows.length;
+
+        if (estimatedRows > 0) {
+          const pct = Math.floor((totalCopied / estimatedRows) * 100);
+          if (pct !== lastReportedPct && pct % 10 === 0) {
+            onProgress?.(table, totalCopied, estimatedRows);
+            lastReportedPct = pct;
+          }
+        }
+
+        if (rows.length < BATCH_SIZE) break;
+      }
+
+      return totalCopied;
+    } finally {
+      await pgConn.end();
+    }
+  }
+
+  private async prepareMysqlDestination(
+    dest: MysqlConnection,
+    cleanupOrder: string[]
+  ): Promise<Awaited<ReturnType<MysqlConnection['getClient']>>> {
+    await dest.connect();
+    const client = await dest.getClient();
+    await client.query('SET SESSION FOREIGN_KEY_CHECKS = 0');
+
+    for (const table of cleanupOrder) {
+      const safeTable = '`' + table.replace(/`/g, '``') + '`';
+      try {
+        await client.query(`TRUNCATE TABLE ${safeTable}`);
+      } catch {
+        await client.query(`DELETE FROM ${safeTable}`);
+      }
+    }
+
+    return client;
+  }
+
+  private assertSupportedPair(source: DatabaseType, dest: DatabaseType): void {
+    const supported =
+      (source === DatabaseType.MYSQL && dest === DatabaseType.POSTGRES) ||
+      (source === DatabaseType.POSTGRES && dest === DatabaseType.MYSQL);
+
+    if (!supported) {
+      throw new DataMigrationError(
+        `Cross-database migration not supported: ${source} → ${dest}. ` +
+          `Supported pairs: MySQL↔PostgreSQL.`
+      );
+    }
+  }
+}
+
+function isMysqlToPg(source: DatabaseType, dest: DatabaseType): boolean {
+  return source === DatabaseType.MYSQL && dest === DatabaseType.POSTGRES;
+}
+
+function isPgToMysql(source: DatabaseType, dest: DatabaseType): boolean {
+  return source === DatabaseType.POSTGRES && dest === DatabaseType.MYSQL;
+}

@@ -1,0 +1,6 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "paths": { "@movy/core": ["../../packages/core/src/index.ts"] }
+  }
+}

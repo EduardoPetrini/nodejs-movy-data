@@ -137,26 +137,45 @@ message rather than an unhandled error.
 ## Commands
 
 ```bash
-npm start          # run the CLI
-npm run dev        # run with hot reload (ts-node-dev)
-npm run build      # compile TypeScript to dist/
-npm test           # run all unit tests (vitest)
-npm run test:watch # vitest in watch mode
-npm run test:coverage  # run tests with a coverage report
-npx tsc --noEmit   # type-check without emitting
+pnpm start             # run the CLI (tsx, no build step)
+pnpm dev               # run with hot reload
+pnpm dev:web           # Nuxt console on :3000
+pnpm build             # compile every workspace, then build the web app
+pnpm test              # run all unit tests (vitest)
+pnpm test:watch        # vitest in watch mode
+pnpm test:coverage     # run tests with a coverage report
+pnpm typecheck         # type-check every workspace, tests included
+
+# Replay a recorded run through the runner — no database needed.
+pnpm simulate --journal /tmp/run.ndjson \
+  --simulate apps/runner/fixtures/pg-to-pg-315k.ndjson \
+  --run-id demo --speed 0.05
 ```
+
+Requires **pnpm** (pinned via `packageManager`); npm 10.x crashes resolving the
+Nuxt peer graph.
 
 ## Architecture
 
 Built with **hexagonal architecture** — domain logic is pure TypeScript with no I/O; all database interactions go through ports (interfaces).
 
+A pnpm workspace of one package and three apps:
+
 ```
-src/
-├── domain/           # Types, ports (interfaces), errors — no I/O
-├── application/      # Use cases and MigrationOrchestrator
-├── infrastructure/   # Concrete adapters (pg, mysql, mssql, translators, migrators)
-└── presentation/     # CLI prompts and entry point
+packages/core/   @movy/core    the hexagon; no I/O entry points
+├── src/domain/           # Types, ports (interfaces), errors — no I/O
+├── src/application/      # Use cases and MigrationOrchestrator
+├── src/infrastructure/   # Concrete adapters (pg, mysql, mssql, translators, migrators)
+└── src/composition/      # buildRegistry() — the composition root
+
+apps/cli/        @movy/cli     the interactive command line
+apps/runner/     @movy/runner  one forked process per run: argv, stdin, signals, journal
+apps/web/        @movy/web     Nuxt 4 console: orgs, connections, runs, history
 ```
+
+The runner and the web console are the subject of
+[ADR 0002](docs/adr/0002-run-execution.md) and
+[ADR 0003](docs/adr/0003-org-tenancy.md). `CONTEXT.md` is the glossary.
 
 ### Migration flow
 
@@ -192,21 +211,52 @@ direction against each existing engine. See
 per-pair rather than routed through a canonical type model, and
 `docs/implementation-plan.md` for the full checklist.
 
+## The web console
+
+`pnpm dev:web` serves a Nuxt app on :3000 that runs the same migrations from a browser:
+organisations with three roles, encrypted connections, saved and repeatable migration
+definitions, a live timeline, and a history you can page through and compare.
+
+A run is executed by a **forked, detached** runner process that outlives the web server,
+writing an append-only NDJSON journal. The journal is the system of record; the host
+re-attaches to a live run after a restart by reading it forward. Passwords reach the
+runner on stdin, never argv, and are scrubbed from every event before it is stored or
+broadcast.
+
+```bash
+pnpm dev:web       # Nuxt on :3000
+pnpm seed:dev      # admin@ / editor@ / viewer@movy.local, password movy-dev
+```
+
+See `docs/web-ui-progress.md` for what is built and what is not.
+
 ## Logs
 
 Each run writes a log file to `logs/movy_YYYY-MM-DD_HH-MM-SS_<src>_to_<dst>.log`.
 
 ## Tests
 
-Unit tests live in `tests/unit/` and are mock-driven — the whole suite runs without a
-database. Integration tests (`tests/integration/`) require real database connections and
-are not automated.
+Unit tests live in each workspace's `tests/unit/` and are mock-driven — the whole suite
+runs without a database.
 
 ```bash
-npm test                # full suite
-npm run test:coverage   # with coverage report
-npx vitest run tests/unit/application/migration-orchestrator.service.test.ts
+pnpm test               # full suite (1188 tests, no database needed)
+pnpm test:coverage      # with coverage report
+pnpm exec vitest run packages/core/tests/unit/application/migration-orchestrator.service.test.ts
 ```
+
+`apps/runner/tests/process/` forks the real runner binary and asserts the contract the
+web app depends on, including killing a parent mid-run to prove the orphan finishes its
+journal. Still no database required.
+
+Two suites do need one, and are therefore not part of `pnpm test`:
+
+```bash
+pnpm test:e2e           # Playwright, needs a migrated database + `pnpm seed:dev`
+```
+
+`packages/core/tests/integration/` needs real source and destination databases and is not
+automated.
 
 Coverage thresholds in `vitest.config.ts` are set to the current measured floor and
 ratchet upward; the target is 80%. See `docs/implementation-plan.md` for the current

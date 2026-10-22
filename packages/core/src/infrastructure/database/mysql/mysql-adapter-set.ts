@@ -1,0 +1,70 @@
+import { DatabaseAdapterSet, ListTablesOptions } from '../registry.js';
+import { ConnectionConfig } from '../../../domain/types/connection.types.js';
+import { IDatabaseConnection } from '../../../domain/ports/database.port.js';
+import { ISchemaInspector } from '../../../domain/ports/schema-inspector.port.js';
+import { ISchemaSynchronizer } from '../../../domain/ports/schema-synchronizer.port.js';
+import { IDataMigrator } from '../../../domain/ports/data-migrator.port.js';
+import { MysqlConnection } from './mysql-connection.adapter.js';
+import { MysqlSchemaInspector } from './mysql-schema-inspector.adapter.js';
+import { MysqlSchemaSynchronizer } from './mysql-schema-synchronizer.adapter.js';
+import { MysqlDataMigrator } from '../../migration/mysql-data-migrator.adapter.js';
+
+export class MysqlAdapterSet implements DatabaseAdapterSet {
+  readonly adminDatabase = 'mysql';
+
+  createConnection(config: ConnectionConfig): IDatabaseConnection {
+    return new MysqlConnection(config);
+  }
+
+  createSchemaInspector(): ISchemaInspector {
+    return new MysqlSchemaInspector();
+  }
+
+  createSchemaSynchronizer(): ISchemaSynchronizer {
+    return new MysqlSchemaSynchronizer();
+  }
+
+  createDataMigrator(): IDataMigrator {
+    return new MysqlDataMigrator();
+  }
+
+  async ensureDatabase(adminConnection: IDatabaseConnection, dbName: string): Promise<boolean> {
+    const rows = await adminConnection.query<{ count: number }>(
+      `SELECT COUNT(*) AS count FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = ?`,
+      [dbName]
+    );
+    if ((rows[0]?.count ?? 0) > 0) return false;
+    await adminConnection.query(
+      `CREATE DATABASE \`${dbName.replace(/`/g, '``')}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`
+    );
+    return true;
+  }
+
+  async listDatabases(adminConnection: IDatabaseConnection): Promise<string[]> {
+    const rows = await adminConnection.query<{ name: string }>(
+      `SELECT SCHEMA_NAME AS name FROM information_schema.SCHEMATA
+        WHERE SCHEMA_NAME NOT IN ('mysql', 'information_schema', 'performance_schema', 'sys')
+        ORDER BY SCHEMA_NAME`
+    );
+    return rows.map((row) => row.name);
+  }
+
+  async listTables(
+    connection: IDatabaseConnection,
+    opts: ListTablesOptions = {}
+  ): Promise<string[]> {
+    // MySQL has no schema layer: the database IS the schema.
+    const rows = await connection.query<{ table_name: string }>(
+      `SELECT table_name AS table_name FROM information_schema.tables
+        WHERE table_schema = COALESCE(?, DATABASE()) AND table_type = 'BASE TABLE'
+        ORDER BY table_name`,
+      [opts.database ?? null]
+    );
+    return rows.map((row) => row.table_name);
+  }
+
+  quoteIdentifier(name: string): string {
+    return `\`${name.replace(/`/g, '``')}\``;
+  }
+
+}
