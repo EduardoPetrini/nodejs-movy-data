@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-const DIR = join(__dirname, '../../server/db/migrations');
+const DIR = join(__dirname, '../migrations');
 const sql = readdirSync(DIR)
   .filter((f) => f.endsWith('.sql'))
   .map((f) => readFileSync(join(DIR, f), 'utf8'))

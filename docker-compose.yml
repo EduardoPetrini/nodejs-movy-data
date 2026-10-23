@@ -52,7 +52,7 @@ services:
 
   migrate:
     <<: *tools
-    command: pnpm --filter @movy/web db:migrate
+    command: pnpm --filter @movy/db db:migrate
     depends_on: { meta-db: { condition: service_healthy } }
 
   # Idempotent: dev users and orgs, then the lab connections in `acme`.

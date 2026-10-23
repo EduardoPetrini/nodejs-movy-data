@@ -50,6 +50,9 @@ importers:
       '@movy/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@movy/db':
+        specifier: workspace:*
+        version: link:../../packages/db
       '@movy/runner':
         specifier: workspace:*
         version: link:../runner
@@ -78,9 +81,6 @@ importers:
       '@playwright/test':
         specifier: ^1.63.0
         version: 1.63.0
-      drizzle-kit:
-        specifier: ^0.31.10
-        version: 0.31.10
 
   packages/core:
     dependencies:
@@ -96,6 +96,19 @@ importers:
       pg-copy-streams:
         specifier: ^7.0.0
         version: 7.0.0
+
+  packages/db:
+    dependencies:
+      drizzle-orm:
+        specifier: ^0.45.2
+        version: 0.45.2(@types/pg@8.23.1)(mysql2@3.24.3(@types/node@25.9.5))(pg@8.23.0)
+      pg:
+        specifier: ^8.20.0
+        version: 8.23.0
+    devDependencies:
+      drizzle-kit:
+        specifier: ^0.31.10
+        version: 0.31.10
 
 packages:
 

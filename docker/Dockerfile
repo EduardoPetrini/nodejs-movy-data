@@ -49,6 +49,7 @@ COPY . .
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
     CI=true pnpm install --prod --frozen-lockfile --offline --ignore-scripts
 COPY --from=build /app/packages/core/dist packages/core/dist
+COPY --from=build /app/packages/db/dist packages/db/dist
 COPY --from=build /app/apps/cli/dist apps/cli/dist
 COPY --from=build /app/apps/runner/dist apps/runner/dist
 COPY --from=build /app/apps/web/.output apps/web/.output
