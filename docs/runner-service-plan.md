@@ -1,6 +1,6 @@
 # Plan: Runners as an independent, scalable service (with Docker Compose)
 
-> **Status (2026-10-23): phases 0–4 built**; 5–8 to go. Progress and what each phase
+> **Status (2026-10-23): phases 0–5 built**; 6–8 to go. Progress and what each phase
 > found: `docs/web-ui-progress.md` (R0–R4). Decisions are recorded in
 > [ADR 0004](adr/0004-runner-service.md). This plan absorbs the earlier
 > Docker plan: Compose foundations are Phase 0, runner services are Phase 6.
@@ -444,6 +444,16 @@ Each phase leaves `pnpm test`, `pnpm typecheck` and the existing e2e green.
      `VIEW DATABASE STATE`. The wire field is `runnerSuggestion {runnerClass, label,
      aboveBytes}` rather than a bare class name, so the hint can say the threshold.
 5. **Probes.** Test and Preview from a runner; `via` on the last test; UI selectors.
+   - *As built (2026-10-23), four deviations.* (1) Migration `0007`, not `0004`, and
+     `runner_probes.ciphertext` is nullable: it is set to NULL in the claiming statement,
+     so a request's passwords live only until a runner has them. (2) Channels are
+     `movy_probes` (pointer `{runnerClass}`) and `movy_probe_done` (`{id}`); the waiting
+     request also re-reads every second, since a NOTIFY can be missed or reach another
+     replica. (3) The probe executors live in `apps/runner/src/probes/` (export
+     `@movy/runner/probes`) and the probe SQL and `ProbeWorker` in `src/agent/`, beside the
+     run queue. (4) The selectors are one "Test from" per connections page (it also drives
+     the create form's test) and "Inspect from" beside Preview; the drift view on Compare
+     stays in-request.
 6. **Runner services and provisioning in Compose.**
    - `web` loses `MOVY_RUNNER_ENTRY`, `MOVY_JOURNAL_DIR`, `init: true` and the journals volume.
    - Add `runner-default`/`runner-large` (stack above) and `docker-compose.provisioner.yml`.

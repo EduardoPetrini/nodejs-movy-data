@@ -423,6 +423,16 @@ happens at the claim. No Redis, no BullMQ: Postgres was already there.
   `ISchemaInspector.getTableSizeEstimates`, which answers an empty map rather than
   throwing — a size picks a class, it never gates a migration. The preview carries
   `runnerSuggestion`; the review screen shows it as a hint, never a switch.
+- **Test and Preview can run on a runner** (phase 5): `via: 'web' | <class>` on both Test
+  routes and on preview. The executors are `@movy/runner/probes` (`testConnection`,
+  `inspectForPreview`, and the scrubbing in `safe-error.ts`, which web re-exports), so both
+  paths say the same sentence. A probe is a `runner_probes` row: sealed with
+  `probeAad(orgId, probeId)`, cleared at claim, answered by the agent's `ProbeWorker` in its
+  own slots (`probe_slots`), its result taken and deleted by the waiting request
+  (`server/probes/run-probe.ts`). `NOTIFY movy_probe_done` wakes the request; it re-reads
+  every second anyway, because a NOTIFY can be missed. No runner of the class online is an
+  immediate 503 `no_runner`, never a wait; silence is a 504 and deletes the row. The test
+  is recorded with `connections.last_test_via`. Compare stays in-request (decision 6).
 - **A queued run cancelled outright emits no event**, so the run page applies the cancel
   response with `applyRunRow`, which only moves a status forward.
 - **Events reach the browser through the database, whichever process ran the run** —

@@ -25,7 +25,7 @@ phase is indistinguishable from one that was never started.
 
 ## Status board
 
-*Last reviewed: 2026-10-23. 1421 unit tests (105 files) + 19 Playwright E2E in Compose, green.*
+*Last reviewed: 2026-10-23. 1472 unit tests (113 files) green; Compose E2E last green at 19/19 (R4) — R5's run pending.*
 
 | Phase | State | Notes |
 |-------|-------|-------|
@@ -44,6 +44,7 @@ phase is indistinguishable from one that was never started.
 | R2 — queue and agent | **DONE** (2026-10-22) | migration `0004`; agent claims from `runs` (SKIP LOCKED), heartbeats a lease, fences, drains; sweeper settles lost runs; web enqueues instead of forking, embedded agent by default. Gate met: `pnpm docker:e2e` 13/13 on the embedded agent. See *R2* below. Next: R3 (NOTIFY bus) |
 | R3 — NOTIFY bus and runner availability | **DONE** (2026-10-22) | events reach the hub through `LISTEN movy_run_events` (the in-process `onFlushed` path is gone); runners socket, ticket and panel on the org home and runs page. See *R3* below. Next: R4 (destination lock and classes) |
 | R4 — destination lock and runner classes | **DONE** (2026-10-23) | one run per destination (`target_lock_key`, migration `0005`) and why a run is queued; classes from `MOVY_RUNNER_CLASSES_FILE`, a class per definition and a Runner selector (`0006`); source size in bytes on the preview and a class suggestion. Gate: `pnpm docker:e2e` 19/19. See *R4* below. Next: R5 (probes) |
+| R5 — probes: Test and Preview from a runner | **CODE COMPLETE, GATE PENDING** (2026-10-23) | migration `0007` (`runner_probes`, `runners.probe_slots`, `connections.last_test_via`); executors in `@movy/runner/probes` shared by the in-request path and the agent's `ProbeWorker`; `via: 'web' | <class>` on both Test routes and on preview; 503 `no_runner`, 504 on silence; "Test from" and "Inspect from" selectors. `pnpm test` 1472/1472, typecheck clean. **Not yet run:** `pnpm docker:e2e` incl. the new `probes.spec.ts` — Docker Desktop could not reach Docker Hub (EOF on `docker/dockerfile:1.7`) on 2026-10-23. See *R5* below. Next: run the gate, then R6 (runner services) |
 
 ### Remaining work
 
@@ -1511,3 +1512,46 @@ re-run treats `decimal` and `numeric` as one type.
   (a PG→MySQL re-run shows "21 columns to alter"; `SyncSchemaUseCase` filters them) —
   pre-existing, worth fixing in `buildPreview`.
 
+
+## R5 — probes: Test and Preview from a runner (2026-10-23)
+
+- **Why**: a runner can sit on a different network from the console. "It connects from
+  here" says nothing about whether a `large` runner reaches the same host, and the first
+  place that used to show up was a failed run.
+- **One implementation, two hosts.** `apps/runner/src/probes/` (`@movy/runner/probes`)
+  holds `testConnection`, `inspectForPreview` and the scrubbing (`safe-error.ts`, moved
+  from web, which re-exports it so the five callers did not move). The in-request
+  handlers and the agent's probe worker call the same functions, so a failure is the same
+  sentence from either. `buildPreview` stays in web and reads one `PreviewInspection`
+  shape (maps as entries) from either path.
+- **The probe queue** is `runner_probes` (migration `0007`), shaped like the run queue:
+  insert + `NOTIFY movy_probes` in one statement; claim with `SKIP LOCKED`, which also
+  sets the sealed request (`probeAad(orgId, probeId)`) to NULL; complete +
+  `NOTIFY movy_probe_done` in one statement; the waiting request takes the result with
+  `DELETE … RETURNING`, scoped to its org. The sweeper deletes expired rows.
+- **The wait** (`server/probes/run-probe.ts`): no online runner of the class with
+  `probe_slots > 0` is an immediate 503 `{reason: 'no_runner', runnerClass}` and nothing
+  is queued. Otherwise it waits on the NOTIFY but re-reads every second anyway (a NOTIFY
+  can be missed, or reach a different replica). Timeouts are 15 s for Test and 60 s for
+  Preview; past that it is a 504 and the row is deleted, so a late runner has nothing to
+  write to.
+- **The worker** (`apps/runner/src/agent/probe-worker.ts`) has its own slots
+  (`MOVY_RUNNER_PROBE_SLOTS`, default 2), separate from run slots: a runner busy with a
+  long migration still answers "can you reach this database?". A request it cannot
+  decrypt or whose version it does not know is answered in its own words, never the
+  request's. The embedded agent starts it after registering and stops it first on close.
+- **Recorded**: `connections.last_test_via` (`web` or the class), on the wire as
+  `lastTest.via` for every role (a class name, never a host); the row says "from the
+  Default runner" when it was not the console.
+- **UI**: one "Test from" selector per connections page, which also drives the create
+  form's test-before-save; "Inspect from" beside Preview on the review screen, with
+  "Inspected from the … runner." under the result. Compare's drift view stays in-request
+  (decision 6).
+- **Tests**: probe SQL against PGlite (12), the worker (6), seal/open and the executor's
+  result mapping (7), `testConnection` (3), a console↔runner round trip through PGlite
+  with a real worker (4), `via` parsing and error mapping, waiters, display. E2E
+  `probes.spec.ts`: a test from the default runner shows in its row; a preview from the
+  runner lists the same tables as the console's; the review screen names where it
+  inspected; `via: 'large'` with no large runner is a 503 in under 5 s.
+- **Not done**: the Compose gate (above). Screenshots of the two selectors at 1280/375,
+  which need the rebuilt stack too.
