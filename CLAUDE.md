@@ -407,6 +407,24 @@ happens at the claim. No Redis, no BullMQ: Postgres was already there.
   across restarts of the same host, so it re-attaches to its own runs. On start it
   re-attaches and heartbeats **before** it claims, extending those leases ahead of any
   sweep.
+- **One run per destination, across orgs** (phase 4). `runs.target_lock_key` is
+  sha256(engine, host, port, database), set at launch, null for a replay, never
+  serialised. The claim skips a queued run whose key a `running`/`cancelling` run holds;
+  the partial unique index `runs_target_busy_uq` refuses the second of two simultaneous
+  claims, and the claim asks again. Why a run is still queued (`no_runner`,
+  `destination_busy`, `runners_busy`, `starting`) is derived per request
+  (`server/runs/queue-state.ts`), never stored; another org's run is never named.
+- **Runner classes come from `MOVY_RUNNER_CLASSES_FILE`** (`docker/runner-classes.json`),
+  parsed strictly by `parseRunnerClassesFile` (unknown keys rejected, one default) and
+  upserted at boot. A class the file drops is kept with `configured = false` — runs and
+  definitions reference it — and offered for nothing new. A run's class is the body's,
+  else its definition's, else the default (`chooseRunnerClass`).
+- **The size suggestion reads bytes, not rows**: optional
+  `ISchemaInspector.getTableSizeEstimates`, which answers an empty map rather than
+  throwing — a size picks a class, it never gates a migration. The preview carries
+  `runnerSuggestion`; the review screen shows it as a hint, never a switch.
+- **A queued run cancelled outright emits no event**, so the run page applies the cancel
+  response with `applyRunRow`, which only moves a status forward.
 - **Events reach the browser through the database, whichever process ran the run** —
   see *The live stream*: there is no in-process shortcut, so an embedded agent and an
   external one are indistinguishable to a client.

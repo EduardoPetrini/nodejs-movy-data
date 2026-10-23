@@ -1,7 +1,8 @@
 # Plan: Runners as an independent, scalable service (with Docker Compose)
 
-> **Status (2026-10-22): agreed design, not started.** Decisions are recorded in
-> [ADR 0004](adr/0004-runner-service.md) (Proposed). This plan absorbs the earlier
+> **Status (2026-10-23): phases 0–4 built**; 5–8 to go. Progress and what each phase
+> found: `docs/web-ui-progress.md` (R0–R4). Decisions are recorded in
+> [ADR 0004](adr/0004-runner-service.md). This plan absorbs the earlier
 > Docker plan: Compose foundations are Phase 0, runner services are Phase 6.
 
 ## TLDR
@@ -431,6 +432,17 @@ Each phase leaves `pnpm test`, `pnpm typecheck` and the existing e2e green.
    - The lock index; queue reasons.
    - `runner_classes` file upsert and API; `definitions.runner_class`; selector on the definition and review screens.
    - `getTableSizeEstimates` for PG/MySQL/MSSQL; preview bytes and suggestion.
+   - *As built (2026-10-23), four deviations.* (1) The lock is a separate migration
+     (`0005`) and the class columns another (`0006`), which also adds
+     `runner_classes.configured`: "not configured" needed a column, and such a class is
+     hidden from the panel and selector rather than listed. (2) The claim skips a busy
+     destination in its own `WHERE` (`NOT EXISTS`) and the unique index is the backstop
+     for two claims at once; a refused claim simply asks again, since the winner has
+     committed by then. (3) There is no `GET /api/runner-classes`: the selector reads the
+     runners snapshot it already had, so a class choice shows that class's availability.
+     (4) MSSQL sizes come from `sys.allocation_units`, which needs no
+     `VIEW DATABASE STATE`. The wire field is `runnerSuggestion {runnerClass, label,
+     aboveBytes}` rather than a bare class name, so the hint can say the threshold.
 5. **Probes.** Test and Preview from a runner; `via` on the last test; UI selectors.
 6. **Runner services and provisioning in Compose.**
    - `web` loses `MOVY_RUNNER_ENTRY`, `MOVY_JOURNAL_DIR`, `init: true` and the journals volume.

@@ -25,7 +25,7 @@ phase is indistinguishable from one that was never started.
 
 ## Status board
 
-*Last reviewed: 2026-10-22. 1233 unit tests (88 files) + 8 Playwright E2E, green.*
+*Last reviewed: 2026-10-23. 1421 unit tests (105 files) + 19 Playwright E2E in Compose, green.*
 
 | Phase | State | Notes |
 |-------|-------|-------|
@@ -43,6 +43,7 @@ phase is indistinguishable from one that was never started.
 | R1 — extract `@movy/db`, move run control into `apps/runner` | **DONE** (2026-10-22) | no behaviour change; web still forks. Gate met: moved tests changed import paths only, 1262/1262, `pnpm docker:e2e` green. See *R1* below. Next: R2 (queue and agent) |
 | R2 — queue and agent | **DONE** (2026-10-22) | migration `0004`; agent claims from `runs` (SKIP LOCKED), heartbeats a lease, fences, drains; sweeper settles lost runs; web enqueues instead of forking, embedded agent by default. Gate met: `pnpm docker:e2e` 13/13 on the embedded agent. See *R2* below. Next: R3 (NOTIFY bus) |
 | R3 — NOTIFY bus and runner availability | **DONE** (2026-10-22) | events reach the hub through `LISTEN movy_run_events` (the in-process `onFlushed` path is gone); runners socket, ticket and panel on the org home and runs page. See *R3* below. Next: R4 (destination lock and classes) |
+| R4 — destination lock and runner classes | **DONE** (2026-10-23) | one run per destination (`target_lock_key`, migration `0005`) and why a run is queued; classes from `MOVY_RUNNER_CLASSES_FILE`, a class per definition and a Runner selector (`0006`); source size in bytes on the preview and a class suggestion. Gate: `pnpm docker:e2e` 19/19. See *R4* below. Next: R5 (probes) |
 
 ### Remaining work
 
@@ -1463,4 +1464,50 @@ re-run treats `decimal` and `numeric` as one type.
   at 1280 and 375.
 - **Not done**: "Start a runner" (phase 6, needs a provisioner); queue reasons in the UI
   (phase 4, with the destination lock).
+
+## R4 — destination lock and runner classes (2026-10-23)
+
+- **One run per destination, across orgs.** The launch hashes engine, host, port and
+  database into `runs.target_lock_key` (`server/runs/target-lock.ts`; never
+  serialised, null for a replay). The claim skips a queued run whose key a running or
+  cancelling run holds, so it waits while younger runs to other databases go ahead;
+  the partial unique index `runs_target_busy_uq` refuses the second of two claims made
+  at the same instant, and the claim then asks again. Two spellings of one server
+  (`localhost`, `127.0.0.1`) are two keys: the lock guards the common mistake.
+- **Why a run is queued** — `no_runner`, `destination_busy`, `runners_busy`,
+  `starting` — is derived per request (`GET …/runs/:id/queue`, `server/runs/queue-state.ts`),
+  never stored, and polled by `QueueNotice.vue` every 5 s while the run is queued.
+  Another org's run holding the destination is never named; "ahead of it" counts this
+  org's runs only, the same rule as the runners panel.
+- **Runner classes** come from `MOVY_RUNNER_CLASSES_FILE` (Compose ships
+  `docker/runner-classes.json`: `default`, `large` above 20 GB). Parsed strictly in
+  `@movy/runner/agent` (unknown keys rejected, exactly one default) and upserted in one
+  statement at boot; the embedded agent awaits it before registering. A class dropped
+  from the file is kept, marked `configured = false`, loses the default, and is hidden
+  from the panel and selector. A broken file is logged and the table keeps what it had.
+- **A class per definition** (`migration_definitions.runner_class`, null follows the
+  default), and a Runner selector on the definition form and the review screen, each
+  option with its availability sentence. At launch: the body's class, else the
+  definition's, else the default (`chooseRunnerClass`); a definition whose class was
+  dropped runs on the default rather than becoming unlaunchable. The run header shows
+  the class.
+- **Size in bytes**: optional `ISchemaInspector.getTableSizeEstimates` — PG
+  `pg_total_relation_size`, MySQL `DATA_LENGTH + INDEX_LENGTH`, MSSQL used pages from
+  `sys.allocation_units`. Advisory, so each answers an empty map rather than failing the
+  preview, which then says "size unknown". The preview carries per-table and total bytes
+  and `runnerSuggestion` (highest threshold exceeded); the review screen shows it as a
+  hint with a "Use it" button, never as a switch.
+- **Found while testing it**: a queued run cancelled outright emitted no event, so its
+  page said "Queued" forever. `applyRunRow` takes the cancel response (and a refresh when
+  the queue notice finds the run gone) and only ever moves the status forward. And
+  `host-death.test.ts` was flaky because its host died on a 1.2 s timer before tsx had
+  started the runner under load; the host now dies once the journal has lines.
+- **Verified**: `pnpm test` 1421/1421 (twice, after the host-death fix); `pnpm typecheck`
+  clean; `pnpm docker:e2e` 19/19, including sizes read live from all three engines and
+  the queued-for-`large` run's reason and cancel; screenshots at 1280 and 375 of the
+  queue notice and the preview with a suggestion (threshold lowered for the shot only).
+- **Not done / noticed**: the lock under true concurrency (two agents) needs phase 6's
+  separate runner services. The preview counts column alterations the run will drop
+  (a PG→MySQL re-run shows "21 columns to alter"; `SyncSchemaUseCase` filters them) —
+  pre-existing, worth fixing in `buildPreview`.
 
