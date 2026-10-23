@@ -7,7 +7,9 @@
     "composite": false,
     "declaration": false,
     "declarationMap": false,
-    "rootDir": "./"
+    // The repo root, not ./: the queue tests share packages/db's PGlite
+    // harness, so the real migrations are what they run against.
+    "rootDir": "../../"
   },
   "include": ["src/**/*", "tests/**/*"],
   "exclude": ["node_modules", "dist"]

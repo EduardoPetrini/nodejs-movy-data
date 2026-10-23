@@ -3,7 +3,8 @@ import { createRepos } from '~~/server/repositories';
 import { requirePermission } from '~~/server/utils/rbac';
 import { toConnectionConfig } from '~~/server/utils/connection-config';
 import { toPublicRun } from '~~/server/serializers/run.serializer';
-import { journalPathFor, simulationFixture, useRunManager } from '~~/server/runs';
+import { sealRunSpec } from '@movy/runner/agent';
+import { assertSimulationAvailable, useRunnerAgent } from '~~/server/runs';
 import { resolveRunTarget, type RunTargetBody } from '~~/server/runs/resolve-target';
 
 interface Body extends RunTargetBody {
@@ -46,44 +47,55 @@ export default defineEventHandler(async (event) => {
     });
   }
 
+  if (body?.simulate) assertSimulationAvailable();
+
   const runId = randomUUID();
-  const journalPath = journalPathFor(runId);
 
-  const run = await repos.runs.create({
-    id: runId,
-    definitionId: target.definition?.id ?? null,
-    sourceConnectionId: target.source.id,
-    targetConnectionId: target.target.id,
-    // Snapshotted so history stays true after a connection is edited or deleted.
-    sourceEngine: target.source.engine,
-    sourceDatabase: target.sourceDatabase,
-    targetEngine: target.target.engine,
-    targetDatabase: target.targetDatabase,
-    mode: target.mode,
-    status: 'queued',
-    simulated: Boolean(body?.simulate),
-    journalPath,
-    requestedByUserId: org.userId,
-  });
-
-  // The two decryptions happen here and the result goes straight onto the
-  // child's stdin. It is never logged, never stored, and never in argv.
-  useRunManager().launch({
+  // The two decryptions happen here, and the spec is sealed again at once for
+  // this org and this run: the runner that claims it decrypts it, deletes it,
+  // and hands it straight to the child's stdin. It is never logged and never
+  // in argv. Sealed at enqueue so the run that starts is the run that was
+  // reviewed, whenever and wherever it is claimed.
+  const sealed = sealRunSpec(
+    org.orgId,
     runId,
-    journalPath,
-    spec: {
-      runId,
-      // `resolveRunTarget` has already refused every mode the runner cannot
-      // drive, so this asserts a decision rather than making one.
-      mode: 'full',
-      source: toConnectionConfig(target.source, target.sourceDatabase),
-      target: toConnectionConfig(target.target, target.targetDatabase),
+    body?.simulate
+      ? // Clamped: the runner rejects a non-positive speed, but a 1e-9 would
+        // schedule a replay measured in centuries and hold a process open.
+        { simulate: true, speed: clampSpeed(body?.speed) }
+      : {
+          simulate: false,
+          spec: {
+            runId,
+            // `resolveRunTarget` has already refused every mode the runner
+            // cannot drive, so this asserts a decision rather than making one.
+            mode: 'full',
+            source: toConnectionConfig(target.source, target.sourceDatabase),
+            target: toConnectionConfig(target.target, target.targetDatabase),
+          },
+        }
+  );
+
+  const run = await repos.runs.enqueue(
+    {
+      id: runId,
+      definitionId: target.definition?.id ?? null,
+      sourceConnectionId: target.source.id,
+      targetConnectionId: target.target.id,
+      // Snapshotted so history stays true after a connection is edited or deleted.
+      sourceEngine: target.source.engine,
+      sourceDatabase: target.sourceDatabase,
+      targetEngine: target.target.engine,
+      targetDatabase: target.targetDatabase,
+      mode: target.mode,
+      simulated: Boolean(body?.simulate),
+      requestedByUserId: org.userId,
     },
-    simulateFixture: body?.simulate ? simulationFixture() : undefined,
-    // Clamped: the runner rejects a non-positive speed, but a 1e-9 would
-    // schedule a replay measured in centuries and hold a process open.
-    speed: clampSpeed(body?.speed),
-  });
+    sealed
+  );
+
+  // The fast path. Without an embedded agent, a runner's poll finds it.
+  void useRunnerAgent()?.wake();
 
   setResponseStatus(event, 201);
   return { run: toPublicRun(run, org.role) };

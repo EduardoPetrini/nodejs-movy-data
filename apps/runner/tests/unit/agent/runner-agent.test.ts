@@ -1,0 +1,297 @@
+import { describe, it, expect, vi } from 'vitest';
+import { RunnerAgent, type AgentQueue, type AgentRunControl } from '../../../src/agent/runner-agent';
+import { RunSpecIncompatibleError, type RunSpecEnvelope } from '../../../src/agent/run-spec-envelope';
+import type { ClaimedRun, HeartbeatResult, SealedSpec, Settlement } from '../../../src/agent/queue-store';
+import type { LaunchRequest } from '../../../src/agent/run-manager';
+
+const ORG = '11111111-1111-1111-1111-111111111111';
+
+/** A queue holding whatever runs the test puts in it, sealed as plain JSON. */
+function fakeQueue(queued: ClaimedRun[] = [], specs: Record<string, RunSpecEnvelope | 'missing' | number> = {}) {
+  const settled: { runId: string; outcome: Settlement }[] = [];
+  const states: string[] = [];
+  let beat: HeartbeatResult = { held: [], cancelling: [] };
+  const queue: AgentQueue = {
+    register: vi.fn(async () => {}),
+    setState: vi.fn(async (s) => { states.push(s); }),
+    claimNext: vi.fn(async () => queued.shift() ?? null),
+    takeSpec: vi.fn(async (runId): Promise<SealedSpec | null> => {
+      const spec = specs[runId] ?? { simulate: false, spec: { runId } };
+      if (spec === 'missing') return null;
+      if (typeof spec === 'number') return { specVersion: spec, ciphertext: Buffer.from('{}') };
+      return { specVersion: 1, ciphertext: Buffer.from(JSON.stringify(spec)) };
+    }),
+    heartbeat: vi.fn(async () => beat),
+    settle: vi.fn(async (runId, outcome) => { settled.push({ runId, outcome }); return true; }),
+  };
+  return { queue, settled, states, setBeat: (b: HeartbeatResult) => { beat = b; }, queued };
+}
+
+/** RunManager as the agent sees it: runs stay live until the test ends them. */
+function fakeControl() {
+  const live = new Set<string>();
+  const launched: LaunchRequest[] = [];
+  const control: AgentRunControl = {
+    launch: vi.fn((req: LaunchRequest) => { launched.push(req); live.add(req.runId); }),
+    cancel: vi.fn(async () => true),
+    terminate: vi.fn((runId: string) => live.delete(runId)),
+    liveRunIds: () => [...live],
+    reattach: vi.fn(async () => ({ recovered: 0, settled: 0, following: 0 })),
+    shutdown: vi.fn(),
+  };
+  return { control, launched, live, finish: (runId: string) => live.delete(runId) };
+}
+
+function run(id: string): ClaimedRun {
+  return { id, orgId: ORG, simulated: false };
+}
+
+function agentWith(q: ReturnType<typeof fakeQueue>, c: ReturnType<typeof fakeControl>, slots = 1, fixture?: string) {
+  return new RunnerAgent({
+    queue: q.queue,
+    control: c.control,
+    slots,
+    journalPathFor: (id) => `/journals/${id}.ndjson`,
+    simulationFixture: () => fixture,
+    // Fake sealing: the envelope is the plaintext JSON. Real sealing is tested
+    // in run-spec-envelope.test.ts.
+    openSpec: (_org, _run, sealed) => {
+      if (sealed.specVersion !== 1) throw new RunSpecIncompatibleError(sealed.specVersion);
+      return JSON.parse(sealed.ciphertext.toString()) as RunSpecEnvelope;
+    },
+    pollIntervalMs: 0,
+    heartbeatIntervalMs: 0,
+  });
+}
+
+describe('RunnerAgent claiming', () => {
+  it('fills its slots and no more', async () => {
+    const q = fakeQueue([run('a'), run('b'), run('c')]);
+    const c = fakeControl();
+    await agentWith(q, c, 2).start();
+
+    expect(c.launched.map((l) => l.runId)).toEqual(['a', 'b']);
+    expect(q.queued.map((r) => r.id)).toEqual(['c']);
+  });
+
+  it('claims again on the next beat once a slot frees', async () => {
+    const q = fakeQueue([run('a'), run('b')]);
+    const c = fakeControl();
+    const agent = agentWith(q, c, 1);
+    await agent.start();
+    c.finish('a');
+    q.setBeat({ held: [], cancelling: [] });
+
+    await agent.beat();
+
+    expect(c.launched.map((l) => l.runId)).toEqual(['a', 'b']);
+  });
+
+  it('re-attaches and heartbeats before it claims anything', async () => {
+    // The first heartbeat extends leases on the runs it owned before a restart,
+    // ahead of any sweeper; claiming first could let those expire meanwhile.
+    const q = fakeQueue([run('a')]);
+    const c = fakeControl();
+    const order: string[] = [];
+    (c.control.reattach as ReturnType<typeof vi.fn>).mockImplementation(async () => { order.push('reattach'); return { recovered: 0, settled: 0, following: 0 }; });
+    (q.queue.heartbeat as ReturnType<typeof vi.fn>).mockImplementation(async () => { order.push('beat'); return { held: [], cancelling: [] }; });
+    (q.queue.claimNext as ReturnType<typeof vi.fn>).mockImplementationOnce(async () => { order.push('claim'); return run('a'); });
+
+    await agentWith(q, c).start();
+
+    expect(order.slice(0, 3)).toEqual(['reattach', 'beat', 'claim']);
+  });
+
+  it('hands a real spec to the runner and keeps it out of everything else', async () => {
+    const spec = { simulate: false as const, spec: { source: { password: 'hunter2' } } };
+    const q = fakeQueue([run('a')], { a: spec });
+    const c = fakeControl();
+    await agentWith(q, c).start();
+
+    expect(c.launched[0]).toEqual({ runId: 'a', journalPath: '/journals/a.ndjson', spec: spec.spec });
+  });
+
+  it('replays the fixture on its own host for a simulated run', async () => {
+    const q = fakeQueue([run('a')], { a: { simulate: true, speed: 0.25 } });
+    const c = fakeControl();
+    await agentWith(q, c, 1, '/fixtures/pg.ndjson').start();
+
+    expect(c.launched[0]).toMatchObject({ simulateFixture: '/fixtures/pg.ndjson', speed: 0.25, spec: undefined });
+  });
+});
+
+describe('RunnerAgent refusing a run it cannot start', () => {
+  it.each([
+    ['a missing spec', 'missing' as const, 'RunSpecMissing'],
+    ['an unknown spec version', 7, 'RunnerIncompatible'],
+  ])('settles %s as failed, by name', async (_label, spec, errorName) => {
+    const q = fakeQueue([run('a')], { a: spec });
+    const c = fakeControl();
+    await agentWith(q, c).start();
+
+    expect(c.launched).toEqual([]);
+    expect(q.settled).toEqual([{ runId: 'a', outcome: expect.objectContaining({ status: 'failed', errorName }) }]);
+  });
+
+  it('settles a simulation it has no recording for', async () => {
+    const q = fakeQueue([run('a')], { a: { simulate: true } });
+    const c = fakeControl();
+    await agentWith(q, c, 1, undefined).start();
+
+    expect(q.settled[0].outcome.errorName).toBe('NoSimulationFixture');
+  });
+
+  it('settles a spec it cannot decrypt without saying anything about its content', async () => {
+    const q = fakeQueue([run('a')]);
+    const c = fakeControl();
+    const agent = new RunnerAgent({
+      queue: q.queue, control: c.control, slots: 1,
+      journalPathFor: () => '/j', simulationFixture: () => undefined,
+      openSpec: () => { throw new Error('Unsupported state or unable to authenticate data'); },
+      pollIntervalMs: 0, heartbeatIntervalMs: 0,
+    });
+    await agent.start();
+
+    expect(q.settled[0].outcome).toMatchObject({ errorName: 'RunSpecUnreadable' });
+    expect(q.settled[0].outcome.errorMessage).toMatch(/encryption key/);
+  });
+
+  it('goes on to the next queued run after refusing one', async () => {
+    const q = fakeQueue([run('bad'), run('good')], { bad: 'missing' });
+    const c = fakeControl();
+    await agentWith(q, c).start();
+    expect(c.launched.map((l) => l.runId)).toEqual(['good']);
+  });
+});
+
+describe('RunnerAgent leases', () => {
+  it('fences a run whose lease it lost: stops it at once', async () => {
+    const q = fakeQueue([run('a')]);
+    const c = fakeControl();
+    const onFenced = vi.fn();
+    const agent = new RunnerAgent({
+      queue: q.queue, control: c.control, slots: 1,
+      journalPathFor: () => '/j', simulationFixture: () => undefined,
+      openSpec: (_o, _r, s) => JSON.parse(s.ciphertext.toString()),
+      pollIntervalMs: 0, heartbeatIntervalMs: 0, onFenced,
+    });
+    await agent.start();
+
+    q.setBeat({ held: [], cancelling: [] }); // the sweeper settled it
+    await agent.beat();
+
+    expect(c.control.terminate).toHaveBeenCalledWith('a');
+    expect(onFenced).toHaveBeenCalledWith('a');
+  });
+
+  it('leaves a run alone while it still holds the lease', async () => {
+    const q = fakeQueue([run('a')]);
+    const c = fakeControl();
+    const agent = agentWith(q, c);
+    await agent.start();
+    q.setBeat({ held: ['a'], cancelling: [] });
+    await agent.beat();
+    expect(c.control.terminate).not.toHaveBeenCalled();
+  });
+
+  it('never fences a run it did not claim, such as one forked before migration 0004', async () => {
+    const q = fakeQueue();
+    const c = fakeControl();
+    c.live.add('legacy');
+    await agentWith(q, c).start();
+    await agentWith(q, c).beat();
+    expect(c.control.terminate).not.toHaveBeenCalled();
+  });
+
+  it('forwards a cancel it learns of from the heartbeat, once', async () => {
+    const q = fakeQueue([run('a')]);
+    const c = fakeControl();
+    const agent = agentWith(q, c);
+    await agent.start();
+    q.setBeat({ held: ['a'], cancelling: ['a'] });
+
+    await agent.beat();
+    await agent.beat();
+
+    expect(c.control.cancel).toHaveBeenCalledTimes(1);
+    expect(c.control.cancel).toHaveBeenCalledWith('a', null);
+  });
+
+  it('survives a failed heartbeat, since the lease outlasts several', async () => {
+    const q = fakeQueue();
+    const c = fakeControl();
+    const onError = vi.fn();
+    (q.queue.heartbeat as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('connection reset'));
+    const agent = new RunnerAgent({
+      queue: q.queue, control: c.control, slots: 1,
+      journalPathFor: () => '/j', simulationFixture: () => undefined,
+      pollIntervalMs: 0, heartbeatIntervalMs: 0, onError,
+    });
+    await expect(agent.start()).resolves.toBeUndefined();
+    expect(onError).toHaveBeenCalled();
+  });
+});
+
+describe('RunnerAgent.cancel', () => {
+  it('does nothing for a run this host is not running, leaving it to the runner that is', async () => {
+    // RunManager.cancel on an unknown run settles it as gone, which for a run
+    // live on another runner would be a lie written into the ledger.
+    const q = fakeQueue();
+    const c = fakeControl();
+    const agent = agentWith(q, c);
+    await agent.start();
+    expect(await agent.cancel('elsewhere', null)).toBe(false);
+    expect(c.control.cancel).not.toHaveBeenCalled();
+  });
+
+  it('forwards a cancel for a run live here, with the pid the ledger has', async () => {
+    const q = fakeQueue([run('a')]);
+    const c = fakeControl();
+    const agent = agentWith(q, c);
+    await agent.start();
+    expect(await agent.cancel('a', 4242)).toBe(true);
+    expect(c.control.cancel).toHaveBeenCalledWith('a', 4242);
+  });
+});
+
+describe('RunnerAgent stopping', () => {
+  it('drains: claims nothing more, waits for its runs, then goes offline', async () => {
+    const q = fakeQueue([run('a'), run('b')]);
+    const c = fakeControl();
+    const agent = agentWith(q, c);
+    await agent.start();
+
+    const drained = agent.drain(5_000);
+    setTimeout(() => c.finish('a'), 50);
+    await drained;
+
+    expect(q.states).toEqual(['draining', 'offline']);
+    expect(c.launched.map((l) => l.runId)).toEqual(['a']);
+    expect(c.control.cancel).not.toHaveBeenCalled();
+    expect(c.control.shutdown).toHaveBeenCalled();
+  });
+
+  it('gives up waiting at the grace period without cancelling anyone\'s run', async () => {
+    const q = fakeQueue([run('a')]);
+    const c = fakeControl();
+    const agent = agentWith(q, c);
+    await agent.start();
+
+    await agent.drain(0);
+
+    expect(c.control.cancel).not.toHaveBeenCalled();
+    expect(c.control.terminate).not.toHaveBeenCalled();
+    expect(q.states.at(-1)).toBe('offline');
+  });
+
+  it('claims nothing after stop', async () => {
+    const q = fakeQueue([run('a')]);
+    const c = fakeControl();
+    const agent = agentWith(q, c, 0);
+    await agent.start();
+    await agent.stop();
+    (q.queue.claimNext as ReturnType<typeof vi.fn>).mockClear();
+    await agent.wake();
+    expect(q.queue.claimNext).not.toHaveBeenCalled();
+  });
+});

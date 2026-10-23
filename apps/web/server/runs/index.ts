@@ -1,14 +1,19 @@
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { createRequire } from 'node:module';
 import { useDb } from '../db/client';
 import {
   EventWriter,
   RunManager,
+  RunnerAgent,
+  SUPPORTED_SPEC_VERSIONS,
   applyProjection,
   finaliseRunIfUnsettled,
-  findUnsettledRuns,
   markRunLaunched,
+  reattachableRuns,
+  sqlAgentQueue,
+  type SqlClient,
 } from '@movy/runner/agent';
 import { RunHub } from './run-hub';
 import { TicketStore } from './subscription-ticket';
@@ -18,6 +23,7 @@ import { and, eq, or } from 'drizzle-orm';
 
 let manager: RunManager | undefined;
 let writer: EventWriter | undefined;
+let agent: RunnerAgent | undefined;
 let hub: RunHub | undefined;
 let tickets: TicketStore | undefined;
 
@@ -58,14 +64,39 @@ export function useTicketStore(): TicketStore {
 }
 
 /**
- * One manager per Nitro process, built lazily.
+ * Whether this web process runs an agent in-process.
  *
- * Module-level rather than per-request: it owns IPC channels to live child
- * processes, which outlive any one request by definition.
+ * On unless `MOVY_EMBEDDED_RUNNER=false`. Until the runner services of phase 6
+ * (docs/runner-service-plan.md) exist, the embedded agent is the only thing
+ * that claims runs, so turning it off without starting one leaves every run
+ * queued — the UI says so, and nothing is lost.
  */
-export function useRunManager(): RunManager {
-  if (!manager) {
+export function isEmbeddedRunner(): boolean {
+  return process.env.MOVY_EMBEDDED_RUNNER !== 'false';
+}
+
+/** Stable across restarts of this host, so it re-attaches to its own runs. */
+export function embeddedRunnerId(): string {
+  return process.env.MOVY_RUNNER_ID || `embedded-${os.hostname()}`;
+}
+
+/** The SQL the queue, the sweeper and re-attach run, on the same pool Drizzle uses. */
+export function useMetaSql(): SqlClient {
+  return useDb().$client as unknown as SqlClient;
+}
+
+/**
+ * The in-process runner agent, or undefined when this host runs none.
+ *
+ * Module-level rather than per-request: its RunManager owns IPC channels to
+ * live child processes, which outlive any one request by definition.
+ */
+export function useRunnerAgent(): RunnerAgent | undefined {
+  if (!isEmbeddedRunner()) return undefined;
+  if (!agent) {
     const db = useDb();
+    const sql = useMetaSql();
+    const runnerId = embeddedRunnerId();
     const runHub = useRunHub();
     writer = new EventWriter(
       { apply: (runId, projection) => applyProjection(db, runId, projection) },
@@ -79,6 +110,9 @@ export function useRunManager(): RunManager {
         // version published the raw MigrationEvent, so a client received
         // `{seq,type,at,level,payload}` on connect and a bare event afterwards
         // — and every live frame then blew up in the reducer.
+        //
+        // Only an EMBEDDED agent can publish like this; an agent in its own
+        // process needs the NOTIFY bus of phase 3 to reach the hub.
         onFlushed: (runId, projection) =>
           runHub.publish(
             runId,
@@ -97,7 +131,7 @@ export function useRunManager(): RunManager {
       {
         markLaunched: (runId, info) => markRunLaunched(db, runId, info),
         finaliseIfUnsettled: (runId, outcome) => finaliseRunIfUnsettled(db, runId, outcome),
-        unsettledRuns: () => findUnsettledRuns(db),
+        unsettledRuns: () => reattachableRuns(sql, runnerId),
       },
       writer,
       {
@@ -113,13 +147,39 @@ export function useRunManager(): RunManager {
           ),
       }
     );
+
+    agent = new RunnerAgent({
+      queue: sqlAgentQueue(sql, {
+        id: runnerId,
+        runnerClass: process.env.MOVY_RUNNER_CLASS || 'default',
+        version: `spec-v${SUPPORTED_SPEC_VERSIONS.join(',')}`,
+        slots: runnerSlots(),
+      }),
+      control: manager,
+      slots: runnerSlots(),
+      journalPathFor,
+      simulationFixture: findSimulationFixture,
+      onError: (err, runId) => console.error(`[runs] agent${runId ? ` (${runId})` : ''}:`, err.message),
+      onFenced: (runId) =>
+        console.warn(`[runs] ${runId} lost its lease and was stopped here; the sweeper had already settled it.`),
+    });
   }
-  return manager;
+  return agent;
 }
 
-export function useEventWriter(): EventWriter {
-  useRunManager();
-  return writer!;
+/** Closes the writer the embedded agent feeds, after the agent has stopped. */
+export async function closeEventWriter(): Promise<void> {
+  await writer?.close();
+}
+
+/**
+ * Runs the embedded agent executes at once (`MOVY_RUNNER_SLOTS`, default 4).
+ * The org's `max_concurrent_runs` is still the gate at launch; this is the
+ * host's own limit, so one busy org cannot occupy every process on it.
+ */
+function runnerSlots(): number {
+  const n = Number(process.env.MOVY_RUNNER_SLOTS);
+  return Number.isInteger(n) && n > 0 ? n : 4;
 }
 
 /**
@@ -140,24 +200,31 @@ export function journalPathFor(runId: string): string {
 }
 
 /**
- * The one recording the web app will replay.
+ * The one recording a simulated run replays, on this host — or undefined.
  *
- * Resolved here rather than accepted from a request body: this string becomes
- * `--simulate <path>` on a child process, and a path from a client is a path
- * the client chose.
+ * Resolved by whoever runs the run, never accepted from a request: this string
+ * becomes `--simulate <path>` on a child process, and a path from a client is a
+ * path the client chose.
  */
-export function simulationFixture(): string {
+export function findSimulationFixture(): string | undefined {
   const override = process.env.MOVY_SIMULATION_FIXTURE;
   if (override) return path.resolve(override);
-
   const bundled = path.resolve(process.cwd(), '../runner/fixtures/pg-to-pg-315k.ndjson');
-  if (!fs.existsSync(bundled)) {
+  return fs.existsSync(bundled) ? bundled : undefined;
+}
+
+/**
+ * Refuses a simulation up front when this host's own agent has no recording,
+ * rather than queuing a run that can only fail. An external agent resolves its
+ * own fixture, so without an embedded one there is nothing to check here.
+ */
+export function assertSimulationAvailable(): void {
+  if (isEmbeddedRunner() && !findSimulationFixture()) {
     throw createError({
       statusCode: 503,
       statusMessage: 'No simulation recording is available on this host.',
     });
   }
-  return bundled;
 }
 
 /**

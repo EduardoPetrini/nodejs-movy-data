@@ -31,7 +31,9 @@ class FakeChild extends EventEmitter {
     write(c: string) { this.chunks.push(c); }, end() { this.ended = true; } };
   sent: unknown[] = [];
   unrefs = 0;
+  signals: string[] = [];
   send(message: unknown) { this.sent.push(message); return true; }
+  kill(signal: string) { this.signals.push(signal); return true; }
   unref() { this.unrefs += 1; }
   disconnect() { this.connected = false; }
 }
@@ -80,6 +82,57 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2000): Promise<void
 function finished(status: 'succeeded' | 'failed' | 'cancelled', seq = 9): MigrationEvent {
   return { type: 'run_finished', status, durationMs: 100, runId: RUN_ID, seq, at: new Date().toISOString() };
 }
+
+describe('RunManager.liveRunIds and terminate', () => {
+  it('lists a launched run until its process exits', async () => {
+    const h = harness();
+    h.manager.launch({ runId: RUN_ID, journalPath: '/tmp/j.ndjson', spec: {} });
+    expect(h.manager.liveRunIds()).toEqual([RUN_ID]);
+
+    h.children[0].emit('exit', 0, null);
+    await waitFor(() => h.manager.liveRunIds().length === 0);
+  });
+
+  it('counts a followed orphan as live, since it still occupies the host', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'movy-live-'));
+    const journalPath = join(dir, 'j.ndjson');
+    writeFileSync(journalPath, '');
+    const h = harness([{ id: RUN_ID, pid: process.pid, journalPath, lastSeq: 0 }]);
+    await h.manager.reattach();
+    expect(h.manager.liveRunIds()).toEqual([RUN_ID]);
+    h.manager.shutdown();
+  });
+
+  it('terminates a run it forked with SIGTERM, and reports a run it does not hold', () => {
+    // Fencing: an agent whose lease was taken away must stop writing at once.
+    const h = harness();
+    h.manager.launch({ runId: RUN_ID, journalPath: '/tmp/j.ndjson', spec: {} });
+    expect(h.manager.terminate(RUN_ID)).toBe(true);
+    expect(h.children[0].signals).toEqual(['SIGTERM']);
+    expect(h.manager.terminate('99999999-9999-9999-9999-999999999999')).toBe(false);
+  });
+});
+
+describe('RunManager.cancel for a run it re-attached to', () => {
+  it('signals the followed process by its stored pid instead of settling it as gone', async () => {
+    // Without the follower's pid, cancel(runId, null) saw no process and
+    // settled a live migration `cancelled / RunnerGone` while it kept writing.
+    const dir = mkdtempSync(join(tmpdir(), 'movy-cancel-'));
+    const journalPath = join(dir, 'j.ndjson');
+    writeFileSync(journalPath, '');
+    const h = harness([{ id: RUN_ID, pid: process.pid, journalPath, lastSeq: 0 }]);
+    await h.manager.reattach();
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    try {
+      expect(await h.manager.cancel(RUN_ID, null)).toBe(true);
+      expect(kill).toHaveBeenCalledWith(process.pid, 'SIGTERM');
+      expect(h.settled).toEqual([]);
+    } finally {
+      kill.mockRestore();
+      h.manager.shutdown();
+    }
+  });
+});
 
 describe('RunManager.launch', () => {
   it('writes the spec to stdin and closes it, and never puts it in argv', async () => {

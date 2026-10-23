@@ -1,6 +1,7 @@
 import { and, desc, eq, gt, inArray, lt, notInArray, or, sql } from 'drizzle-orm';
 import type { Db } from '../db/client';
-import { migrationDefinitions, runEvents, runSteps, runTableProgress, runs, TERMINAL_RUN_STATUSES } from '../db/schema';
+import { migrationDefinitions, runEvents, runSpecs, runSteps, runTableProgress, runs, TERMINAL_RUN_STATUSES } from '../db/schema';
+import { cancelQueuedRun, type SealedSpec, type SqlClient } from '@movy/runner/agent';
 import type { RunStatus } from '../db/schema';
 import { clampLimit, toPage, type Page, type PageCursor } from './paging';
 
@@ -139,6 +140,32 @@ export class RunsRepository {
     // "maybe" because it describes bulk inserts too.
     if (!created) throw new Error('insert into runs returned no row');
     return created;
+  }
+
+  /**
+   * Queues a run with its sealed spec, in one transaction: a run row without a
+   * spec could be claimed and would fail, and a spec without a row is a pair of
+   * passwords nothing will ever delete.
+   */
+  async enqueue(row: Omit<NewRun, 'orgId' | 'status'>, spec: SealedSpec): Promise<RunRow> {
+    return this.db.transaction(async (tx) => {
+      const [created] = await tx
+        .insert(runs)
+        .values({ ...row, orgId: this.orgId, status: 'queued' })
+        .returning();
+      if (!created) throw new Error('insert into runs returned no row');
+      await tx.insert(runSpecs).values({ runId: created.id, specVersion: spec.specVersion, ciphertext: spec.ciphertext });
+      return created;
+    });
+  }
+
+  /**
+   * Cancels a run no runner has claimed. Returns the cancelled row, or
+   * undefined when a runner already has it and the running path applies.
+   */
+  async cancelQueued(runId: string, userId: string): Promise<RunRow | undefined> {
+    const cancelled = await cancelQueuedRun(this.db.$client as unknown as SqlClient, this.orgId, runId, userId);
+    return cancelled ? this.findById(runId) : undefined;
   }
 
   async steps(runId: string): Promise<RunStepRow[]> {

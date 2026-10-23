@@ -22,8 +22,22 @@ export function secretAad(orgId: string, connectionId: string): Buffer {
   return Buffer.from(`org:${orgId}:connection:${connectionId}`, 'utf8');
 }
 
+/**
+ * A run's sealed specification, bound to its org and its run the same way a
+ * connection secret is bound to its row: a spec lifted onto another run, or
+ * into another org, fails authentication instead of starting a migration.
+ */
+export function specAad(orgId: string, runId: string): Buffer {
+  return Buffer.from(`org:${orgId}:run-spec:${runId}`, 'utf8');
+}
+
+/**
+ * MOVY_ENCRYPTION_KEY first: a runner agent is not a Nuxt process, and naming
+ * its key after the framework of a different service would be a trap. The web
+ * console keeps reading NUXT_ENCRYPTION_KEY, so neither deployment changes.
+ */
 function key(): Buffer {
-  const raw = process.env.NUXT_ENCRYPTION_KEY ?? '';
+  const raw = process.env.MOVY_ENCRYPTION_KEY || process.env.NUXT_ENCRYPTION_KEY || '';
   if (!raw) throw new Error('NUXT_ENCRYPTION_KEY is not set.');
 
   const decoded = Buffer.from(raw, 'base64');

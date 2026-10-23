@@ -109,6 +109,8 @@ export class RunManager {
   private readonly handles = new Map<string, Handle>();
   /** Orphans being followed through their journals: runId -> poll timer. */
   private readonly followers = new Map<string, NodeJS.Timeout>();
+  /** Their pids, which `cancel()` signals: no IPC channel survives a restart. */
+  private readonly followedPids = new Map<string, number | null>();
   private readonly followIntervalMs: number;
   private readonly stallAfterMs: number;
   private readonly stallCheckIntervalMs: number;
@@ -182,7 +184,7 @@ export class RunManager {
       return true;
     }
 
-    const target = handle?.pid ?? pid;
+    const target = handle?.pid ?? pid ?? this.followedPids.get(runId) ?? null;
     if (!isProcessAlive(target)) {
       // Nothing left to signal: settle it here rather than leave the UI
       // waiting on a process that exited while nobody was attached.
@@ -315,6 +317,7 @@ export class RunManager {
    */
   private follow(run: UnsettledRun, fromSeq: number): void {
     if (this.followers.has(run.id)) return;
+    this.followedPids.set(run.id, run.pid);
 
     let cursor = fromSeq;
     let busy = false;
@@ -360,6 +363,7 @@ export class RunManager {
     if (timer === undefined) return;
     clearInterval(timer);
     this.followers.delete(runId);
+    this.followedPids.delete(runId);
   }
 
   /**
@@ -409,6 +413,27 @@ export class RunManager {
   private async settleRun(runId: string, outcome: Outcome): Promise<boolean> {
     try {
       return await this.store.finaliseIfUnsettled(runId, outcome);
+    } catch (err) {
+      this.onError(toError(err), runId);
+      return false;
+    }
+  }
+
+  /** Every run this host occupies a slot with: forked here, or followed after a restart. */
+  liveRunIds(): string[] {
+    return [...new Set([...this.handles.keys(), ...this.followers.keys()])];
+  }
+
+  /**
+   * Stops a run this host forked, immediately. For fencing, not for users:
+   * a user's cancel is cooperative and goes through `cancel()`. Returns false
+   * for a run it holds no process for.
+   */
+  terminate(runId: string): boolean {
+    const handle = this.handles.get(runId);
+    if (!handle) return false;
+    try {
+      return handle.child.kill('SIGTERM');
     } catch (err) {
       this.onError(toError(err), runId);
       return false;

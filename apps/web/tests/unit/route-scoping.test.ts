@@ -75,7 +75,7 @@ describe('API route scoping', () => {
     // applyProjection and friends take a run id and no org, because they are
     // driven by a runner process that has no request and no user. Reaching one
     // from a handler would be an org-scope bypass wearing a repository's name.
-    const UNSCOPED_HELPERS = /\b(applyProjection|markRunLaunched|finaliseRunIfUnsettled|findUnsettledRuns)\b/;
+    const UNSCOPED_HELPERS = /\b(applyProjection|markRunLaunched|finaliseRunIfUnsettled|reattachableRuns|sweep|cancelQueuedRun)\b/;
     const offenders = routes.filter((r) => UNSCOPED_HELPERS.test(readFileSync(join(API_DIR, r), 'utf8')));
     expect(offenders, `calls an unscoped ingestion helper: ${offenders.join(', ')}`).toEqual([]);
   });

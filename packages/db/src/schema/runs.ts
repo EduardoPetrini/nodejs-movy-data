@@ -1,11 +1,13 @@
 import {
   pgTable, text, integer, bigint, smallint, real, boolean, jsonb, timestamp, uuid,
-  index, primaryKey, unique, foreignKey,
+  index, primaryKey, unique, foreignKey, customType,
 } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
 import { organizations } from './orgs';
 import { connections } from './connections';
 import { migrationDefinitions } from './definitions';
 import { users } from './auth';
+import { runnerClasses } from './runners';
 
 /**
  * `cancelling` is a real state, not a UI affectation: cancellation is
@@ -68,9 +70,27 @@ export const runs = pgTable(
     /** A replayed fixture must never be mistakable for a real migration. */
     simulated: boolean('simulated').notNull().default(false),
 
-    /** Where the runner's NDJSON journal lives. The system of record. */
-    journalPath: text('journal_path').notNull(),
+    /**
+     * Where the runner's NDJSON journal lives. The system of record.
+     *
+     * Null until a runner agent claims the run: the path is local to that
+     * agent's host, so nothing can name it at enqueue time.
+     */
+    journalPath: text('journal_path'),
     pid: integer('pid'),
+
+    /** Which kind of runner may claim it. The queue is per class. */
+    runnerClass: text('runner_class').notNull().default('default').references(() => runnerClasses.name),
+    /** The agent that claimed it. Null while queued, and for runs forked before 0004. */
+    runnerId: text('runner_id'),
+    claimedAt: timestamp('claimed_at', { withTimezone: true }),
+    /**
+     * Extended by the owning agent's heartbeat. Once it passes, the sweeper
+     * settles the run `RunnerVanished` — and the agent, if it is in fact
+     * alive, finds the run missing from its next heartbeat and kills the
+     * child. A runner declared dead must never keep writing.
+     */
+    leaseExpiresAt: timestamp('lease_expires_at', { withTimezone: true }),
 
     /**
      * The replay cursor: the highest `seq` durably stored in `run_events`.
@@ -130,8 +150,27 @@ export const runs = pgTable(
     index('runs_definition_idx').on(t.orgId, t.definitionId, t.createdAt),
     // "Which runs did this process leave behind?" — asked once on every boot.
     index('runs_status_idx').on(t.status),
+    // The queue: oldest first, one class at a time, queued rows only.
+    index('runs_queue_idx').on(t.runnerClass, t.createdAt).where(sql`status = 'queued'`),
   ]
 );
+
+const bytea = customType<{ data: Buffer; notNull: true }>({ dataType: () => 'bytea' });
+
+/**
+ * The run's specification, sealed, from enqueue until a runner claims it.
+ *
+ * It carries two database passwords, so it is encrypted with an AAD bound to
+ * this org and this run (`specAad`), and the claiming agent deletes it as soon
+ * as it has read it: no resume exists, so nothing ever needs it twice.
+ * `spec_version` lets an agent refuse a shape it does not understand by name
+ * rather than guess at it.
+ */
+export const runSpecs = pgTable('run_specs', {
+  runId: uuid('run_id').primaryKey().references(() => runs.id, { onDelete: 'cascade' }),
+  specVersion: smallint('spec_version').notNull(),
+  ciphertext: bytea('ciphertext').notNull(),
+});
 
 /**
  * The durable event log — a copy of the journal, queryable.

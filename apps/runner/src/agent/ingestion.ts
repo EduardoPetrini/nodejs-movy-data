@@ -3,8 +3,6 @@ import { runEvents, runSteps, runTableProgress, runs, TERMINAL_RUN_STATUSES } fr
 import type { Db, RunStatus } from '@movy/db';
 import type { Projection } from './run-projection';
 
-type RunRow = typeof runs.$inferSelect;
-
 /**
  * Ingestion, deliberately NOT org-scoped. It used to sit beside the org-scoped
  * RunsRepository in the web app, and moved here with the RunManager it serves.
@@ -130,9 +128,4 @@ export async function finaliseRunIfUnsettled(
     .where(and(eq(runs.id, runId), notInArray(runs.status, [...TERMINAL_RUN_STATUSES])))
     .returning({ id: runs.id });
   return settled.length > 0;
-}
-
-/** Every run this host may still owe an outcome to. Asked once, on boot. */
-export async function findUnsettledRuns(db: Db): Promise<RunRow[]> {
-  return db.select().from(runs).where(notInArray(runs.status, [...TERMINAL_RUN_STATUSES]));
 }

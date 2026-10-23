@@ -1,7 +1,7 @@
 import { createRepos } from '~~/server/repositories';
 import { requirePermission } from '~~/server/utils/rbac';
 import { toPublicRun } from '~~/server/serializers/run.serializer';
-import { useRunManager } from '~~/server/runs';
+import { useRunnerAgent } from '~~/server/runs';
 
 /**
  * Cancellation is cooperative: the orchestrator observes the abort at a step
@@ -17,12 +17,19 @@ export default defineEventHandler(async (event) => {
   const run = await repos.runs.findById(id);
   if (!run) throw createError({ statusCode: 404, statusMessage: 'Not Found' });
 
+  // Not claimed yet: cancelled outright, and no runner will ever see it. The
+  // statement is conditional on `queued`, so it cannot race a claim.
+  const cancelledQueued = await repos.runs.cancelQueued(id, org.userId);
+  if (cancelledQueued) return { run: toPublicRun(cancelledQueued, org.role), signalled: true, alreadyFinished: false };
+
   // Marked before signalling: if the signal is lost, the UI still shows the
-  // request was accepted, and the reverse order could signal a run whose row
-  // says nothing happened.
+  // request was accepted, and the owning runner's next heartbeat finds the
+  // `cancelling` row and forwards the cancel itself.
   const updated = await repos.runs.requestCancel(id, org.userId);
   if (!updated) return { run: toPublicRun(run, org.role), signalled: false, alreadyFinished: true };
 
-  const signalled = await useRunManager().cancel(id, run.pid);
+  // The fast path, when the run is on this host's embedded agent.
+  const agent = useRunnerAgent();
+  const signalled = agent ? await agent.cancel(id, run.pid) : false;
   return { run: toPublicRun(updated, org.role), signalled, alreadyFinished: false };
 });
