@@ -3,6 +3,25 @@ import { IDatabaseConnection, IDbClient } from '../../../domain/ports/database.p
 import { ConnectionError } from '../../../domain/errors/migration.errors.js';
 import { ConnectionConfig, SslConfig } from '../../../domain/types/connection.types.js';
 
+type MssqlModule = typeof sql;
+
+/**
+ * The driver, whichever shape the import arrived in.
+ *
+ * Loaded by Node, `sql` is mssql's `module.exports`. Inlined into the web
+ * app's Nitro bundle, it is instead an ESM namespace of that CommonJS module:
+ * Node's export lexer cannot see mssql's exports, so the namespace holds only
+ * `default` (the real exports) and `ConnectionPool` is undefined on it. That
+ * broke every in-request MSSQL call in a production build — Test, list
+ * databases, preview, compare — while dev and the forked runner worked.
+ */
+export function unwrapMssql(mod: MssqlModule): MssqlModule {
+  if (typeof mod.ConnectionPool === 'function') return mod;
+  const inner = (mod as unknown as { default?: MssqlModule }).default;
+  if (inner && typeof inner.ConnectionPool === 'function') return inner;
+  throw new Error('mssql driver did not load: no ConnectionPool export found');
+}
+
 function buildPoolConfig(config: ConnectionConfig): sql.config {
   return {
     server: config.host,
@@ -42,7 +61,7 @@ export class MssqlConnection implements IDatabaseConnection {
   private pool: sql.ConnectionPool;
 
   constructor(config: ConnectionConfig) {
-    this.pool = new sql.ConnectionPool(buildPoolConfig(config));
+    this.pool = new (unwrapMssql(sql).ConnectionPool)(buildPoolConfig(config));
   }
 
   async connect(): Promise<void> {

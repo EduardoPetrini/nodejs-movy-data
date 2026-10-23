@@ -16,10 +16,15 @@ export default defineNuxtConfig({
   // migrations run in a forked @movy/runner process that loads core from disk.
   //
   // Its emitted specifiers carry explicit .js extensions, so the output is valid
-  // under both CJS and ESM resolution. That is what lets it be externalised here
-  // without Nitro re-emitting extensionless deep imports into an ESM bundle.
+  // under both CJS and ESM resolution.
   //
-  // The database drivers are native and must never be bundled.
+  // Listing it below does NOT keep it external. In Nitro 2.13 `external` only
+  // stops a module being forced inline; a workspace package resolves to a path
+  // outside node_modules, so Nitro inlines it anyway. A production build
+  // therefore bundles core, and core's CommonJS imports of the drivers become
+  // ESM namespace imports — see `unwrapMssql` for the one that broke.
+  //
+  // The database drivers are native and must never be bundled; they are.
   nitro: {
     experimental: { websocket: true },
     externals: {

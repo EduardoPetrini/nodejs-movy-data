@@ -124,3 +124,24 @@ describe('MssqlConnection', () => {
     });
   });
 });
+
+describe('unwrapMssql', () => {
+  it('returns the module itself when it carries ConnectionPool', async () => {
+    const { unwrapMssql } = await import('../../../../src/infrastructure/database/mssql/mssql-connection.adapter');
+    const mod = { ConnectionPool: function () {} } as never;
+    expect(unwrapMssql(mod)).toBe(mod);
+  });
+
+  it('unwraps the ESM namespace a bundler hands over for a CommonJS driver', async () => {
+    const { unwrapMssql } = await import('../../../../src/infrastructure/database/mssql/mssql-connection.adapter');
+    const real = { ConnectionPool: function () {} };
+    const namespace = { default: real, 'module.exports': real, valueHandler: new Map() } as never;
+    expect(unwrapMssql(namespace)).toBe(real);
+  });
+
+  it('fails loudly rather than constructing undefined', async () => {
+    const { unwrapMssql } = await import('../../../../src/infrastructure/database/mssql/mssql-connection.adapter');
+    expect(() => unwrapMssql({ default: {} } as never)).toThrow(/ConnectionPool/);
+  });
+});
+

@@ -396,8 +396,15 @@ demoted mid-session, so without it they never learn why their log pane is empty.
 imported by both halves) are the one declaration of the wire contract — frames, row shapes, step ids and labels. The
 serializer's return types are annotated with it, so a field the server stops
 sending is a type error in the client. It restates the nine step ids rather than
-importing `MIGRATION_STEP_ORDER`, because `@movy/core` is CommonJS and
-externalised; `step-order.test.ts` fails if the copy drifts.
+importing `MIGRATION_STEP_ORDER`, because `@movy/core` is CommonJS and the client
+bundle cannot import it; `step-order.test.ts` fails if the copy drifts.
+
+**The Nitro server bundle INLINES `@movy/core`**, despite `nitro.externals.external`
+naming it: in Nitro 2.13 that list only stops a module being forced inline, and a
+workspace package resolves outside `node_modules`. Inside the bundle core's CommonJS
+`require`s of the drivers become ESM namespace imports, which is why `unwrapMssql`
+exists — `mssql`'s exports are invisible to Node's lexer, so every in-request MSSQL call
+(Test, list databases, preview, compare) failed in a production build only.
 
 | Module | Purpose |
 |--------|---------|
