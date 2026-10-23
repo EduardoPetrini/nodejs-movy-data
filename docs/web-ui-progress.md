@@ -90,12 +90,11 @@ earlier and left open on GitHub; both closed 2026-10-22.
 **~~Auto-increment is not carried across engines.~~ Fixed 2026-10-22** — see
 *Fix — auto-increment across engines* below.
 
-**MSSQL as a destination is broken for real data** (found 2026-10-22).
-`MssqlConnection.getClient()` pins no connection, so `IDENTITY_INSERT` and the
-INSERT can land on different sessions; the 500-row batch exceeds SQL Server's
-2,100-parameter cap on tables wider than four columns; and the failed run's
-`error_message` stays empty. PG→MSSQL is `test.fixme` in `live-migration.spec.ts`.
-See CLAUDE.md, *Migration flow*.
+**~~MSSQL as a destination is broken for real data.~~ Fixed 2026-10-22** — see
+*Fix — SQL Server as a destination* below.
+
+**Comparisons count rows, never values.** A PG→MySQL run rounded every price to a
+whole number and its comparison still read 100%. Found by reading the column.
 
 **The test-before-save endpoint has no unit test.**
 `connections/test.post.ts` (2026-09-17) was verified by hand only. See the
@@ -1386,4 +1385,25 @@ R100/R099; the five moved tests changed import paths and nothing else.
   the moved migrations applied to an empty scratch database (4 migrations, 13 tables).
 - **Next — R2**: migration `0004`, the agent (claim, heartbeat, lease, fencing, drain),
   the sweeper, embedded mode; the web stops forking.
+
+## Fix — SQL Server as a destination (2026-10-22)
+
+Between R1 and R2. Four stacked bugs, each found only once the one before it was fixed:
+the client pinned no session; `SET IDENTITY_INSERT` ran inside `sp_executesql` and
+reverted; INSERTs overran the 2,100-parameter cap; string lengths were dropped on
+create (`nvarchar(1)`). Along the way, two that affected other Pairs too:
+
+- **PG numeric precision was lost** on MySQL and SQL Server destinations
+  (`decimal(10,0)`, `numeric(18,0)`): data loss that row counts cannot see.
+- **A self-referencing table broke load order** for every table under it.
+
+Also: a run that fails on tables now carries a `TablesFailed` error naming them, and a
+re-run treats `decimal` and `numeric` as one type.
+
+- **Verified:** `pnpm docker:e2e` twice from an empty SQL Server `movy_dst`, both green
+  with no retries: PG→PG, MySQL→PG, PG→MySQL, PG→MSSQL, MySQL→MSSQL. `SUM(orders.total)`
+  is 1,074,991.50 on all three engines; `customers.email` is `nvarchar(255)`.
+  `pnpm test` 1284/1284, `pnpm typecheck` clean.
+- **Still open:** comparisons count rows only; SQL Server cannot ALTER a column a default
+  constraint uses (a re-run that changes a type there fails). Next: R2.
 

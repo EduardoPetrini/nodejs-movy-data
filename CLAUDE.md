@@ -201,13 +201,33 @@ Re-running into a populated destination needed two more fixes, both in the diff:
 `live-migration.spec.ts` proves PG→MySQL and MySQL→PG live, fresh and re-run, with the
 counters checked: a MySQL→PG `orders.id` is an identity resuming at `MAX + 1`.
 
-**Known gap — MSSQL as a destination is broken for real data** (found by the same
-spec, 2026-10-22; PG→MSSQL is its `test.fixme`). `MssqlConnection.getClient()` pins no
-connection — mssql's `pool.connect()` resolves to the pool itself, and `release()` then
-closes the whole pool — so `SET IDENTITY_INSERT … ON` and the INSERT can run on different
-sessions. And `MssqlCrossDbDataMigrator`'s 500-row batch exceeds SQL Server's
-2,100-parameter cap on any table wider than four columns. The failed tables are in the
-run's `result`, but the run's `error_message` stays empty.
+**SQL Server as a destination** (fixed 2026-10-22; found by the same spec). Four bugs
+stacked, each hidden by the one before it:
+- `MssqlConnection.getClient()` pinned no session — mssql's `pool.connect()` resolves to
+  the pool itself — so it now opens a **one-connection pool** of its own, and `release()`
+  closes only that.
+- mssql's `query()` always goes through `sp_executesql`, and a `SET` inside it reverts on
+  return, so `SET IDENTITY_INSERT … ON` never held for the INSERT after it on any
+  connection. **The client sends parameterless statements as a batch** (`request.batch`).
+- A 500-row batch is 2,500 parameters at five columns; SQL Server's cap is 2,100.
+  `insertMssqlRows` (`migration/mssql-insert.ts`) splits every INSERT to at most 2,000.
+- `buildColumnDef` dropped `characterMaxLength`, and SQL Server reads a bare `nvarchar` as
+  `nvarchar(1)`. It now appends the length, `(max)` past 4,000 / 8,000.
+
+**Numeric precision crosses engines in the type string.** The PG inspector reported
+`numeric(12,2)` as bare `numeric`, so MySQL created `decimal(10,0)` and SQL Server
+`numeric(18,0)` — rounding away every cent while the row counts still matched. It now
+reports `numeric(12,2)`, as the MySQL and MSSQL inspectors always did. **A row-count
+comparison cannot catch this kind of loss**; the fix was found by reading the column.
+
+**A self-reference is not a cycle.** `TableMigrationPlanner` counted
+`customers.referred_by → customers` as an incoming edge, so `customers` never reached
+in-degree zero and it and every table below it fell into the unordered cyclic level —
+`order_items` loaded before `orders`. Self-references are skipped; `cyclicTables` now
+lists only real multi-table cycles, which is what both of its warnings describe.
+
+A failed table also gives the run an error now: `run_finished` carries `TablesFailed`,
+naming up to three tables and why, so the run page no longer says "failed" and nothing else.
 
 ### Run events (the observable contract)
 
@@ -636,9 +656,8 @@ The run it drives is **simulated** — the bundled fixture replayed through the 
 runner, socket, writer and reducer — so it exercises the whole machinery without
 depending on two throwaway databases existing on whoever's machine runs it.
 
-`live-migration.spec.ts` is the exception: REAL PG→PG, MySQL→PG and PG→MySQL runs against
-the Compose lab, each checked by a row-count comparison (PG→MSSQL is there as
-`test.fixme`, see the MSSQL-destination gap). It skips unless `MOVY_E2E_LIVE` is set,
+`live-migration.spec.ts` is the exception: REAL PG→PG, MySQL→PG, PG→MySQL, PG→MSSQL and
+MySQL→MSSQL runs against the Compose lab, each checked by a row-count comparison. It skips unless `MOVY_E2E_LIVE` is set,
 which only `pnpm docker:e2e` does, and it finds its connections by the names
 `seed-lab.ts` saves. `MOVY_E2E_EXTERNAL_SERVER` turns off Playwright's own `webServer`.
 
