@@ -2,6 +2,7 @@ import type { DatabaseSchema, SchemaDiff, TableMigrationPlan } from '@movy/core'
 import type {
   PreviewTable, PreviewTypeChange, PreviewWarning, RunPreview,
 } from '../../shared/definition-wire';
+import { suggestRunnerClass, type SuggestibleClass } from '../../shared/runner-suggestion';
 
 /**
  * Turning two inspected schemas into the review screen, as a pure function.
@@ -27,6 +28,10 @@ export interface PreviewInput {
   diff: SchemaDiff;
   plan: TableMigrationPlan;
   rowEstimates: ReadonlyMap<string, number>;
+  /** Bytes per source table. Empty means the engine could not say — not that the tables are empty. */
+  sizeEstimates: ReadonlyMap<string, number>;
+  /** The configured runner classes, for the size-based suggestion. */
+  runnerClasses: readonly SuggestibleClass[];
   /** `SyncSchemaUseCase` applies this same translation on the way across. */
   translateType: (sourceType: string) => string;
 }
@@ -37,7 +42,7 @@ const MYSQL_INLINE_ENUM = /^enum\s*\(/i;
 export function buildPreview(input: PreviewInput): RunPreview {
   const {
     source, target, targetDatabaseExists, sourceSchema, targetSchema,
-    diff, plan, rowEstimates, translateType,
+    diff, plan, rowEstimates, sizeEstimates, runnerClasses, translateType,
   } = input;
 
   const sourceTableNames = sourceSchema.tables.map((t) => t.name);
@@ -53,6 +58,7 @@ export function buildPreview(input: PreviewInput): RunPreview {
     ...sourceTableNames.map((name): PreviewTable => ({
       tableName: name,
       rowsEstimated: rowEstimates.get(name) ?? null,
+      bytesEstimated: sizeEstimates.get(name) ?? null,
       disposition: tablesToCreate.has(name) || !targetTableNames.has(name) ? 'create' : 'load',
     })),
     // Destination-only tables are listed because their fate is the question an
@@ -60,6 +66,7 @@ export function buildPreview(input: PreviewInput): RunPreview {
     ...extraTables.map((name): PreviewTable => ({
       tableName: name,
       rowsEstimated: null,
+      bytesEstimated: null,
       disposition: 'extra',
     })),
   ];
@@ -69,6 +76,10 @@ export function buildPreview(input: PreviewInput): RunPreview {
     (total, name) => total + (rowEstimates.get(name) ?? 0),
     0
   );
+
+  const totalBytesEstimated = sizeEstimates.size === 0
+    ? null
+    : sourceTableNames.reduce((total, name) => total + (sizeEstimates.get(name) ?? 0), 0);
 
   return {
     source,
@@ -88,6 +99,8 @@ export function buildPreview(input: PreviewInput): RunPreview {
     loadOrder: plan.loadOrder,
     cyclicTables: plan.cyclicTables,
     totalRowsEstimated,
+    totalBytesEstimated,
+    runnerSuggestion: suggestRunnerClass(totalBytesEstimated, runnerClasses),
     warnings: buildWarnings({
       sourceSchema, targetDatabaseExists, target, tablesEmptied, extraTables,
       typeChanges, plan, sourceTableCount: sourceTableNames.length,

@@ -79,6 +79,23 @@ export class MssqlSchemaInspector implements ISchemaInspector {
     return estimates;
   }
 
+  /**
+   * Used pages across every partition and allocation unit, times 8 KB. Read
+   * from `sys.allocation_units` rather than `sys.dm_db_partition_stats`, which
+   * needs VIEW DATABASE STATE; a login that cannot see either gets an empty
+   * map, and the preview says the size is unknown.
+   */
+  async getTableSizeEstimates(connection: IDatabaseConnection, schemaName?: string): Promise<Map<string, number>> {
+    try {
+      const rows = await connection.query<{ table_name: string; bytes: unknown }>(TABLE_SIZES_QUERY, [
+        schemaName ?? DEFAULT_SCHEMA,
+      ]);
+      return new Map(rows.map((r) => [r.table_name, toRowCount(r.bytes)]));
+    } catch {
+      return new Map();
+    }
+  }
+
   private buildTables(
     columnRows: ColumnRow[],
     constraintRows: ConstraintRow[],
@@ -297,6 +314,17 @@ WHERE SCHEMA_NAME(t.schema_id) = @p0
   AND i.type_desc <> 'HEAP'
   AND ic.is_included_column = 0
 ORDER BY t.name, i.name, ic.key_ordinal
+`;
+
+const TABLE_SIZES_QUERY = `
+SELECT
+  t.name                                  AS table_name,
+  CAST(SUM(a.used_pages) AS bigint) * 8192 AS bytes
+FROM sys.tables t
+JOIN sys.partitions p        ON p.object_id = t.object_id
+JOIN sys.allocation_units a  ON a.container_id = p.partition_id
+WHERE SCHEMA_NAME(t.schema_id) = @p0
+GROUP BY t.name
 `;
 
 const ROW_ESTIMATES_QUERY = `

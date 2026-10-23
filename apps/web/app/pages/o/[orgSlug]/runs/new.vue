@@ -2,6 +2,7 @@
 import type { RunPreview, WireDefinition } from '#shared/definition-wire'
 import type { RunMode } from '#shared/pair-capability'
 import type { WireRun } from '#shared/run-wire'
+import { suggestionSentence } from '#shared/runner-suggestion'
 
 /**
  * Review, then run.
@@ -141,6 +142,14 @@ async function launch() {
   }
 }
 
+/** Shown until the suggested class is the one chosen. A hint, never a switch. */
+const suggestion = computed(() => {
+  const s = preview.value?.runnerSuggestion
+  const total = preview.value?.totalBytesEstimated
+  if (!s || total == null || runnerClass.value === s.runnerClass) return null
+  return { runnerClass: s.runnerClass, text: suggestionSentence(total, s) }
+})
+
 const ready = computed(() => selectable.value.ok && Boolean(sourceId.value && targetId.value))
 /** Simulation touches no database, so there is nothing to review first. */
 const needsPreview = computed(() => !simulate.value && !preview.value)
@@ -224,6 +233,10 @@ const needsPreview = computed(() => !simulate.value && !preview.value)
         </div>
 
         <p v-if="previewError" class="err">{{ previewError }}</p>
+        <p v-if="suggestion" class="suggest" data-testid="runner-suggestion">
+          <span>{{ suggestion.text }}</span>
+          <AppButton @click="runnerClass = suggestion.runnerClass">Use it</AppButton>
+        </p>
         <PreviewPanel v-if="preview" :preview="preview" />
       </section>
 
@@ -282,6 +295,13 @@ const needsPreview = computed(() => !simulate.value && !preview.value)
 .note { font-size: var(--mv-fs-xs); color: var(--mv-fg-muted); }
 .note strong { font-weight: var(--mv-fw-medium); color: var(--mv-fg); }
 .muted { font-size: var(--mv-fs-xs); color: var(--mv-fg-subtle); max-width: 60ch; }
+.suggest {
+  display: flex; align-items: center; gap: var(--mv-s-3); flex-wrap: wrap;
+  padding: var(--mv-s-3) var(--mv-s-4);
+  border-left: 2px solid var(--mv-accent); border-radius: var(--mv-r-md);
+  background: var(--mv-bg-raised);
+  font-size: var(--mv-fs-xs); color: var(--mv-fg);
+}
 .hint { font-size: var(--mv-fs-xs); color: var(--mv-warn); }
 .err { font-size: var(--mv-fs-xs); color: var(--mv-danger); }
 .empty {

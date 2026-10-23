@@ -99,6 +99,20 @@ export class PgSchemaInspector implements ISchemaInspector {
     }
   }
 
+  /** `pg_total_relation_size`: heap, TOAST and every index. Same scope as the row estimates. */
+  async getTableSizeEstimates(connection: IDatabaseConnection): Promise<Map<string, number>> {
+    try {
+      const rows = await connection.query<{ relname: string; bytes: unknown }>(
+        `SELECT relname, pg_total_relation_size(oid) AS bytes
+         FROM pg_class
+         WHERE relkind = 'r' AND relnamespace = 'public'::regnamespace`
+      );
+      return new Map(rows.map((r) => [r.relname, toRowCount(r.bytes)]));
+    } catch {
+      return new Map();
+    }
+  }
+
   async getTableRowEstimates(
     connection: IDatabaseConnection
   ): Promise<Map<string, number>> {

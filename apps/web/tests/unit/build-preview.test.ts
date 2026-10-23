@@ -34,6 +34,8 @@ function preview(overrides: Partial<PreviewInput> = {}) {
     diff: emptyDiff(),
     plan: emptyPlan(['orders']),
     rowEstimates: new Map(),
+    sizeEstimates: new Map(),
+    runnerClasses: [],
     translateType: (type) => type,
   };
   return buildPreview({ ...base, ...overrides });
@@ -87,9 +89,9 @@ describe('buildPreview — what each table will have done to it', () => {
     });
 
     expect(result.tables).toEqual([
-      { tableName: 'orders', rowsEstimated: null, disposition: 'load' },
-      { tableName: 'customers', rowsEstimated: null, disposition: 'create' },
-      { tableName: 'legacy_notes', rowsEstimated: null, disposition: 'extra' },
+      { tableName: 'orders', rowsEstimated: null, bytesEstimated: null, disposition: 'load' },
+      { tableName: 'customers', rowsEstimated: null, bytesEstimated: null, disposition: 'create' },
+      { tableName: 'legacy_notes', rowsEstimated: null, bytesEstimated: null, disposition: 'extra' },
     ]);
   });
 
@@ -242,5 +244,40 @@ describe('buildPreview — the cases that are easy to get wrong', () => {
 
   it('stamps when it ran, because a preview is a snapshot and not a promise', () => {
     expect(Number.isNaN(Date.parse(preview().takenAt))).toBe(false);
+  });
+});
+
+describe('buildPreview — size, and which runner to use', () => {
+  const GB = 1_000_000_000;
+  const classes = [
+    { name: 'default', label: 'Default', suggestAboveBytes: null },
+    { name: 'large', label: 'Large', suggestAboveBytes: 20 * GB },
+    { name: 'xlarge', label: 'Extra large', suggestAboveBytes: 200 * GB },
+  ];
+
+  it('totals the source tables\' bytes and reports each one', () => {
+    const result = preview({
+      sourceSchema: schema([table('orders'), table('customers')]),
+      targetSchema: schema([table('legacy_notes')]),
+      sizeEstimates: new Map([['orders', 30 * GB], ['customers', 2 * GB], ['legacy_notes', 999]]),
+      runnerClasses: classes,
+    });
+    expect(result.totalBytesEstimated).toBe(32 * GB);
+    expect(result.tables.find((t) => t.tableName === 'orders')?.bytesEstimated).toBe(30 * GB);
+    // Destination-only tables are not part of what moves.
+    expect(result.tables.find((t) => t.tableName === 'legacy_notes')?.bytesEstimated).toBeNull();
+    expect(result.runnerSuggestion).toEqual({ runnerClass: 'large', label: 'Large', aboveBytes: 20 * GB });
+  });
+
+  it('says the size is unknown, and suggests nothing, when the engine could not say', () => {
+    const result = preview({ runnerClasses: classes });
+    expect(result.totalBytesEstimated).toBeNull();
+    expect(result.runnerSuggestion).toBeNull();
+  });
+
+  it('suggests nothing for a source below every threshold', () => {
+    const result = preview({ sizeEstimates: new Map([['orders', GB]]), runnerClasses: classes });
+    expect(result.totalBytesEstimated).toBe(GB);
+    expect(result.runnerSuggestion).toBeNull();
   });
 });

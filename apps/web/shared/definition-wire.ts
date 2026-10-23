@@ -1,4 +1,5 @@
 import type { RunMode } from './pair-capability';
+import type { RunnerSuggestion } from './runner-suggestion';
 
 /**
  * The definition and preview contracts, declared once for both halves.
@@ -74,6 +75,8 @@ export interface PreviewTable {
   tableName: string;
   /** Absent for a table only the destination has. */
   rowsEstimated: number | null;
+  /** Bytes on disk, data plus indexes. Null when the engine could not say, and for `extra` tables. */
+  bytesEstimated: number | null;
   /**
    * `create` — new in the destination.
    * `load`   — already there; it will be emptied and reloaded.
@@ -105,6 +108,10 @@ export interface RunPreview {
   /** Tables in a foreign-key cycle, which the planner cannot order. */
   cyclicTables: string[];
   totalRowsEstimated: number;
+  /** The source tables' size. Null when the source engine could not say (e.g. no permission). */
+  totalBytesEstimated: number | null;
+  /** A bigger runner class to consider, from the size. Never applied for the user. */
+  runnerSuggestion: RunnerSuggestion | null;
   warnings: PreviewWarning[];
   /** When the preview ran. A preview is a snapshot, not a promise. */
   takenAt: string;

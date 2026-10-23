@@ -76,6 +76,22 @@ export class MysqlSchemaInspector implements ISchemaInspector {
     }
   }
 
+  /** InnoDB's own figures, like TABLE_ROWS: an estimate, which is all a class choice needs. */
+  async getTableSizeEstimates(connection: IDatabaseConnection): Promise<Map<string, number>> {
+    try {
+      const db = await this.resolveDatabase(connection);
+      const rows = await connection.query<{ table_name: string; bytes: unknown }>(
+        `SELECT TABLE_NAME as table_name, DATA_LENGTH + INDEX_LENGTH as bytes
+         FROM information_schema.TABLES
+         WHERE TABLE_SCHEMA = ? AND TABLE_TYPE = 'BASE TABLE'`,
+        [db]
+      );
+      return new Map(rows.map((r) => [r.table_name, toRowCount(r.bytes)]));
+    } catch {
+      return new Map();
+    }
+  }
+
   async getTableRowEstimates(connection: IDatabaseConnection): Promise<Map<string, number>> {
     const db = await this.resolveDatabase(connection);
     const rows = await connection.query<TableRowEstimate>(

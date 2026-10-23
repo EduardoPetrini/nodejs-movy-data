@@ -254,4 +254,21 @@ describe('PgSchemaInspector', () => {
       expect(map.get('empty_table')).toBe(0);
     });
   });
+
+  describe('getTableSizeEstimates', () => {
+    it('reads total relation size per table, coercing the bigint strings node-pg returns', async () => {
+      (conn.query as any).mockResolvedValue([
+        { relname: 'users', bytes: '81920' },
+        { relname: 'orders', bytes: 1048576 },
+      ]);
+      const map = await inspector.getTableSizeEstimates(conn);
+      expect(map).toEqual(new Map([['users', 81920], ['orders', 1048576]]));
+      expect((conn.query as any).mock.calls[0][0]).toContain('pg_total_relation_size');
+    });
+
+    it('answers an empty map when it cannot read sizes, since a size never gates a run', async () => {
+      (conn.query as any).mockRejectedValue(new Error('permission denied'));
+      expect(await inspector.getTableSizeEstimates(conn)).toEqual(new Map());
+    });
+  });
 });

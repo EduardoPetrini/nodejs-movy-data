@@ -251,4 +251,23 @@ describe('MssqlSchemaInspector', () => {
       expect(estimates.get('empty_table')).toBe(0);
     });
   });
+
+  describe('getTableSizeEstimates()', () => {
+    it('reads used pages times 8 KB, from catalog views that need no VIEW DATABASE STATE', async () => {
+      (connection.query as ReturnType<typeof import('vitest').vi.fn>).mockResolvedValueOnce([
+        { table_name: 'users', bytes: '65536' },
+      ]);
+      const sizes = await inspector.getTableSizeEstimates(connection);
+      expect(sizes).toEqual(new Map([['users', 65536]]));
+      const [sql, params] = (connection.query as ReturnType<typeof import('vitest').vi.fn>).mock.calls[0];
+      expect(sql).toContain('sys.allocation_units');
+      expect(sql).not.toContain('dm_db_partition_stats');
+      expect(params).toEqual(['dbo']);
+    });
+
+    it('answers an empty map on a permission error, so the preview says the size is unknown', async () => {
+      (connection.query as ReturnType<typeof import('vitest').vi.fn>).mockRejectedValueOnce(new Error('VIEW DEFINITION denied'));
+      expect(await inspector.getTableSizeEstimates(connection)).toEqual(new Map());
+    });
+  });
 });

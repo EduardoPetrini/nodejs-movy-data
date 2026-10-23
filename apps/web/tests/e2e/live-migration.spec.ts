@@ -47,6 +47,18 @@ async function labConnectionId(request: APIRequestContext, name: string): Promis
   return found!.id;
 }
 
+interface LivePreview {
+  tables: { tableName: string; disposition: string; bytesEstimated: number | null }[];
+  totalBytesEstimated: number | null;
+}
+
+/** The size the runner-class suggestion reads, from each engine's own catalog. */
+function expectSizes(review: LivePreview): void {
+  const loaded = review.tables.filter((t) => t.disposition !== 'extra');
+  for (const t of loaded) expect(t.bytesEstimated, `${t.tableName} has no size`).toBeGreaterThan(0);
+  expect(review.totalBytesEstimated).toBe(loaded.reduce((n, t) => n + (t.bytesEstimated ?? 0), 0));
+}
+
 /**
  * Test both ends, save a definition, review it, run it, watch it finish in the
  * browser, then compare counts. A run that says "succeeded" is a claim; the
@@ -80,12 +92,11 @@ async function migrateAndCompare(page: Page, pair: LivePair): Promise<void> {
 
   const preview = await request.post(`/api/orgs/${ORG}/runs/preview`, { data: { definitionId } });
   expect(preview.ok(), await preview.text()).toBeTruthy();
-  const { preview: review } = (await preview.json()) as {
-    preview: { tables: { tableName: string; disposition: string }[] };
-  };
+  const { preview: review } = (await preview.json()) as { preview: LivePreview };
   // Destination-only tables are listed too; only the ones this run loads count.
   const loaded = review.tables.filter((t) => t.disposition === 'create' || t.disposition === 'load');
   expect(loaded.map((t) => t.tableName).sort()).toEqual(FIXTURE_TABLES);
+  expectSizes(review);
 
   const launched = await request.post(`/api/orgs/${ORG}/runs`, { data: { definitionId } });
   expect(launched.ok(), await launched.text()).toBeTruthy();
@@ -143,5 +154,21 @@ test.describe('a live migration against the lab databases', () => {
 
   test('MySQL -> SQL Server runs, and the counts match afterwards', async ({ page }) => {
     await migrateAndCompare(page, { source: 'Lab MySQL', target: 'Lab SQL Server' });
+  });
+
+  // No live Pair reads SQL Server as a source, so its size query is checked
+  // with a preview alone: read-only, nothing is migrated.
+  test('SQL Server as a source reports its size in the preview', async ({ page }) => {
+    const request = page.request;
+    const preview = await request.post(`/api/orgs/${ORG}/runs/preview`, {
+      data: {
+        sourceConnectionId: await labConnectionId(request, 'Lab SQL Server'),
+        targetConnectionId: await labConnectionId(request, 'Lab PostgreSQL'),
+        sourceDatabase: 'movy_src',
+        targetDatabase: 'movy_dst',
+      },
+    });
+    expect(preview.ok(), await preview.text()).toBeTruthy();
+    expectSizes(((await preview.json()) as { preview: LivePreview }).preview);
   });
 });

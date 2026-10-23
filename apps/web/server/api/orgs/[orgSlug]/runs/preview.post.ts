@@ -7,6 +7,8 @@ import { toConnectionConfig, parseEngine } from '~~/server/utils/connection-conf
 import { describeConnectionFailure } from '~~/server/utils/safe-error';
 import { buildPreview } from '~~/server/definitions/build-preview';
 import { resolveRunTarget } from '~~/server/runs/resolve-target';
+import { useMetaSql } from '~~/server/runs';
+import { listConfiguredClasses } from '~~/server/runners/runner-classes';
 
 /**
  * What this run would do, before it does any of it.
@@ -90,6 +92,9 @@ export default defineEventHandler(async (event) => {
 
     const rowEstimates = await sourceInspector.getTableRowEstimates(sourceConnection);
     const plan = new TableMigrationPlanner().plan(sourceSchema.tables, rowEstimates);
+    // Advisory: the inspector answers an empty map rather than failing the preview.
+    const sizeEstimates = (await sourceInspector.getTableSizeEstimates?.(sourceConnection)) ?? new Map<string, number>();
+    const runnerClasses = await listConfiguredClasses(useMetaSql());
 
     return {
       preview: buildPreview({
@@ -101,6 +106,8 @@ export default defineEventHandler(async (event) => {
         diff,
         plan,
         rowEstimates,
+        sizeEstimates,
+        runnerClasses,
         translateType: (type) => translator.translateColumnType(type, sourceType, destType),
       }),
     };
