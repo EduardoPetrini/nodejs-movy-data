@@ -407,9 +407,9 @@ happens at the claim. No Redis, no BullMQ: Postgres was already there.
   across restarts of the same host, so it re-attaches to its own runs. On start it
   re-attaches and heartbeats **before** it claims, extending those leases ahead of any
   sweep.
-- **An agent in its own process cannot yet push live events**: the embedded agent
-  broadcasts through `EventWriter.onFlushed` into this process's hub, and an external
-  one needs the NOTIFY bus of phase 3. Clients still catch up over REST.
+- **Events reach the browser through the database, whichever process ran the run** —
+  see *The live stream*: there is no in-process shortcut, so an embedded agent and an
+  external one are indistinguishable to a client.
 
 The queue SQL is tested against **PGlite with the real migrations**
 (`apps/runner/tests/unit/agent/queue-store.test.ts`, harness in
@@ -479,6 +479,10 @@ server. Handler: `server/routes/_ws/runs.ts`.
 | `server/runs/run-hub.ts` | Rooms, fan-out, cohort split, role revalidation. Membership is a plain data structure so isolation is unit-testable. |
 | `server/runs/subscription-ticket.ts` | Single-use, 30s, CSPRNG tickets. Constant-time lookup. |
 | `server/runs/snapshot.ts` | A subscriber's opening state, read with the grant's org id in the WHERE clause. |
+| `server/runs/run-event-feed.ts` | **Pure.** NOTIFY pointer → read `run_events` past a per-run cursor → `hub.publish`. Every ordering rule below lives here. |
+| `server/runs/pg-listener.ts` | One dedicated, unpooled connection holding `LISTEN`; reconnects with backoff and reports it, so the feed can re-read. |
+| `server/runners/runner-hub.ts` | Runner availability rooms, one per org and audience; refreshed on `NOTIFY movy_runners` and every 5 s while watched. |
+| `server/runners/runner-summary.ts` | The panel's numbers: capacity across all runners, queue depth for this org only, runner ids for admins only. |
 
 **The socket performs no authorisation.** A client POSTs
 `/api/orgs/:slug/runs/:id/ticket` — an ordinary request that has been through
@@ -487,11 +491,35 @@ the result. `roomKey()` is therefore reachable only with a `SubscriptionGrant`,
 so nothing from the wire can reach a room name. Do not add a string-keyed join;
 `socket-isolation.test.ts` asserts the source shape, not only the behaviour.
 
-**Broadcast happens after the durable write** (`EventWriter.onFlushed`). A
-client reads its snapshot from the database and then goes live, so announcing an
-event before it is queryable would leave a hole the client cannot detect. For
-the same reason a peer joins its room *before* its snapshot is read: an overlap
-is a duplicate the client drops by `seq`, which a gap is not.
+**Broadcast happens after the durable write — by construction now.** A client
+reads its snapshot from the database and then goes live, so announcing an event
+before it is queryable would leave a hole the client cannot detect. The agent's
+`applyProjection` sends `NOTIFY movy_run_events '{runId, lastSeq}'` **inside the
+same transaction** that stores the events, and Postgres delivers a NOTIFY only on
+commit; the web's `RunEventFeed` then reads committed rows past its cursor. That
+holds for an agent in any process, which `EventWriter.onFlushed` — a callback in
+one process, now unused — never could. The payload is a pointer because NOTIFY is
+capped at 8 KB and a log line can be longer.
+
+For the same reason a peer joins its room *before* its snapshot is read, and the
+socket handler awaits `feed.track(runId)` — which fixes the cursor at the stored
+`last_seq` — before reading it: an overlap is a duplicate the client drops by
+`seq`, which a gap is not. A run already tracked keeps its cursor; moving it
+forward for a second peer would skip events for the first.
+
+**NOTIFY has no replay**, so when the LISTEN connection drops and comes back the
+feed re-reads past every cursor (`resync`). Reads for one run never overlap; a
+notification that arrives mid-read folds into one more read. Every web replica
+listens and fans out to its own sockets; nothing coordinates them.
+
+**Runner availability** (`/_ws/runners`, `POST /api/orgs/:slug/runners/ticket`) is a
+second hub with its own ticket store, so a run-stream ticket can never open it. It
+follows the same rules: a server-minted grant, a private `roomKey`, a handler that
+decides nothing, roles revalidated on every refresh. Capacity is counted across all
+runners (they are platform-wide); the queue depth is this org's only; runner ids are
+hostnames and go to the admin room only. A heartbeat does not NOTIFY — it happens
+every 5 s per runner — so the hub refreshes on an interval while anyone watches and
+sends a frame only when it changed.
 
 **A demotion reaches a live socket** within one 5s revalidation interval — one
 batched query for all subscribers, deduplicated per person. The subscriber's

@@ -42,6 +42,7 @@ phase is indistinguishable from one that was never started.
 | R0 — Compose foundations (runner service plan) | **DONE** (2026-10-22) | `docker-compose.yml`: meta-db, migrate, seed, web, three seeded lab DBs, CLI, e2e. Live gate moved PG→MySQL → PG→PG + MySQL→PG after it found the auto-increment gap; see *R0* below. Next: R1 (extract `@movy/db`) |
 | R1 — extract `@movy/db`, move run control into `apps/runner` | **DONE** (2026-10-22) | no behaviour change; web still forks. Gate met: moved tests changed import paths only, 1262/1262, `pnpm docker:e2e` green. See *R1* below. Next: R2 (queue and agent) |
 | R2 — queue and agent | **DONE** (2026-10-22) | migration `0004`; agent claims from `runs` (SKIP LOCKED), heartbeats a lease, fences, drains; sweeper settles lost runs; web enqueues instead of forking, embedded agent by default. Gate met: `pnpm docker:e2e` 13/13 on the embedded agent. See *R2* below. Next: R3 (NOTIFY bus) |
+| R3 — NOTIFY bus and runner availability | **DONE** (2026-10-22) | events reach the hub through `LISTEN movy_run_events` (the in-process `onFlushed` path is gone); runners socket, ticket and panel on the org home and runs page. See *R3* below. Next: R4 (destination lock and classes) |
 
 ### Remaining work
 
@@ -1434,4 +1435,32 @@ re-run treats `decimal` and `numeric` as one type.
   the embedded runner registered, heartbeating, claimed every run, and `run_specs` was
   empty afterwards.
 - **Next — R3**: the NOTIFY bus, so an agent outside the web process reaches the hub.
+
+## R3 — NOTIFY bus and runner availability (2026-10-22)
+
+- **One path for run events, whatever process ran the run.** `applyProjection` sends
+  `NOTIFY movy_run_events '{runId, lastSeq}'` inside its transaction (delivered only on
+  commit, never on rollback — tested on PGlite); the web's `RunEventFeed` reads
+  `run_events` past a per-run cursor and publishes to the unchanged `RunHub`. The
+  embedded agent's in-process `onFlushed` broadcast is removed, so the embedded and
+  external cases cannot behave differently.
+- **Ordering**: the socket awaits `feed.track()` (cursor = stored `last_seq`) before
+  reading the snapshot; a second peer never moves the cursor; reads per run never
+  overlap; a reconnect of the dedicated LISTEN connection (`PgListener`) triggers
+  `resync()`, since NOTIFY has no replay. `RunEventFeed` is pure and has ten tests.
+- **Runner availability**: `movy_runners` NOTIFY on register / state change / sweeper
+  offline (never per heartbeat); `RunnerHub` with its own ticket store and
+  `/_ws/runners`; refresh on NOTIFY and every 5 s while watched, sending only a
+  changed frame; roles revalidated each refresh. `RunnerAvailability.vue` sits in the
+  org home's summary rail and as a strip on the runs page; wording from the pure
+  `classSentence()`. Capacity is platform-wide, queue depth is this org's, runner ids
+  are admin-only.
+- **Found while looking at it**: every rebuilt container is a new embedded runner id,
+  so offline runners accumulated. The admin list drops a runner an hour after it went
+  offline; the sweeper deletes it after a day.
+- **Verified**: `pnpm test` 1370/1370; `pnpm typecheck` clean; `pnpm docker:e2e` 16/16,
+  including the mid-run reload over the new feed and the three panel tests; screenshots
+  at 1280 and 375.
+- **Not done**: "Start a runner" (phase 6, needs a provisioner); queue reasons in the UI
+  (phase 4, with the destination lock).
 
