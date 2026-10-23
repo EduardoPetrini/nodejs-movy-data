@@ -43,6 +43,13 @@
       "when": 1792760465383,
       "tag": "0005_destination_lock",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1792760548881,
+      "tag": "0006_runner_class_config",
+      "breakpoints": true
     }
   ]
 }

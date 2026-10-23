@@ -59,6 +59,8 @@ export interface WireRun {
   status: string;
   mode: string;
   simulated: boolean;
+  /** Which kind of runner it was queued for. */
+  runnerClass: string;
   source: WireEndpoint;
   target: WireEndpoint;
   progress: { rowsDone: number; rowsTotal: number; tablesDone: number; tablesTotal: number; pct: number };

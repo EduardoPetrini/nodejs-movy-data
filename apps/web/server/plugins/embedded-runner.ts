@@ -1,4 +1,5 @@
-import { closeEventWriter, useRunHub, useRunnerAgent } from '~~/server/runs';
+import { closeEventWriter, useMetaSql, useRunHub, useRunnerAgent } from '~~/server/runs';
+import { ensureRunnerClasses } from '~~/server/runners/runner-classes';
 
 /**
  * Starts the runner agent inside this web process (`MOVY_EMBEDDED_RUNNER`,
@@ -19,7 +20,8 @@ export default defineNitroPlugin((nitro) => {
   if (!agent) {
     console.info('[runs] embedded runner off (MOVY_EMBEDDED_RUNNER=false): runs wait for an external runner.');
   } else {
-    void agent.start().catch((err: unknown) => {
+    // Its class may be one the class file defines, which must exist before it registers.
+    void ensureRunnerClasses(useMetaSql()).then(() => agent.start()).catch((err: unknown) => {
       console.error('[runs] embedded runner failed to start:', err instanceof Error ? err.message : err);
     });
   }

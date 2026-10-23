@@ -30,6 +30,8 @@ export interface WireDefinition {
   /** Query mode only. */
   querySql: string | null;
   targetTableName: string | null;
+  /** The runner class its runs go to; null follows the default. */
+  runnerClass: string | null;
   archivedAt: string | null;
   createdAt: string;
   updatedAt: string;

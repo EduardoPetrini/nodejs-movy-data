@@ -22,6 +22,7 @@ export default defineEventHandler(async (event) => {
       mode: input.mode,
       querySql: input.querySql,
       targetTableName: input.targetTableName,
+      runnerClass: input.runnerClass,
       createdByUserId: org.userId,
     });
 

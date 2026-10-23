@@ -19,6 +19,13 @@ export const runnerClasses = pgTable('runner_classes', {
   /** Suggest this class when the source is larger than this many bytes. */
   suggestAboveBytes: bigint('suggest_above_bytes', { mode: 'number' }),
   isDefault: boolean('is_default').notNull().default(false),
+  /**
+   * False once the class file stops naming it. The row stays — runs and
+   * definitions reference it — but nothing new may be sent to it, and the
+   * selector does not offer it. True by default, so a deployment with no
+   * class file keeps the `default` that migration 0004 seeded.
+   */
+  configured: boolean('configured').notNull().default(true),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });

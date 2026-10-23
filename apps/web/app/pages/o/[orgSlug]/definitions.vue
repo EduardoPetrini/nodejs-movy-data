@@ -63,6 +63,7 @@ const emptyForm = () => ({
   mode: 'full' as RunMode,
   querySql: '',
   targetTableName: '',
+  runnerClass: '',
 })
 
 const form = reactive(emptyForm())
@@ -93,6 +94,7 @@ function startEdit(definition: WireDefinition) {
     mode: definition.mode,
     querySql: definition.querySql ?? '',
     targetTableName: definition.targetTableName ?? '',
+    runnerClass: definition.runnerClass ?? '',
   })
   formError.value = null
   editing.value = definition.id
@@ -189,6 +191,8 @@ async function archive(definition: WireDefinition) {
           <input v-model="form.targetDatabase" type="text" placeholder="follow the connection">
         </label>
       </div>
+
+      <RunnerClassSelect v-model="form.runnerClass" :org-slug="orgSlug" />
 
       <template v-if="form.mode === 'query'">
         <label class="field">

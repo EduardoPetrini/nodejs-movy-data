@@ -67,6 +67,7 @@ export function toPublicDefinition(
     ),
     querySql: row.querySql,
     targetTableName: row.targetTableName,
+    runnerClass: row.runnerClass,
     archivedAt: row.archivedAt?.toISOString() ?? null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),

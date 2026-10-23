@@ -1,0 +1,3 @@
+ALTER TABLE "migration_definitions" ADD COLUMN "runner_class" text;--> statement-breakpoint
+ALTER TABLE "runner_classes" ADD COLUMN "configured" boolean DEFAULT true NOT NULL;--> statement-breakpoint
+ALTER TABLE "migration_definitions" ADD CONSTRAINT "migration_definitions_runner_class_runner_classes_name_fk" FOREIGN KEY ("runner_class") REFERENCES "public"."runner_classes"("name") ON DELETE no action ON UPDATE no action;

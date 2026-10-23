@@ -32,6 +32,7 @@ export default defineEventHandler(async (event) => {
       mode: input.mode,
       querySql: input.querySql,
       targetTableName: input.targetTableName,
+      runnerClass: input.runnerClass,
     });
     if (!row) throw createError({ statusCode: 404, statusMessage: 'Not Found' });
 

@@ -4,6 +4,8 @@ import { saveAvailability, type WirePair } from '../../shared/pair-capability';
 import { createRepos } from '../repositories';
 import type { ConnectionRow } from '../repositories/connections.repo';
 import { parseDefinitionInput, type DefinitionInput } from './definition-input';
+import { listConfiguredClasses } from '../runners/runner-classes';
+import { useMetaSql } from '../runs';
 
 /**
  * The half of create and update that is identical: validate the body, resolve
@@ -76,6 +78,17 @@ export async function prepareDefinition(
   const availability = saveAvailability(pairs(), source.engine, target.engine, input.mode);
   if (!availability.ok) {
     throw createError({ statusCode: 422, statusMessage: availability.reason });
+  }
+
+  if (input.runnerClass) {
+    const configured = await listConfiguredClasses(useMetaSql());
+    if (!configured.some((c) => c.name === input.runnerClass)) {
+      throw createError({
+        statusCode: 422,
+        statusMessage: `There is no runner class "${input.runnerClass}" configured.`,
+        data: { field: 'runnerClass' },
+      });
+    }
   }
 
   return { input, source, target };

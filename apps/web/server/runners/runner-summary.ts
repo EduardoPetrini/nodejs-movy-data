@@ -27,6 +27,8 @@ export async function loadRunnersSnapshot(
               WHERE q.status = 'queued' AND q.runner_class = c.name AND q.org_id = $1)::int AS queued
        FROM runner_classes c
        LEFT JOIN runners r ON r.class = c.name
+      -- A class the file no longer names takes no new runs, so it has no availability to show.
+      WHERE c.configured
       GROUP BY c.name
       ORDER BY c.is_default DESC, c.name`,
     [orgId]

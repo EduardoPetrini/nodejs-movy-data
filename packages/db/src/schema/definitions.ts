@@ -5,6 +5,7 @@ import { sql } from 'drizzle-orm';
 import { organizations } from './orgs';
 import { connections } from './connections';
 import { users } from './auth';
+import { runnerClasses } from './runners';
 
 /**
  * `full` copies schema and data. `query` writes one SQL result into one new
@@ -55,6 +56,9 @@ export const migrationDefinitions = pgTable(
     /** Query mode only; the check constraint makes that structural. */
     querySql: text('query_sql'),
     targetTableName: text('target_table_name'),
+
+    /** The runner class its runs go to. Null means whichever class is the default. */
+    runnerClass: text('runner_class').references(() => runnerClasses.name),
 
     /** Room for per-definition settings without a migration each time. */
     options: jsonb('options').$type<Record<string, unknown>>().notNull().default({}),

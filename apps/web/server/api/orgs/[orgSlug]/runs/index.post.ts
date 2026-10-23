@@ -4,7 +4,8 @@ import { requirePermission } from '~~/server/utils/rbac';
 import { toConnectionConfig } from '~~/server/utils/connection-config';
 import { toPublicRun } from '~~/server/serializers/run.serializer';
 import { sealRunSpec } from '@movy/runner/agent';
-import { assertSimulationAvailable, useRunnerAgent } from '~~/server/runs';
+import { assertSimulationAvailable, useMetaSql, useRunnerAgent } from '~~/server/runs';
+import { chooseRunnerClass, listConfiguredClasses } from '~~/server/runners/runner-classes';
 import { resolveRunTarget, type RunTargetBody } from '~~/server/runs/resolve-target';
 import { targetLockKey } from '~~/server/runs/target-lock';
 
@@ -19,6 +20,11 @@ interface Body extends RunTargetBody {
    */
   simulate?: boolean;
   speed?: number;
+  /**
+   * The runner class to queue for. Unlike the rest of a definition, the review
+   * screen may override it: a bigger runner does not change WHAT runs.
+   */
+  runnerClass?: string;
 }
 
 /** Recorded pace is 1; below this the replay outlives any reason to watch it. */
@@ -49,6 +55,13 @@ export default defineEventHandler(async (event) => {
   }
 
   if (body?.simulate) assertSimulationAvailable();
+
+  const choice = chooseRunnerClass(
+    await listConfiguredClasses(useMetaSql()),
+    body?.runnerClass,
+    target.definition?.runnerClass ?? null
+  );
+  if (!choice.ok) throw createError({ statusCode: choice.statusCode, statusMessage: choice.message });
 
   const runId = randomUUID();
 
@@ -90,6 +103,7 @@ export default defineEventHandler(async (event) => {
       targetDatabase: target.targetDatabase,
       mode: target.mode,
       simulated: Boolean(body?.simulate),
+      runnerClass: choice.runnerClass,
       // One run per destination, across orgs: the claim waits while another
       // run holds it. A replay writes nowhere, so it locks nothing.
       targetLockKey: body?.simulate

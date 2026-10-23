@@ -42,6 +42,8 @@ const mode = ref<RunMode>('full')
 const sourceDatabase = ref('')
 const targetDatabase = ref('')
 const simulate = ref(false)
+/** '' follows the saved migration's class, else the default. Not part of WHAT runs, so it may differ from the definition. */
+const runnerClass = ref('')
 const selectable = ref<{ ok: boolean; reason?: string }>({ ok: false })
 
 const chosen = computed(() => definitions.value.find((d) => d.id === definitionId.value))
@@ -61,6 +63,7 @@ watchEffect(() => {
   mode.value = definition.mode
   sourceDatabase.value = definition.source.pinned ? definition.source.database : ''
   targetDatabase.value = definition.target.pinned ? definition.target.database : ''
+  runnerClass.value = definition.runnerClass ?? ''
 })
 
 // ---- preview ----
@@ -125,6 +128,7 @@ async function launch() {
       method: 'POST',
       body: {
         ...requestBody(),
+        ...(runnerClass.value ? { runnerClass: runnerClass.value } : {}),
         // A filesystem path is the server's business, not the browser's: the
         // client asks for simulation and the server decides what to replay.
         ...(simulate.value ? { simulate: true, speed: 0.02 } : {}),
@@ -196,6 +200,8 @@ const needsPreview = computed(() => !simulate.value && !preview.value)
           Edit it on the Migrations page to change any of this.
         </p>
         <p v-else-if="!selectable.ok && selectable.reason" class="hint">{{ selectable.reason }}</p>
+
+        <RunnerClassSelect v-model="runnerClass" :org-slug="orgSlug" />
 
         <label class="check">
           <input v-model="simulate" type="checkbox">

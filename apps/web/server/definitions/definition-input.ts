@@ -27,6 +27,8 @@ export interface DefinitionInput {
   mode: RunMode;
   querySql: string | null;
   targetTableName: string | null;
+  /** Null means "whichever class is the default when it runs". */
+  runnerClass: string | null;
 }
 
 export interface InputError {
@@ -56,6 +58,9 @@ function trimmed(value: unknown): string | null {
  * it can be widened deliberately.
  */
 const TABLE_NAME = /^[A-Za-z_][A-Za-z0-9_$]*$/;
+
+/** The class file's own rule. Whether the class is configured is `prepareDefinition`'s question. */
+const RUNNER_CLASS = /^[a-z][a-z0-9-]{0,31}$/;
 
 export function parseDefinitionInput(body: unknown): ParseResult {
   if (typeof body !== 'object' || body === null || Array.isArray(body)) {
@@ -95,6 +100,11 @@ export function parseDefinitionInput(body: unknown): ParseResult {
     );
   }
 
+  const runnerClass = trimmed(raw.runnerClass);
+  if (runnerClass && !RUNNER_CLASS.test(runnerClass)) {
+    return fail('runnerClass', 'That is not a runner class name.');
+  }
+
   const modeRaw = raw.mode === undefined ? 'full' : raw.mode;
   if (modeRaw !== 'full' && modeRaw !== 'query') {
     return fail('mode', 'Mode must be "full" or "query".');
@@ -121,7 +131,7 @@ export function parseDefinitionInput(body: unknown): ParseResult {
       ok: true,
       value: {
         name, description, sourceConnectionId, targetConnectionId,
-        sourceDatabase, targetDatabase, mode, querySql, targetTableName,
+        sourceDatabase, targetDatabase, mode, querySql, targetTableName, runnerClass,
       },
     };
   }
@@ -134,7 +144,7 @@ export function parseDefinitionInput(body: unknown): ParseResult {
     ok: true,
     value: {
       name, description, sourceConnectionId, targetConnectionId,
-      sourceDatabase, targetDatabase, mode, querySql: null, targetTableName: null,
+      sourceDatabase, targetDatabase, mode, querySql: null, targetTableName: null, runnerClass,
     },
   };
 }

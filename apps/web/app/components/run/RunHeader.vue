@@ -57,6 +57,7 @@ const rows = new Intl.NumberFormat()
     <dl class="facts">
       <div><dt class="mv-label">From</dt><dd class="mv-mono">{{ run.source.database }}</dd></div>
       <div><dt class="mv-label">To</dt><dd class="mv-mono">{{ run.target.database }}</dd></div>
+      <div><dt class="mv-label">Runner</dt><dd class="mv-mono">{{ run.runnerClass }}</dd></div>
       <div>
         <dt class="mv-label">Rows</dt>
         <dd class="mv-num">{{ rows.format(run.progress.rowsDone) }}<span class="of"> / {{ rows.format(run.progress.rowsTotal) }}</span></dd>
