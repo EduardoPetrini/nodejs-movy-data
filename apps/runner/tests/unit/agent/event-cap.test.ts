@@ -1,8 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { MigrationEvent } from '@movy/core';
-import { EventWriter } from '../../server/runs/event-writer';
-import type { ProjectionStore } from '../../server/runs/event-writer';
-import type { Projection } from '../../server/runs/run-projection';
+import { EventWriter } from '../../../src/agent/event-writer';
+import type { ProjectionStore } from '../../../src/agent/event-writer';
+import type { Projection } from '../../../src/agent/run-projection';
 
 /**
  * `run_events` had no ceiling. `log` is the one unbounded event type — the

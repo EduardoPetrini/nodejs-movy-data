@@ -5,10 +5,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ChildProcess } from 'node:child_process';
 import type { MigrationEvent } from '@movy/core';
-import { RUNNER_EXIT } from '@movy/runner/protocol';
-import { EventWriter } from '../../server/runs/event-writer';
-import { RunManager } from '../../server/runs/run-manager';
-import type { RunManagerStore } from '../../server/runs/run-manager';
+import { RUNNER_EXIT } from '../../../src/protocol';
+import { EventWriter } from '../../../src/agent/event-writer';
+import { RunManager } from '../../../src/agent/run-manager';
+import type { RunManagerStore } from '../../../src/agent/run-manager';
 
 type Unsettled = { id: string; pid: number | null; journalPath: string; lastSeq: number };
 

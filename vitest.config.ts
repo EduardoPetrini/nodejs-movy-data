@@ -13,6 +13,7 @@ const alias = [
   { find: /^@movy\/db$/, replacement: src('packages/db/src/index.ts') },
   { find: /^@movy\/db\/schema$/, replacement: src('packages/db/src/schema/index.ts') },
   { find: /^@movy\/db\/crypto$/, replacement: src('packages/db/src/crypto.ts') },
+  { find: /^@movy\/runner\/agent$/, replacement: src('apps/runner/src/agent/index.ts') },
 ];
 
 export default defineConfig({

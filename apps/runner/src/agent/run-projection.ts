@@ -1,6 +1,6 @@
 import { MIGRATION_STEP_ORDER } from '@movy/core';
 import type { MigrationEvent, MigrationStepId } from '@movy/core';
-import type { RunStatus } from '../db/schema';
+import type { RunStatus } from '@movy/db';
 
 /**
  * Folds a batch of events into the three projections, as plain data.

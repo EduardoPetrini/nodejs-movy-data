@@ -12,6 +12,10 @@
     "./protocol": {
       "types": "./src/protocol.ts",
       "default": "./dist/protocol.js"
+    },
+    "./agent": {
+      "types": "./src/agent/index.ts",
+      "default": "./dist/agent/index.js"
     }
   },
   "scripts": {
@@ -20,6 +24,8 @@
     "typecheck": "tsc -p tsconfig.test.json"
   },
   "dependencies": {
-    "@movy/core": "workspace:*"
+    "@movy/core": "workspace:*",
+    "@movy/db": "workspace:*",
+    "drizzle-orm": "^0.45.2"
   }
 }

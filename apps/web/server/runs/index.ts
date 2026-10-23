@@ -3,14 +3,14 @@ import * as path from 'node:path';
 import { createRequire } from 'node:module';
 import { useDb } from '../db/client';
 import {
+  EventWriter,
+  RunManager,
   applyProjection,
   finaliseRunIfUnsettled,
   findUnsettledRuns,
   markRunLaunched,
-} from '../repositories/runs.repo';
-import { EventWriter } from './event-writer';
+} from '@movy/runner/agent';
 import { RunHub } from './run-hub';
-import { RunManager } from './run-manager';
 import { TicketStore } from './subscription-ticket';
 import { memberships } from '../db/schema';
 import { memberKey } from './run-hub';

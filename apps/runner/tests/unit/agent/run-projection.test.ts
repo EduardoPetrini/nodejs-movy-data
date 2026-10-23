@@ -2,9 +2,9 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { MigrationEvent } from '@movy/core';
-import { projectEvents } from '../../server/runs/run-projection';
+import { projectEvents } from '../../../src/agent/run-projection';
 
-const FIXTURE = join(__dirname, '../../../runner/fixtures/pg-to-pg-315k.ndjson');
+const FIXTURE = join(__dirname, '../../../fixtures/pg-to-pg-315k.ndjson');
 
 function fixtureEvents(): MigrationEvent[] {
   return readFileSync(FIXTURE, 'utf8')

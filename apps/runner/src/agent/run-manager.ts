@@ -1,8 +1,8 @@
 import { fork } from 'node:child_process';
 import * as fs from 'node:fs';
 import type { ChildProcess } from 'node:child_process';
-import { RUNNER_EXIT, isHostToRunner } from '@movy/runner/protocol';
-import type { RunnerToHost } from '@movy/runner/protocol';
+import { RUNNER_EXIT, isHostToRunner } from '../protocol';
+import type { RunnerToHost } from '../protocol';
 import type { MigrationEvent } from '@movy/core';
 import type { EventWriter } from './event-writer';
 import { isProcessAlive, readJournalAfter } from './journal-tailer';

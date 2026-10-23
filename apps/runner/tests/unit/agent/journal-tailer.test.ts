@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { MigrationEvent } from '@movy/core';
-import { isProcessAlive, readJournalAfter } from '../../server/runs/journal-tailer';
+import { isProcessAlive, readJournalAfter } from '../../../src/agent/journal-tailer';
 
 function journal(lines: string[]): string {
   const dir = mkdtempSync(join(tmpdir(), 'movy-journal-'));
