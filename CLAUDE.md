@@ -602,9 +602,9 @@ The run it drives is **simulated** — the bundled fixture replayed through the 
 runner, socket, writer and reducer — so it exercises the whole machinery without
 depending on two throwaway databases existing on whoever's machine runs it.
 
-`live-migration.spec.ts` is the exception: a REAL PostgreSQL→PostgreSQL run against the
-Compose lab, checked by a row-count comparison (PG→MySQL is there as `test.fixme`, see
-the auto-increment gap). It skips unless `MOVY_E2E_LIVE` is set,
+`live-migration.spec.ts` is the exception: REAL PG→PG, MySQL→PG and PG→MySQL runs against
+the Compose lab, each checked by a row-count comparison (PG→MSSQL is there as
+`test.fixme`, see the MSSQL-destination gap). It skips unless `MOVY_E2E_LIVE` is set,
 which only `pnpm docker:e2e` does, and it finds its connections by the names
 `seed-lab.ts` saves. `MOVY_E2E_EXTERNAL_SERVER` turns off Playwright's own `webServer`.
 

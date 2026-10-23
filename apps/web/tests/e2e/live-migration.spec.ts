@@ -117,13 +117,27 @@ test.describe('a live migration against the lab databases', () => {
     await migrateAndCompare(page, { source: 'Lab PostgreSQL', target: 'Lab PostgreSQL' });
   });
 
-  // KNOWN GAP, found by this spec on its first run (2026-10-22): a PG `serial`
-  // reaches MySQL as `int NOT NULL DEFAULT 'nextval(…)'` — the default copied
-  // through as a string literal, which MySQL rejects — so schema sync fails on
-  // the first table. See CLAUDE.md, "Known gap — auto-increment is not carried
-  // across engines". Flip `fixme` to `test` when the translator drops the
-  // nextval default and sets AUTO_INCREMENT.
-  test.fixme('PostgreSQL -> MySQL runs, and the counts match afterwards', async ({ page }) => {
+  // A MySQL AUTO_INCREMENT used to reach PG as a plain integer with no sequence
+  // behind it. It now becomes an identity column, which step 9 reseeds.
+  test('MySQL -> PostgreSQL runs, and the counts match afterwards', async ({ page }) => {
+    await migrateAndCompare(page, { source: 'Lab MySQL', target: 'Lab PostgreSQL' });
+  });
+
+  // A PG `serial` used to reach MySQL as `DEFAULT 'nextval(…)'`, which MySQL
+  // rejects, so this failed on the first table (found by this spec, 2026-10-22).
+  // `carryAutoIncrement` now drops that default and creates AUTO_INCREMENT /
+  // IDENTITY instead. Run twice in a row, the second run also proves a re-run
+  // into a populated destination keeps its primary key.
+  test('PostgreSQL -> MySQL runs, and the counts match afterwards', async ({ page }) => {
     await migrateAndCompare(page, { source: 'Lab PostgreSQL', target: 'Lab MySQL' });
+  });
+
+  // KNOWN GAP, found by this spec (2026-10-22), in the MSSQL-destination copy:
+  // `MssqlConnection.getClient()` pins no connection (mssql's `pool.connect()`
+  // returns the pool), so `SET IDENTITY_INSERT ON` and the INSERT can land on
+  // different sessions; and a 500-row batch exceeds SQL Server's 2100-parameter
+  // cap on any table wider than four columns. Flip to `test` once both are fixed.
+  test.fixme('PostgreSQL -> SQL Server runs, and the counts match afterwards', async ({ page }) => {
+    await migrateAndCompare(page, { source: 'Lab PostgreSQL', target: 'Lab SQL Server' });
   });
 });
