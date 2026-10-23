@@ -113,6 +113,8 @@ onBeforeUnmount(() => { if (timer) clearInterval(timer) })
       </div>
     </header>
 
+    <RunnerAvailability :org-slug="orgSlug" variant="inline" />
+
     <nav class="filters" aria-label="Filter by status">
       <button
         v-for="f in STATUS_FILTERS"

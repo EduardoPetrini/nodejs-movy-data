@@ -2,12 +2,14 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import type { PGlite } from '@electric-sql/pglite';
 import { freshMetaDb } from '../../../../../packages/db/tests/helpers/meta-db';
+import { RUNNERS_CHANNEL } from '../../../src/agent/channels';
 import {
   cancelQueuedRun,
   claimNextRun,
   heartbeat,
   reattachableRuns,
   registerRunner,
+  setRunnerState,
   settleClaimedRun,
   sweep,
   takeRunSpec,
@@ -179,12 +181,53 @@ describe('sweep', () => {
     expect(rows[0].state).toBe('online');
   });
 
+  it('forgets a runner that has been offline for over a day', async () => {
+    await registerRunner(sql, { id: 'gone', runnerClass: 'default', version: '1', slots: 1 });
+    await db.query(`UPDATE runners SET state = 'offline', last_heartbeat_at = now() - interval '25 hours' WHERE id = 'gone'`);
+    await sweep(sql);
+    const { rows } = await db.query(`SELECT id FROM runners ORDER BY id`);
+    expect(rows).toEqual([{ id: 'agent-1' }]);
+  });
+
   it('deletes the spec of a run that settled without being claimed', async () => {
     const id = await enqueue();
     await db.query(`UPDATE runs SET status = 'failed' WHERE id = $1`, [id]);
     await sweep(sql);
     const { rows } = await db.query(`SELECT 1 FROM run_specs WHERE run_id = $1`, [id]);
     expect(rows).toEqual([]);
+  });
+});
+
+describe('runner state announcements', () => {
+  async function listen(): Promise<unknown[]> {
+    const heard: unknown[] = [];
+    await db.listen(RUNNERS_CHANNEL, (p) => heard.push(JSON.parse(p)));
+    return heard;
+  }
+  const settle = () => new Promise((r) => setTimeout(r, 20));
+
+  it('announces a runner coming online and changing state, by class', async () => {
+    const heard = await listen();
+    await registerRunner(sql, { id: 'agent-2', runnerClass: 'large', version: '1', slots: 2 });
+    await setRunnerState(sql, 'agent-2', 'draining');
+    await settle();
+    expect(heard).toEqual([{ runnerClass: 'large' }, { runnerClass: 'large' }]);
+  });
+
+  it('announces the runners the sweeper took offline, since a dead runner cannot', async () => {
+    await db.query(`UPDATE runners SET last_heartbeat_at = now() - interval '1 minute'`);
+    const heard = await listen();
+    await sweep(sql);
+    await settle();
+    expect(heard).toEqual([{ runnerClass: 'default' }]);
+  });
+
+  it('announces nothing for an ordinary heartbeat, which happens every five seconds', async () => {
+    const heard = await listen();
+    await heartbeat(sql, 'agent-1', 0);
+    await sweep(sql);
+    await settle();
+    expect(heard).toEqual([]);
   });
 });
 

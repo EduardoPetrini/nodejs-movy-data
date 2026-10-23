@@ -7,10 +7,13 @@ import { runEvents, runs } from '../db/schema';
 import { toPublicEvent } from '../serializers/run.serializer';
 import { RunEventFeed } from './run-event-feed';
 import { PgListener } from './pg-listener';
+import { RunnerHub, type RunnersGrant } from '../runners/runner-hub';
+import { loadRunnersSnapshot } from '../runners/runner-summary';
 import {
   EventWriter,
   RunManager,
   RUN_EVENTS_CHANNEL,
+  RUNNERS_CHANNEL,
   RunnerAgent,
   SUPPORTED_SPEC_VERSIONS,
   applyProjection,
@@ -30,6 +33,8 @@ let manager: RunManager | undefined;
 let writer: EventWriter | undefined;
 let agent: RunnerAgent | undefined;
 let feed: RunEventFeed | undefined;
+let runnerHub: RunnerHub | undefined;
+let runnersTickets: TicketStore<RunnersGrant> | undefined;
 let listener: PgListener | undefined;
 let hub: RunHub | undefined;
 let tickets: TicketStore | undefined;
@@ -49,7 +54,7 @@ export function useRunHub(): RunHub {
  * The CURRENT role of every subscriber, in one query. Read per check, never
  * cached: a demotion has to take effect on a live socket, not at the
  * subscriber's next reconnect. One query for every subscriber is what makes
- * checking every few seconds affordable.
+ * checking every few seconds affordable. Shared by the run and runner hubs.
  */
 async function resolveRoles(
   pairs: readonly { readonly orgId: string; readonly userId: string }[]
@@ -108,6 +113,25 @@ export function useRunEventFeed(): RunEventFeed {
   return feed;
 }
 
+/** Runner availability for the org home and runs page. */
+export function useRunnerHub(): RunnerHub {
+  if (!runnerHub) {
+    const sql = useMetaSql();
+    runnerHub = new RunnerHub({
+      load: (orgId, includeRunners) => loadRunnersSnapshot(sql, orgId, { includeRunners }),
+      resolveRole: resolveRoles,
+      onError: (err) => console.error('[runners] hub:', err.message),
+    });
+  }
+  return runnerHub;
+}
+
+/** Its own store: a run-stream ticket can never open the runners socket, nor the reverse. */
+export function useRunnersTicketStore(): TicketStore<RunnersGrant> {
+  if (!runnersTickets) runnersTickets = new TicketStore<RunnersGrant>();
+  return runnersTickets;
+}
+
 /**
  * The LISTEN connection behind the feed. Started by the `run-bus` plugin.
  * On every reconnect the feed re-reads past its cursors: NOTIFY has no replay.
@@ -117,13 +141,20 @@ export function useBusListener(): PgListener {
     const runFeed = useRunEventFeed();
     listener = new PgListener({
       connectionString: metaDatabaseUrl(),
-      channels: [RUN_EVENTS_CHANNEL],
+      channels: [RUN_EVENTS_CHANNEL, RUNNERS_CHANNEL],
       onNotification: (channel, payload) => {
+        if (channel === RUNNERS_CHANNEL) {
+          void useRunnerHub().refresh();
+          return;
+        }
         if (channel !== RUN_EVENTS_CHANNEL) return;
         const pointer = parsePointer(payload);
         if (pointer) runFeed.notify(pointer.runId, pointer.lastSeq);
       },
-      onConnected: () => runFeed.resync(),
+      onConnected: () => {
+        runFeed.resync();
+        void useRunnerHub().refresh();
+      },
       onError: (err) => console.warn('[runs] LISTEN connection lost, reconnecting:', err.message),
     });
   }

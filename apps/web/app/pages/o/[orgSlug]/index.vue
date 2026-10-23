@@ -146,6 +146,8 @@ onBeforeUnmount(() => { if (timer) clearInterval(timer) })
             </dd>
           </div>
         </dl>
+
+        <RunnerAvailability :org-slug="orgSlug" variant="rail" />
       </aside>
 
       <section class="ledger" aria-labelledby="ledger-heading">

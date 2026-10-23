@@ -8,6 +8,8 @@
  * already satisfy it — so the tests run this exact SQL, not a mock of it.
  */
 
+import { RUNNERS_CHANNEL } from './channels';
+
 /** What both `pg.Pool` and PGlite provide. */
 export interface SqlClient {
   query<R = Record<string, unknown>>(text: string, params?: unknown[]): Promise<{ rows: R[] }>;
@@ -73,14 +75,23 @@ export function interval(ms: number): string {
   return `${Math.max(0, Math.round(ms))} milliseconds`;
 }
 
+/**
+ * State changes announce themselves on `movy_runners`, in the same statement:
+ * registering, draining, going offline. A heartbeat does not — it happens every
+ * five seconds per runner, and the consoles refresh busy counts on their own.
+ */
 export async function registerRunner(sql: SqlClient, r: RunnerRegistration): Promise<void> {
   await sql.query(
-    `INSERT INTO runners (id, class, version, slots, busy, state, provisioned_by, started_at, last_heartbeat_at)
-     VALUES ($1, $2, $3, $4, 0, 'online', $5, now(), now())
-     ON CONFLICT (id) DO UPDATE SET
-       class = excluded.class, version = excluded.version, slots = excluded.slots, busy = 0,
-       state = 'online', provisioned_by = excluded.provisioned_by,
-       started_at = now(), last_heartbeat_at = now()`,
+    `WITH up AS (
+       INSERT INTO runners (id, class, version, slots, busy, state, provisioned_by, started_at, last_heartbeat_at)
+       VALUES ($1, $2, $3, $4, 0, 'online', $5, now(), now())
+       ON CONFLICT (id) DO UPDATE SET
+         class = excluded.class, version = excluded.version, slots = excluded.slots, busy = 0,
+         state = 'online', provisioned_by = excluded.provisioned_by,
+         started_at = now(), last_heartbeat_at = now()
+       RETURNING class
+     )
+     SELECT pg_notify('${RUNNERS_CHANNEL}', json_build_object('runnerClass', class)::text) FROM up`,
     [r.id, r.runnerClass, r.version, r.slots, r.provisionedBy ?? null]
   );
 }
@@ -90,7 +101,11 @@ export async function setRunnerState(
   runnerId: string,
   state: 'online' | 'draining' | 'offline'
 ): Promise<void> {
-  await sql.query(`UPDATE runners SET state = $2 WHERE id = $1`, [runnerId, state]);
+  await sql.query(
+    `WITH changed AS (UPDATE runners SET state = $2 WHERE id = $1 RETURNING class)
+     SELECT pg_notify('${RUNNERS_CHANNEL}', json_build_object('runnerClass', class)::text) FROM changed`,
+    [runnerId, state]
+  );
 }
 
 /**
@@ -228,7 +243,11 @@ export async function reattachableRuns(
  * - runners silent past `offlineAfterMs` are shown offline;
  * - runs whose lease expired are settled — `failed`, or `cancelled` if a user
  *   had already asked — with the partially-applied warning;
- * - the spec of any run that settled without being claimed is deleted.
+ * - the spec of any run that settled without being claimed is deleted;
+ * - each runner taken offline is announced on `movy_runners`, since a dead
+ *   runner cannot announce itself;
+ * - a runner offline for a day is deleted: a rebuilt container comes back
+ *   under a new hostname, so the old row would otherwise stay forever.
  *
  * Runs with no lease at all (forked before 0004) are left to re-attach.
  */
@@ -239,7 +258,10 @@ export async function sweep(sql: SqlClient, offlineAfterMs = DEFAULT_OFFLINE_AFT
        UPDATE runners SET state = 'offline'
         WHERE (SELECT ok FROM lock) AND state <> 'offline'
           AND last_heartbeat_at < now() - $1::interval
-        RETURNING id
+        RETURNING id, class
+     ),
+     announced AS (
+       SELECT pg_notify('${RUNNERS_CHANNEL}', json_build_object('runnerClass', class)::text) FROM offline
      ),
      settled AS (
        UPDATE runs SET
@@ -250,12 +272,18 @@ export async function sweep(sql: SqlClient, offlineAfterMs = DEFAULT_OFFLINE_AFT
           AND lease_expires_at < now()
         RETURNING id
      ),
+     forgotten AS (
+       DELETE FROM runners
+        WHERE (SELECT ok FROM lock) AND state = 'offline'
+          AND last_heartbeat_at < now() - interval '24 hours'
+     ),
      specs AS (
        DELETE FROM run_specs s USING runs r
         WHERE (SELECT ok FROM lock) AND r.id = s.run_id
           AND r.status IN ('succeeded', 'failed', 'cancelled')
      )
      SELECT (SELECT ok FROM lock) AS swept,
+            (SELECT count(*) FROM announced) AS announced,
             (SELECT array_agg(id) FROM offline) AS offline,
             (SELECT array_agg(id) FROM settled) AS settled`,
     [interval(offlineAfterMs), RUNNER_VANISHED]
