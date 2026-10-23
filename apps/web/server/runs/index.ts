@@ -14,6 +14,9 @@ import {
   RunManager,
   RUN_EVENTS_CHANNEL,
   RUNNERS_CHANNEL,
+  PROBES_CHANNEL,
+  PROBE_DONE_CHANNEL,
+  ProbeWorker,
   RunnerAgent,
   SUPPORTED_SPEC_VERSIONS,
   applyProjection,
@@ -21,8 +24,10 @@ import {
   markRunLaunched,
   reattachableRuns,
   sqlAgentQueue,
+  sqlProbeQueue,
   type SqlClient,
 } from '@movy/runner/agent';
+import { ProbeWaiters } from '../probes/probe-waiters';
 import { RunHub } from './run-hub';
 import { TicketStore } from './subscription-ticket';
 import { memberships } from '../db/schema';
@@ -32,6 +37,8 @@ import { and, asc, eq, gt, or } from 'drizzle-orm';
 let manager: RunManager | undefined;
 let writer: EventWriter | undefined;
 let agent: RunnerAgent | undefined;
+let probeWorker: ProbeWorker | undefined;
+let probeWaiters: ProbeWaiters | undefined;
 let feed: RunEventFeed | undefined;
 let runnerHub: RunnerHub | undefined;
 let runnersTickets: TicketStore<RunnersGrant> | undefined;
@@ -141,10 +148,20 @@ export function useBusListener(): PgListener {
     const runFeed = useRunEventFeed();
     listener = new PgListener({
       connectionString: metaDatabaseUrl(),
-      channels: [RUN_EVENTS_CHANNEL, RUNNERS_CHANNEL],
+      channels: [RUN_EVENTS_CHANNEL, RUNNERS_CHANNEL, PROBES_CHANNEL, PROBE_DONE_CHANNEL],
       onNotification: (channel, payload) => {
         if (channel === RUNNERS_CHANNEL) {
           void useRunnerHub().refresh();
+          return;
+        }
+        if (channel === PROBES_CHANNEL) {
+          // Queued by any replica; this host's embedded worker may take it.
+          void useProbeWorker()?.wake();
+          return;
+        }
+        if (channel === PROBE_DONE_CHANNEL) {
+          const id = parseProbePointer(payload);
+          if (id) useProbeWaiters().notify(id);
           return;
         }
         if (channel !== RUN_EVENTS_CHANNEL) return;
@@ -153,6 +170,8 @@ export function useBusListener(): PgListener {
       },
       onConnected: () => {
         runFeed.resync();
+        useProbeWaiters().notifyAll();
+        void useProbeWorker()?.wake();
         void useRunnerHub().refresh();
       },
       onError: (err) => console.warn('[runs] LISTEN connection lost, reconnecting:', err.message),
@@ -174,6 +193,35 @@ function parsePointer(payload: string): { runId: string; lastSeq: number } | nul
   return null;
 }
 
+function parseProbePointer(payload: string): string | null {
+  try {
+    const parsed = JSON.parse(payload) as { id?: unknown };
+    return typeof parsed.id === 'string' ? parsed.id : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The requests on this host waiting for a probe's answer. */
+export function useProbeWaiters(): ProbeWaiters {
+  probeWaiters ??= new ProbeWaiters();
+  return probeWaiters;
+}
+
+/**
+ * The embedded agent's probe worker: answers Test and Preview asked of this
+ * host's class. Undefined when this host runs no agent.
+ */
+export function useProbeWorker(): ProbeWorker | undefined {
+  if (!isEmbeddedRunner()) return undefined;
+  probeWorker ??= new ProbeWorker({
+    queue: sqlProbeQueue(useMetaSql(), embeddedRunnerId(), embeddedRunnerClass()),
+    slots: probeSlots(),
+    onError: (err, probeId) => console.error(`[probes] ${probeId ?? 'worker'}:`, err.message),
+  });
+  return probeWorker;
+}
+
 /**
  * Whether this web process runs an agent in-process.
  *
@@ -184,6 +232,10 @@ function parsePointer(payload: string): { runId: string; lastSeq: number } | nul
  */
 export function isEmbeddedRunner(): boolean {
   return process.env.MOVY_EMBEDDED_RUNNER !== 'false';
+}
+
+export function embeddedRunnerClass(): string {
+  return process.env.MOVY_RUNNER_CLASS || 'default';
 }
 
 /** Stable across restarts of this host, so it re-attaches to its own runs. */
@@ -243,9 +295,10 @@ export function useRunnerAgent(): RunnerAgent | undefined {
     agent = new RunnerAgent({
       queue: sqlAgentQueue(sql, {
         id: runnerId,
-        runnerClass: process.env.MOVY_RUNNER_CLASS || 'default',
+        runnerClass: embeddedRunnerClass(),
         version: `spec-v${SUPPORTED_SPEC_VERSIONS.join(',')}`,
         slots: runnerSlots(),
+        probeSlots: probeSlots(),
       }),
       control: manager,
       slots: runnerSlots(),
@@ -272,6 +325,14 @@ export async function closeEventWriter(): Promise<void> {
 function runnerSlots(): number {
   const n = Number(process.env.MOVY_RUNNER_SLOTS);
   return Number.isInteger(n) && n > 0 ? n : 4;
+}
+
+/** Probes answered at once (`MOVY_RUNNER_PROBE_SLOTS`, default 2; 0 answers none). */
+function probeSlots(): number {
+  const raw = process.env.MOVY_RUNNER_PROBE_SLOTS;
+  const n = Number(raw);
+  // `Number('')` is 0, which would silently turn probes off.
+  return raw && Number.isInteger(n) && n >= 0 ? n : 2;
 }
 
 /**

@@ -1,4 +1,4 @@
-import { closeEventWriter, useMetaSql, useRunHub, useRunnerAgent } from '~~/server/runs';
+import { closeEventWriter, useMetaSql, useProbeWorker, useRunHub, useRunnerAgent } from '~~/server/runs';
 import { ensureRunnerClasses } from '~~/server/runners/runner-classes';
 
 /**
@@ -21,14 +21,20 @@ export default defineNitroPlugin((nitro) => {
     console.info('[runs] embedded runner off (MOVY_EMBEDDED_RUNNER=false): runs wait for an external runner.');
   } else {
     // Its class may be one the class file defines, which must exist before it registers.
-    void ensureRunnerClasses(useMetaSql()).then(() => agent.start()).catch((err: unknown) => {
-      console.error('[runs] embedded runner failed to start:', err instanceof Error ? err.message : err);
-    });
+    void ensureRunnerClasses(useMetaSql())
+      .then(() => agent.start())
+      .then(() => useProbeWorker()?.start())
+      .catch((err: unknown) => {
+        console.error('[runs] embedded runner failed to start:', err instanceof Error ? err.message : err);
+      });
   }
 
   nitro.hooks.hook('close', async () => {
     // Stop claiming and detach without killing: the runs outlive us, on purpose,
     // and the restarted host re-attaches to them under the same runner id.
+    // Probes first: they are seconds long, and the agent going offline would
+    // leave a probe's request waiting on a runner that no longer answers.
+    await useProbeWorker()?.stop();
     await agent?.stop();
     useRunHub().close();
     await closeEventWriter();

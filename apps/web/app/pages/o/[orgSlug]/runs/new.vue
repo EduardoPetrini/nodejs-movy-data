@@ -3,6 +3,8 @@ import type { RunPreview, WireDefinition } from '#shared/definition-wire'
 import type { RunMode } from '#shared/pair-capability'
 import type { WireRun } from '#shared/run-wire'
 import { suggestionSentence } from '#shared/runner-suggestion'
+import { WEB_VIA, viaDisplay } from '#shared/probe-via'
+import type { RunnersSnapshot } from '#shared/runner-wire'
 
 /**
  * Review, then run.
@@ -46,6 +48,16 @@ const simulate = ref(false)
 /** '' follows the saved migration's class, else the default. Not part of WHAT runs, so it may differ from the definition. */
 const runnerClass = ref('')
 const selectable = ref<{ ok: boolean; reason?: string }>({ ok: false })
+/**
+ * Where the preview inspects from. Not part of the request body the preview is
+ * keyed on: the same databases seen from a runner are the same databases, so
+ * changing it keeps the preview and only says where it was read.
+ */
+const previewVia = ref(WEB_VIA)
+const previewedVia = ref(WEB_VIA)
+const { data: runners } = useFetch<RunnersSnapshot>(`/api/orgs/${orgSlug}/runners`, {
+  key: `runner-classes-${orgSlug}`,
+})
 
 const chosen = computed(() => definitions.value.find((d) => d.id === definitionId.value))
 
@@ -102,12 +114,14 @@ watch(
 async function runPreview() {
   previewError.value = null
   previewing.value = true
+  const via = previewVia.value
   try {
     const result = await $fetch<{ preview: RunPreview }>(`/api/orgs/${orgSlug}/runs/preview`, {
       method: 'POST',
-      body: requestBody(),
+      body: { ...requestBody(), via },
     })
     preview.value = result.preview
+    previewedVia.value = via
   } catch (err) {
     previewError.value =
       (err as { statusMessage?: string }).statusMessage ?? 'Could not inspect those databases.'
@@ -223,6 +237,7 @@ const needsPreview = computed(() => !simulate.value && !preview.value)
           <AppButton :disabled="!ready || previewing || simulate" @click="runPreview">
             {{ previewing ? 'Inspecting…' : preview ? 'Refresh preview' : 'Preview' }}
           </AppButton>
+          <ProbeViaSelect v-if="!simulate" v-model="previewVia" :org-slug="orgSlug" label="Inspect from" :disabled="previewing" />
           <p v-if="simulate" class="muted">
             A simulated run replays a recording, so there is nothing to inspect.
           </p>
@@ -236,6 +251,9 @@ const needsPreview = computed(() => !simulate.value && !preview.value)
         <p v-if="suggestion" class="suggest" data-testid="runner-suggestion">
           <span>{{ suggestion.text }}</span>
           <AppButton @click="runnerClass = suggestion.runnerClass">Use it</AppButton>
+        </p>
+        <p v-if="preview && previewedVia !== WEB_VIA" class="muted" data-testid="preview-via">
+          Inspected from {{ viaDisplay(previewedVia, runners?.classes ?? []) }}.
         </p>
         <PreviewPanel v-if="preview" :preview="preview" />
       </section>

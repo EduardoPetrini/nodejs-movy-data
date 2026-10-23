@@ -17,6 +17,11 @@ export interface WireConnectionTest {
   latencyMs: number | null;
   /** Already scrubbed by `describeConnectionFailure`; safe to render. */
   error: string | null;
+  /**
+   * Where it ran: `web`, or the runner class that answered. Null for a test
+   * recorded before this was. A class name, never a host, so viewers see it too.
+   */
+  via: string | null;
 }
 
 export interface WireConnection {

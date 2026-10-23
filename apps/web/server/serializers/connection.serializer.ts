@@ -30,6 +30,7 @@ export function toPublicConnection(row: ConnectionRow, role: OrgRole): PublicCon
           ok: row.lastTestOk ?? false,
           latencyMs: row.lastTestLatencyMs,
           error: row.lastTestError,
+          via: row.lastTestVia,
         }
       : null,
   };
