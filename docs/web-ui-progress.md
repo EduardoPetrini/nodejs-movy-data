@@ -39,6 +39,7 @@ phase is indistinguishable from one that was never started.
 | 5r — review of Phase 5 | **DONE** (2026-09-09) | five defects found in `1329ca1` and fixed in `6f13fcd` |
 | — connection lifecycle | **DONE** (2026-09-09) | edit, delete behind a typed confirmation, failure reason inline |
 | — sequence reseed + test before save | **DONE** (2026-09-17) | step 9 reads the destination's `MAX()`; create form tests unsaved credentials |
+| R0 — Compose foundations (runner service plan) | **DONE** (2026-10-22) | `docker-compose.yml`: meta-db, migrate, seed, web, three seeded lab DBs, CLI, e2e. Live gate moved PG→MySQL → PG→PG + MySQL→PG after it found the auto-increment gap; see *R0* below. Next: R1 (extract `@movy/db`) |
 
 ### Remaining work
 
@@ -1260,3 +1261,65 @@ already covers a saved connection.
   hand in the browser only. Its timeout `setTimeout` is also never cleared, so
   a fast connect leaves a 10s timer pending — harmless, but worth fixing when a
   test is written for it.
+
+## R0 — Compose foundations (2026-10-22)
+
+Phase 0 of `docs/runner-service-plan.md` (decisions: ADR 0004, Proposed). Branch
+`feat/runner-service-phase-0`. The web container still forks the runner; Phase 6
+moves runs to separate runner services.
+
+**What exists.** `docker/Dockerfile` (one image for web, runner and CLI; `build`
+target for `migrate`/`seed`; Playwright `e2e` target), `docker-compose.yml`,
+`scripts/docker-init.sh` (writes `docker/{movy,meta-db,lab,cli}.env`, never
+overwrites), lab fixtures for PG, MySQL and MSSQL (same deterministic shop:
+2000/200/5000/15000 rows, a self-referencing FK, a PG sequence left BEHIND its
+`MAX(id)`), `apps/web/scripts/seed-lab.ts` (saves the three lab connections in
+`acme`), `apps/web/tests/e2e/live-migration.spec.ts`, and `pnpm docker:*` scripts.
+
+### Decisions that are load-bearing
+
+- **The e2e container shares web's network namespace** (`network_mode: service:web`).
+  The session cookie is `Secure`; a browser only sends that over plain HTTP to
+  `localhost`, so at `http://web:3000` sign-in silently does not stick.
+- **Compose never reads the root `.env`** (the CLI's). Env files live in `docker/`
+  and are gitignored by the existing `*.env` rule.
+- **`docker:init` refuses to overwrite**: a new `NUXT_ENCRYPTION_KEY` makes every
+  saved connection undecryptable; a new meta-db password no longer matches the volume.
+- **`CI=true` is set per `pnpm install` line, not as an image ENV**, so the runtime
+  container does not flip CI-sniffing libraries into CI mode.
+
+### The bugs this work found
+
+1. **`@movy/web` imported `@movy/runner` without declaring it.** It only resolved
+   on a dev machine through a stale root `node_modules/@movy/runner` symlink (dated
+   Sep 7); a clean lockfile install — the image — crashed on boot with
+   `ERR_MODULE_NOT_FOUND`. Fixed: `"@movy/runner": "workspace:*"` in
+   `apps/web/package.json` (3-line lockfile change).
+2. **PG→MySQL fails for any table with a `serial` column.** The documented
+   auto-increment gap is not "degraded", it is fatal on MySQL: the `nextval()`
+   default is emitted as a string literal and schema sync rejects the first table.
+   Recorded in CLAUDE.md under the gap; the spec carries it as `test.fixme`. Not
+   fixed here — it is core translator work. PG→MSSQL unverified, probably the same.
+3. **`compose up --wait` fails on a one-shot nothing depends on** (`mssql-init`,
+   exit 0). `docker:up` starts everything, then waits on the long-running services only.
+
+### Verified
+
+- `pnpm docker:up`: meta-db, web and the three labs healthy; migrate, seed and
+  mssql-init exited 0. Fixture counts identical on all three engines.
+- `pnpm docker:e2e`: **9 passed, 1 skipped** (the PG→MySQL `fixme`). Includes the
+  simulated mid-run reload, and a REAL PG→PG run whose comparison matches 22,200/22,200.
+- Step 9 inside the container: source `orders_id_seq` at 10, destination reseeded
+  so the next insert gets id 5001 (MAX is 5000).
+- `docker compose run --rm cli`: MySQL→PG, 4/4 tables, 22,200 rows, the CLI's own
+  validation 100 %. The log file lands in `./logs` on the host.
+- `pnpm test` 1233/1233 and `pnpm typecheck` green. (One earlier run showed 3
+  failures while a Docker build saturated the CPU; they passed on every quiet rerun.
+  Timing-sensitive tests under load, not a regression, but worth knowing.)
+- **Not verified:** a cold build on another machine; Rosetta-less SQL Server on Intel
+  is fine by construction but was not run.
+
+### Remaining for the runner plan
+
+R1 next: extract `@movy/db` (+ crypto) and move the run-control modules into
+`apps/runner`, no behaviour change; this Compose stack is its gate.
