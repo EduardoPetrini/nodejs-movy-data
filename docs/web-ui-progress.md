@@ -25,7 +25,7 @@ phase is indistinguishable from one that was never started.
 
 ## Status board
 
-*Last reviewed: 2026-10-23. 1472 unit tests (113 files) green; Compose E2E last green at 19/19 (R4) — R5's run pending.*
+*Last reviewed: 2026-10-23. 1472 unit tests (113 files) green; Compose E2E green at 23/23 (R5).*
 
 | Phase | State | Notes |
 |-------|-------|-------|
@@ -44,7 +44,7 @@ phase is indistinguishable from one that was never started.
 | R2 — queue and agent | **DONE** (2026-10-22) | migration `0004`; agent claims from `runs` (SKIP LOCKED), heartbeats a lease, fences, drains; sweeper settles lost runs; web enqueues instead of forking, embedded agent by default. Gate met: `pnpm docker:e2e` 13/13 on the embedded agent. See *R2* below. Next: R3 (NOTIFY bus) |
 | R3 — NOTIFY bus and runner availability | **DONE** (2026-10-22) | events reach the hub through `LISTEN movy_run_events` (the in-process `onFlushed` path is gone); runners socket, ticket and panel on the org home and runs page. See *R3* below. Next: R4 (destination lock and classes) |
 | R4 — destination lock and runner classes | **DONE** (2026-10-23) | one run per destination (`target_lock_key`, migration `0005`) and why a run is queued; classes from `MOVY_RUNNER_CLASSES_FILE`, a class per definition and a Runner selector (`0006`); source size in bytes on the preview and a class suggestion. Gate: `pnpm docker:e2e` 19/19. See *R4* below. Next: R5 (probes) |
-| R5 — probes: Test and Preview from a runner | **CODE COMPLETE, GATE PENDING** (2026-10-23) | migration `0007` (`runner_probes`, `runners.probe_slots`, `connections.last_test_via`); executors in `@movy/runner/probes` shared by the in-request path and the agent's `ProbeWorker`; `via: 'web' | <class>` on both Test routes and on preview; 503 `no_runner`, 504 on silence; "Test from" and "Inspect from" selectors. `pnpm test` 1472/1472, typecheck clean. **Not yet run:** `pnpm docker:e2e` incl. the new `probes.spec.ts` — Docker Desktop could not reach Docker Hub (EOF on `docker/dockerfile:1.7`) on 2026-10-23. See *R5* below. Next: run the gate, then R6 (runner services) |
+| R5 — probes: Test and Preview from a runner | **DONE** (2026-10-23) | migration `0007` (`runner_probes`, `runners.probe_slots`, `connections.last_test_via`); executors in `@movy/runner/probes` shared by the in-request path and the agent's `ProbeWorker`; `via: 'web' | <class>` on both Test routes and on preview; 503 `no_runner`, 504 on silence; "Test from" and "Inspect from" selectors. Gate: `pnpm docker:e2e` 23/23. See *R5* below. Next: R6 (runner services) |
 
 ### Remaining work
 
@@ -1553,5 +1553,9 @@ re-run treats `decimal` and `numeric` as one type.
   `probes.spec.ts`: a test from the default runner shows in its row; a preview from the
   runner lists the same tables as the console's; the review screen names where it
   inspected; `via: 'large'` with no large runner is a 503 in under 5 s.
-- **Not done**: the Compose gate (above). Screenshots of the two selectors at 1280/375,
-  which need the rebuilt stack too.
+- **Gate**: `pnpm docker:e2e` 23/23 (19 earlier + 4 in `probes.spec.ts`). Its first run
+  failed on the test, not the app: `getByLabel('Source', { exact: true })` never resolves
+  on the review screen, because the `<label>` wraps the `<select>` and Playwright's label
+  text then includes every option. The spec matches `getByRole('combobox', { name })`,
+  which uses the computed accessible name. Both selectors checked at 1280 and 375: no
+  page overflow; the connections table scrolls inside its own container, as before.
