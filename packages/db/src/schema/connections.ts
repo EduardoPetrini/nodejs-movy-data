@@ -38,6 +38,12 @@ export const connections = pgTable(
     lastTestOk: boolean('last_test_ok'),
     lastTestError: text('last_test_error'),
     lastTestLatencyMs: integer('last_test_latency_ms'),
+    /**
+     * Where the last test ran from: `web`, or the runner class that answered
+     * it. "Works from the console, fails from `large`" is the diagnosis this
+     * column exists for. Null for tests recorded before it.
+     */
+    lastTestVia: text('last_test_via'),
     createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),

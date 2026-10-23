@@ -35,3 +35,10 @@ export type { RunSpecEnvelope } from './run-spec-envelope';
 export { RUN_EVENTS_CHANNEL, RUNNERS_CHANNEL } from './channels';
 export { RunnerClassesFileError, parseRunnerClassesFile, upsertRunnerClasses } from './runner-classes';
 export type { RunnerClassConfig } from './runner-classes';
+export { PROBES_CHANNEL, PROBE_DONE_CHANNEL } from './channels';
+export {
+  abandonProbe, claimProbe, completeProbe, enqueueProbe, probeRunnerAvailable, takeProbeResult,
+} from './probe-store';
+export type { ClaimedProbe, NewProbe, ProbeKind } from './probe-store';
+export { ProbeWorker, sqlProbeQueue } from './probe-worker';
+export type { ProbeQueue, ProbeWorkerOptions } from './probe-worker';

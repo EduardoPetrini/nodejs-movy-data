@@ -38,6 +38,8 @@ export interface RunnerRegistration {
   readonly runnerClass: string;
   readonly version: string;
   readonly slots: number;
+  /** Probes it answers at once; 0 takes none. Default 2. */
+  readonly probeSlots?: number;
   readonly provisionedBy?: string | null;
 }
 
@@ -83,16 +85,17 @@ export function interval(ms: number): string {
 export async function registerRunner(sql: SqlClient, r: RunnerRegistration): Promise<void> {
   await sql.query(
     `WITH up AS (
-       INSERT INTO runners (id, class, version, slots, busy, state, provisioned_by, started_at, last_heartbeat_at)
-       VALUES ($1, $2, $3, $4, 0, 'online', $5, now(), now())
+       INSERT INTO runners (id, class, version, slots, probe_slots, busy, state, provisioned_by, started_at, last_heartbeat_at)
+       VALUES ($1, $2, $3, $4, $6, 0, 'online', $5, now(), now())
        ON CONFLICT (id) DO UPDATE SET
-         class = excluded.class, version = excluded.version, slots = excluded.slots, busy = 0,
+         class = excluded.class, version = excluded.version, slots = excluded.slots,
+         probe_slots = excluded.probe_slots, busy = 0,
          state = 'online', provisioned_by = excluded.provisioned_by,
          started_at = now(), last_heartbeat_at = now()
        RETURNING class
      )
      SELECT pg_notify('${RUNNERS_CHANNEL}', json_build_object('runnerClass', class)::text) FROM up`,
-    [r.id, r.runnerClass, r.version, r.slots, r.provisionedBy ?? null]
+    [r.id, r.runnerClass, r.version, r.slots, r.provisionedBy ?? null, r.probeSlots ?? 2]
   );
 }
 
@@ -309,6 +312,10 @@ export async function sweep(sql: SqlClient, offlineAfterMs = DEFAULT_OFFLINE_AFT
        DELETE FROM run_specs s USING runs r
         WHERE (SELECT ok FROM lock) AND r.id = s.run_id
           AND r.status IN ('succeeded', 'failed', 'cancelled')
+     ),
+     -- A probe whose handler gave up (timed out, or the web process died).
+     probes AS (
+       DELETE FROM runner_probes WHERE (SELECT ok FROM lock) AND expires_at < now()
      )
      SELECT (SELECT ok FROM lock) AS swept,
             (SELECT count(*) FROM announced) AS announced,

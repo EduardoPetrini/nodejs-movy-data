@@ -16,6 +16,10 @@
     "./agent": {
       "types": "./src/agent/index.ts",
       "default": "./dist/agent/index.js"
+    },
+    "./probes": {
+      "types": "./src/probes/index.ts",
+      "default": "./dist/probes/index.js"
     }
   },
   "scripts": {

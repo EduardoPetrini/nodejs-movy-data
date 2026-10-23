@@ -1,4 +1,5 @@
-import { pgTable, text, integer, bigint, boolean, timestamp } from 'drizzle-orm/pg-core';
+import { pgTable, text, integer, bigint, boolean, jsonb, timestamp, uuid, index, customType } from 'drizzle-orm/pg-core';
+import { organizations } from './orgs';
 
 /**
  * A kind of runner: `default`, or a larger one for heavy migrations.
@@ -46,9 +47,49 @@ export const runners = pgTable('runners', {
   /** Runs it may execute at once. */
   slots: integer('slots').notNull(),
   busy: integer('busy').notNull().default(0),
+  /**
+   * Probes (Test, Preview) it answers at once — separate from `slots`, so a
+   * runner busy with a long migration can still say whether it reaches a
+   * database. 0 means it takes none.
+   */
+  probeSlots: integer('probe_slots').notNull().default(2),
   state: text('state').$type<RunnerState>().notNull(),
   /** Set when a provisioner started it; only those exit when idle. */
   provisionedBy: text('provisioned_by'),
   startedAt: timestamp('started_at', { withTimezone: true }).notNull(),
   lastHeartbeatAt: timestamp('last_heartbeat_at', { withTimezone: true }).notNull(),
 });
+
+/** Nullable: the request is cleared the moment a runner claims it. */
+const sealedBytes = customType<{ data: Buffer }>({ dataType: () => 'bytea' });
+
+export type ProbeKind = 'test' | 'preview';
+export type ProbeStatus = 'queued' | 'running' | 'done';
+
+/**
+ * A Test or Preview asked of a runner class rather than of the web process
+ * (docs/runner-service-plan.md, decision 6): "it works from the console but
+ * not from the large runners" is a network fact only a runner can report.
+ *
+ * Short-lived by construction. The web handler that inserted it waits for
+ * `done`, reads the result and deletes the row; `expires_at` lets the sweeper
+ * remove one whose handler gave up. The request holds passwords, so it is
+ * sealed for this org and this probe (`probeAad`) and set to NULL at claim.
+ * The result is already scrubbed of them by the runner.
+ */
+export const runnerProbes = pgTable(
+  'runner_probes',
+  {
+    id: uuid('id').primaryKey(),
+    orgId: uuid('org_id').notNull().references(() => organizations.id, { onDelete: 'cascade' }),
+    kind: text('kind').$type<ProbeKind>().notNull(),
+    runnerClass: text('runner_class').notNull().references(() => runnerClasses.name),
+    status: text('status').$type<ProbeStatus>().notNull().default('queued'),
+    runnerId: text('runner_id'),
+    ciphertext: sealedBytes('ciphertext'),
+    result: jsonb('result'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  },
+  (t) => [index('runner_probes_queue_idx').on(t.runnerClass, t.createdAt)]
+);

@@ -12,3 +12,9 @@ export const RUN_EVENTS_CHANNEL = 'movy_run_events';
 
 /** `{runnerClass}` — a runner changed state: registered, draining, offline. */
 export const RUNNERS_CHANNEL = 'movy_runners';
+
+/** `{runnerClass}` — a probe was queued for that class. */
+export const PROBES_CHANNEL = 'movy_probes';
+
+/** `{id}` — a runner wrote that probe's result. */
+export const PROBE_DONE_CHANNEL = 'movy_probe_done';

@@ -31,6 +31,11 @@ export function specAad(orgId: string, runId: string): Buffer {
   return Buffer.from(`org:${orgId}:run-spec:${runId}`, 'utf8');
 }
 
+/** A probe's sealed request, bound the same way: to its org and its probe. */
+export function probeAad(orgId: string, probeId: string): Buffer {
+  return Buffer.from(`org:${orgId}:probe:${probeId}`, 'utf8');
+}
+
 /**
  * MOVY_ENCRYPTION_KEY first: a runner agent is not a Nuxt process, and naming
  * its key after the framework of a different service would be a trap. The web

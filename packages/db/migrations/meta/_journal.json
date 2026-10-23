@@ -50,6 +50,13 @@
       "when": 1792760548881,
       "tag": "0006_runner_class_config",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1792765490837,
+      "tag": "0007_probes",
+      "breakpoints": true
     }
   ]
 }
