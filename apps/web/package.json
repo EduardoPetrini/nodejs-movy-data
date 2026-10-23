@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@movy/core": "workspace:*",
+    "@movy/runner": "workspace:*",
     "drizzle-orm": "^0.45.2",
     "nuxt": "^4.5.2",
     "nuxt-auth-utils": "^0.5.30",

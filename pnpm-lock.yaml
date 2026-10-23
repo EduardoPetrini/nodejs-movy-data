@@ -50,6 +50,9 @@ importers:
       '@movy/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@movy/runner':
+        specifier: workspace:*
+        version: link:../runner
       drizzle-orm:
         specifier: ^0.45.2
         version: 0.45.2(@types/pg@8.23.1)(mysql2@3.24.3(@types/node@25.9.5))(pg@8.23.0)
