@@ -132,12 +132,15 @@ test.describe('a live migration against the lab databases', () => {
     await migrateAndCompare(page, { source: 'Lab PostgreSQL', target: 'Lab MySQL' });
   });
 
-  // KNOWN GAP, found by this spec (2026-10-22), in the MSSQL-destination copy:
-  // `MssqlConnection.getClient()` pins no connection (mssql's `pool.connect()`
-  // returns the pool), so `SET IDENTITY_INSERT ON` and the INSERT can land on
-  // different sessions; and a 500-row batch exceeds SQL Server's 2100-parameter
-  // cap on any table wider than four columns. Flip to `test` once both are fixed.
+  // KNOWN GAP (2026-10-22). Fixed: the session pin, SET IDENTITY_INSERT as a
+  // batch, the 2,100-parameter cap. Still open: these runs load order_items
+  // before orders, so clearing a parent trips the child's FK. The plan's
+  // loadOrder for this Pair appears to see no FK edges. Flip to `test` once fixed.
   test.fixme('PostgreSQL -> SQL Server runs, and the counts match afterwards', async ({ page }) => {
     await migrateAndCompare(page, { source: 'Lab PostgreSQL', target: 'Lab SQL Server' });
+  });
+
+  test.fixme('MySQL -> SQL Server runs, and the counts match afterwards', async ({ page }) => {
+    await migrateAndCompare(page, { source: 'Lab MySQL', target: 'Lab SQL Server' });
   });
 });
