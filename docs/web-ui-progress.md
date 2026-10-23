@@ -41,6 +41,7 @@ phase is indistinguishable from one that was never started.
 | — sequence reseed + test before save | **DONE** (2026-09-17) | step 9 reads the destination's `MAX()`; create form tests unsaved credentials |
 | R0 — Compose foundations (runner service plan) | **DONE** (2026-10-22) | `docker-compose.yml`: meta-db, migrate, seed, web, three seeded lab DBs, CLI, e2e. Live gate moved PG→MySQL → PG→PG + MySQL→PG after it found the auto-increment gap; see *R0* below. Next: R1 (extract `@movy/db`) |
 | R1 — extract `@movy/db`, move run control into `apps/runner` | **DONE** (2026-10-22) | no behaviour change; web still forks. Gate met: moved tests changed import paths only, 1262/1262, `pnpm docker:e2e` green. See *R1* below. Next: R2 (queue and agent) |
+| R2 — queue and agent | **DONE** (2026-10-22) | migration `0004`; agent claims from `runs` (SKIP LOCKED), heartbeats a lease, fences, drains; sweeper settles lost runs; web enqueues instead of forking, embedded agent by default. Gate met: `pnpm docker:e2e` 13/13 on the embedded agent. See *R2* below. Next: R3 (NOTIFY bus) |
 
 ### Remaining work
 
@@ -1406,4 +1407,31 @@ re-run treats `decimal` and `numeric` as one type.
   `pnpm test` 1284/1284, `pnpm typecheck` clean.
 - **Still open:** comparisons count rows only; SQL Server cannot ALTER a column a default
   constraint uses (a re-run that changes a type there fails). Next: R2.
+
+## R2 — queue and agent (2026-10-22)
+
+- **Migration `0004_runners`**: `runner_classes` (seeded `default`, inserted before the
+  FK that needs it), `runners`, `run_specs`; `runs` gains `runner_class`, `runner_id`,
+  `claimed_at`, `lease_expires_at`, a partial queue index, and a nullable
+  `journal_path`. Tested on PGlite, including the upgrade over existing runs.
+- **The agent** (`apps/runner/src/agent/`): `queue-store.ts` (every statement),
+  `runner-agent.ts`, `run-spec-envelope.ts`; `RunManager` gains `liveRunIds()`,
+  `terminate()` and the followed run's pid. Embedded in web by default.
+- **Web**: launch enqueues a sealed spec in one transaction and wakes the agent;
+  cancel cancels a queued run outright (org-scoped), else `cancelling` + forward; the
+  new sweeper plugin runs every 10 s; `runs-reattach.ts` became
+  `embedded-runner.ts`.
+- **Two bugs caught before they shipped**: `RunManager.cancel` on a run it does not
+  hold settled it `RunnerGone` (wrong once a run can live on another runner, and wrong
+  for a re-attached run, whose pid it did not keep); and the old re-attach query
+  listed queued runs, which would have settled every waiting run as vanished on boot.
+- **Deviations from the plan**: the spec is deleted at claim, not at settle (no resume
+  needs it); `target_lock_key`, the busy index and `definitions.runner_class` wait for
+  phase 4, `runner_probes` for phase 5; the runner DB role and grants, and the
+  standalone `movy-runner-agent` bin, wait for phase 6, when an agent first runs
+  outside the web process. PGlite is a root devDependency (see CLAUDE.md).
+- **Verified**: `pnpm test` 1331/1331; `pnpm typecheck` clean; `pnpm docker:e2e` 13/13 —
+  the embedded runner registered, heartbeating, claimed every run, and `run_specs` was
+  empty afterwards.
+- **Next — R3**: the NOTIFY bus, so an agent outside the web process reaches the hub.
 

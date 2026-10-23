@@ -50,8 +50,9 @@ pnpm docker:cli              # interactive CLI inside movy-net
 - Compose never reads the root `.env`, which belongs to the CLI. Its env files are
   `docker/{movy,meta-db,lab,cli}.env`, and regenerating `NUXT_ENCRYPTION_KEY` makes every
   saved connection undecryptable, which is why `docker:init` refuses to overwrite.
-- Phase 0 of `docs/runner-service-plan.md`: `web` still forks the runner, so it carries
-  `init: true` (a zombie runner would pass the liveness check) and the journal volume.
+- Until phase 6 of `docs/runner-service-plan.md`, `web` runs the **embedded** runner agent,
+  which forks the runner, so it carries `init: true` (a zombie runner would pass the
+  liveness check) and the journal volume.
 
 ## Architecture
 
@@ -308,8 +309,8 @@ checks before clearing the destination, which is the most destructive thing a ru
 
 ### Runs in the web app (@movy/web)
 
-The web app forks the runner once per run and rebuilds run state from its
-events. Five tables: `migration_definitions` (the saved, repeatable migration)
+The web app **queues** each run; a runner agent claims it, forks the runner, and
+rebuilds run state from its events. Five tables: `migration_definitions` (the saved, repeatable migration)
 and `runs`, plus `run_events` and the two projections `run_steps` /
 `run_table_progress`. Two more hold comparisons: `validation_runs` and
 `validation_table_counts`.
@@ -362,6 +363,60 @@ never exits, so neither the exit handler nor the journal tailer has anything to 
 the journal tailer, so delivery is at-least-once from two sources. That key is
 what makes the second delivery an `ON CONFLICT DO NOTHING` no-op instead of a
 duplicate. Do not add a surrogate id.
+
+### The queue and the runner agent (phase 2 of `docs/runner-service-plan.md`)
+
+`runs` is the queue: launching inserts a `queued` row and its **sealed spec**
+(`run_specs`) in one transaction, and a runner agent claims it with
+`UPDATE … WHERE id = (SELECT … FOR UPDATE SKIP LOCKED LIMIT 1)`. `queued → running`
+happens at the claim. No Redis, no BullMQ: Postgres was already there.
+
+| Module | Purpose |
+|--------|---------|
+| `apps/runner/src/agent/queue-store.ts` | Every queue statement — register, claim, take spec, heartbeat, settle, queued cancel, re-attach list, sweep — over a two-method `SqlClient` that `pg.Pool` and PGlite both satisfy. |
+| `apps/runner/src/agent/runner-agent.ts` | `RunnerAgent`: claims up to its slots, forks through `RunManager`, heartbeats, fences, drains. |
+| `apps/runner/src/agent/run-spec-envelope.ts` | Seals and opens the spec: `encryptSecret` with `specAad(orgId, runId)`, versioned. |
+| `server/runs/index.ts` | `useRunnerAgent()` — the **embedded** agent, on unless `MOVY_EMBEDDED_RUNNER=false`. |
+| `server/plugins/embedded-runner.ts` / `runner-sweeper.ts` | Start/stop the embedded agent; settle lost runs every 10 s. |
+
+- **The spec is sealed at enqueue and deleted at claim.** It holds two passwords, so it
+  is encrypted for one org and one run (`specAad`), and the claiming agent reads it with
+  `DELETE … RETURNING`: there is no resume, so nothing ever needs it twice. An unknown
+  `spec_version` fails the run `RunnerIncompatible`, naming both versions. A simulated
+  run carries `{simulate, speed}` only; the agent resolves the fixture on its own host.
+- **The lease is the only proof a run is alive.** Every 5 s the agent's heartbeat
+  extends `lease_expires_at` (30 s) on the runs it holds and gets them back. The
+  sweeper — one web replica at a time, via a transaction-scoped advisory lock in a
+  single statement — settles a run whose lease expired `RunnerVanished` (`cancelled`
+  if a user had asked), and shows silent runners offline.
+- **Fencing: a run missing from the heartbeat's answer is stopped at once.** The
+  sweeper has told the ledger its destination is free; a runner that kept writing would
+  be the harm. Only runs the agent claimed in this process are fenced — never a run
+  forked before migration 0004, which has no lease at all and is left to re-attach.
+- **A queued run is cancelled outright** — conditional on `status = 'queued'`, so it
+  cannot race a claim: exactly one of the two statements matches the row. A running one
+  goes `cancelling`; the embedded agent forwards it at once, and the owning agent's
+  heartbeat finds the row anyway.
+- **`RunnerAgent.cancel` acts only on a run live on its host.** `RunManager.cancel` on a
+  run it does not hold sees no process and settles it `RunnerGone` — true when there was
+  one host, a lie about another runner's live run once there are several.
+- **Re-attach never touches a queued run.** It lists the agent's own unsettled runs and
+  any ownerless one from before 0004 (`reattachableRuns`); the old query listed every
+  non-terminal run, which would have settled every waiting run as vanished on boot.
+- **The embedded agent's id is `embedded-<hostname>`** (or `MOVY_RUNNER_ID`), stable
+  across restarts of the same host, so it re-attaches to its own runs. On start it
+  re-attaches and heartbeats **before** it claims, extending those leases ahead of any
+  sweep.
+- **An agent in its own process cannot yet push live events**: the embedded agent
+  broadcasts through `EventWriter.onFlushed` into this process's hub, and an external
+  one needs the NOTIFY bus of phase 3. Clients still catch up over REST.
+
+The queue SQL is tested against **PGlite with the real migrations**
+(`apps/runner/tests/unit/agent/queue-store.test.ts`, harness in
+`packages/db/tests/helpers/meta-db.ts`). What one connection cannot show is two agents
+racing; `SKIP LOCKED` under true concurrency belongs to the Compose meta-db. PGlite is a
+**root** devDependency on purpose: added to `@movy/db`, it split `drizzle-orm` into two
+installed variants and broke type identity between packages.
 
 **`reattach()` is not a one-shot read.** IPC dies with the old host and cannot be
 re-established, so a run still in flight after a restart is *followed* — its
@@ -547,7 +602,7 @@ shows the same string.
 
 ### The runner (@movy/runner)
 
-`apps/runner` is forked once per run by the web app. It owns what the core
+`apps/runner` is forked once per run by a runner agent. It owns what the core
 refuses to: argv, stdin, signals, IPC framing, the NDJSON journal and exit codes.
 See `apps/runner/README.md` for the full contract.
 

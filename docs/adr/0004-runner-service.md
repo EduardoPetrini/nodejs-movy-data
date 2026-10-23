@@ -4,7 +4,8 @@ Date: 2026-10-22
 
 ## Status
 
-Proposed. Supersedes the "one host" consequences of [ADR 0002](0002-run-execution.md);
+Accepted (2026-10-22): the queue, leases, fencing, the sweeper and the embedded agent are
+built (phase 2). Supersedes the "one host" consequences of [ADR 0002](0002-run-execution.md);
 keeps its per-run child process and journal.
 
 ## Context
