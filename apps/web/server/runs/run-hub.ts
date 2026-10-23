@@ -167,6 +167,11 @@ export class RunHub {
     }
   }
 
+  /** Whether any peer on this host watches the run — the feed reads nothing for one nobody does. */
+  isWatching(runId: string): boolean {
+    return this.byRun.has(runId);
+  }
+
   /** Send one message to one peer, e.g. its opening snapshot. */
   sendTo(peer: HubPeer, message: unknown): void {
     const membership = this.byPeer.get(peer);

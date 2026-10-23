@@ -2,6 +2,7 @@ import { and, eq, notInArray, sql } from 'drizzle-orm';
 import { runEvents, runSteps, runTableProgress, runs, TERMINAL_RUN_STATUSES } from '@movy/db';
 import type { Db, RunStatus } from '@movy/db';
 import type { Projection } from './run-projection';
+import { RUN_EVENTS_CHANNEL } from './channels';
 
 /**
  * Ingestion, deliberately NOT org-scoped. It used to sit beside the org-scoped
@@ -33,6 +34,14 @@ export async function applyProjection(db: Db, runId: string, projection: Project
         // the same events, and neither may produce a duplicate the timeline
         // has to reason about.
         .onConflictDoNothing();
+
+      // A pointer, inside the transaction: Postgres delivers it only on commit,
+      // so every web console that hears it can already read what it points at.
+      // That is "broadcast after the durable write", for an agent in any process.
+      const lastSeq = Math.max(...projection.events.map((e) => e.seq));
+      await tx.execute(
+        sql`select pg_notify(${RUN_EVENTS_CHANNEL}, ${JSON.stringify({ runId, lastSeq })})`
+      );
     }
 
     for (const step of projection.steps) {

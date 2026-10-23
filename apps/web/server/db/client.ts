@@ -11,12 +11,15 @@ let db: MetaDb | undefined;
  * cannot be written that forgets its org scope.
  */
 export function useDb(): MetaDb {
-  if (!db) {
-    const url = process.env.NUXT_DATABASE_URL ?? useRuntimeConfig().databaseUrl;
-    if (!url) throw new Error('NUXT_DATABASE_URL is not set.');
-    db = createDb(url, { max: 10 }).db;
-  }
+  if (!db) db = createDb(metaDatabaseUrl(), { max: 10 }).db;
   return db;
+}
+
+/** The metadata database URL — also what the LISTEN connection, outside the pool, dials. */
+export function metaDatabaseUrl(): string {
+  const url = process.env.NUXT_DATABASE_URL ?? useRuntimeConfig().databaseUrl;
+  if (!url) throw new Error('NUXT_DATABASE_URL is not set.');
+  return url;
 }
 
 export type Db = ReturnType<typeof useDb>;

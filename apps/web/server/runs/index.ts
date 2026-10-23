@@ -2,10 +2,15 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { createRequire } from 'node:module';
-import { useDb } from '../db/client';
+import { metaDatabaseUrl, useDb } from '../db/client';
+import { runEvents, runs } from '../db/schema';
+import { toPublicEvent } from '../serializers/run.serializer';
+import { RunEventFeed } from './run-event-feed';
+import { PgListener } from './pg-listener';
 import {
   EventWriter,
   RunManager,
+  RUN_EVENTS_CHANNEL,
   RunnerAgent,
   SUPPORTED_SPEC_VERSIONS,
   applyProjection,
@@ -19,48 +24,123 @@ import { RunHub } from './run-hub';
 import { TicketStore } from './subscription-ticket';
 import { memberships } from '../db/schema';
 import { memberKey } from './run-hub';
-import { and, eq, or } from 'drizzle-orm';
+import { and, asc, eq, gt, or } from 'drizzle-orm';
 
 let manager: RunManager | undefined;
 let writer: EventWriter | undefined;
 let agent: RunnerAgent | undefined;
+let feed: RunEventFeed | undefined;
+let listener: PgListener | undefined;
 let hub: RunHub | undefined;
 let tickets: TicketStore | undefined;
 
-/**
- * The socket fan-out. Built before the writer, because the writer broadcasts
- * into it on every successful flush.
- */
+/** The socket fan-out for run streams. The event feed publishes into it. */
 export function useRunHub(): RunHub {
   if (!hub) {
-    const db = useDb();
     hub = new RunHub({
-      // Read per check, never cached: a demotion has to take effect on a live
-      // socket, not at the subscriber's next reconnect. One query for every
-      // subscriber, which is what makes checking every few seconds affordable.
-      resolveRole: async (pairs) => {
-        const found = new Map<string, (typeof memberships.$inferSelect)['role']>();
-        if (pairs.length === 0) return found;
-
-        const rows = await db
-          .select({ orgId: memberships.orgId, userId: memberships.userId, role: memberships.role })
-          .from(memberships)
-          .where(
-            or(...pairs.map((p) => and(eq(memberships.orgId, p.orgId), eq(memberships.userId, p.userId))))
-          );
-
-        for (const row of rows) found.set(memberKey(row.orgId, row.userId), row.role);
-        return found;
-      },
+      resolveRole: resolveRoles,
       onError: (err) => console.error('[runs] hub:', err.message),
     });
   }
   return hub;
 }
 
+/**
+ * The CURRENT role of every subscriber, in one query. Read per check, never
+ * cached: a demotion has to take effect on a live socket, not at the
+ * subscriber's next reconnect. One query for every subscriber is what makes
+ * checking every few seconds affordable.
+ */
+async function resolveRoles(
+  pairs: readonly { readonly orgId: string; readonly userId: string }[]
+): Promise<Map<string, (typeof memberships.$inferSelect)['role']>> {
+  const found = new Map<string, (typeof memberships.$inferSelect)['role']>();
+  if (pairs.length === 0) return found;
+
+  const rows = await useDb()
+    .select({ orgId: memberships.orgId, userId: memberships.userId, role: memberships.role })
+    .from(memberships)
+    .where(or(...pairs.map((p) => and(eq(memberships.orgId, p.orgId), eq(memberships.userId, p.userId)))));
+
+  for (const row of rows) found.set(memberKey(row.orgId, row.userId), row.role);
+  return found;
+}
+
 export function useTicketStore(): TicketStore {
   if (!tickets) tickets = new TicketStore();
   return tickets;
+}
+
+/**
+ * Run events for the sockets on this host, from `run_events`, on NOTIFY.
+ *
+ * The cursor is fixed by `track()` when a peer joins — the socket handler
+ * awaits it BEFORE reading that peer's snapshot — so live delivery starts no
+ * later than the snapshot ends. See RunEventFeed for the ordering rules.
+ */
+export function useRunEventFeed(): RunEventFeed {
+  if (!feed) {
+    const db = useDb();
+    const hub = useRunHub();
+    feed = new RunEventFeed(
+      {
+        currentSeq: async (runId) => {
+          const [row] = await db.select({ lastSeq: runs.lastSeq }).from(runs).where(eq(runs.id, runId)).limit(1);
+          return row?.lastSeq ?? 0;
+        },
+        // Every cohort's events: the hub splits them into rooms, so a new event
+        // type can never default into the wrong audience.
+        readAfter: async (runId, afterSeq, limit) => {
+          const rows = await db
+            .select()
+            .from(runEvents)
+            .where(and(eq(runEvents.runId, runId), gt(runEvents.seq, afterSeq)))
+            .orderBy(asc(runEvents.seq))
+            .limit(limit);
+          return rows.map(toPublicEvent);
+        },
+        publish: (runId, events) => hub.publish(runId, events),
+        isWatched: (runId) => hub.isWatching(runId),
+      },
+      { onError: (err, runId) => console.error(`[runs] event feed for ${runId}:`, err.message) }
+    );
+  }
+  return feed;
+}
+
+/**
+ * The LISTEN connection behind the feed. Started by the `run-bus` plugin.
+ * On every reconnect the feed re-reads past its cursors: NOTIFY has no replay.
+ */
+export function useBusListener(): PgListener {
+  if (!listener) {
+    const runFeed = useRunEventFeed();
+    listener = new PgListener({
+      connectionString: metaDatabaseUrl(),
+      channels: [RUN_EVENTS_CHANNEL],
+      onNotification: (channel, payload) => {
+        if (channel !== RUN_EVENTS_CHANNEL) return;
+        const pointer = parsePointer(payload);
+        if (pointer) runFeed.notify(pointer.runId, pointer.lastSeq);
+      },
+      onConnected: () => runFeed.resync(),
+      onError: (err) => console.warn('[runs] LISTEN connection lost, reconnecting:', err.message),
+    });
+  }
+  return listener;
+}
+
+/** A NOTIFY payload is data from the database, so it is checked rather than trusted. */
+function parsePointer(payload: string): { runId: string; lastSeq: number } | null {
+  try {
+    const parsed = JSON.parse(payload) as { runId?: unknown; lastSeq?: unknown };
+    if (typeof parsed.runId === 'string' && typeof parsed.lastSeq === 'number') {
+      return { runId: parsed.runId, lastSeq: parsed.lastSeq };
+    }
+  } catch {
+    // fall through: a malformed pointer is ignored, and the next one catches up
+  }
+  return null;
 }
 
 /**
@@ -97,33 +177,14 @@ export function useRunnerAgent(): RunnerAgent | undefined {
     const db = useDb();
     const sql = useMetaSql();
     const runnerId = embeddedRunnerId();
-    const runHub = useRunHub();
     writer = new EventWriter(
       { apply: (runId, projection) => applyProjection(db, runId, projection) },
       {
         onError: (err, runId) => console.error(`[runs] event write failed for ${runId}:`, err.message),
         onTruncated: (runId, atSeq) =>
           console.warn(`[runs] ${runId} exceeded its log-event cap at seq ${atSeq}; later log lines are not stored.`),
-        // After the durable write, never before — see EventWriter.onFlushed.
-        //
-        // Converted to the SAME WireEvent shape the snapshot sends. An earlier
-        // version published the raw MigrationEvent, so a client received
-        // `{seq,type,at,level,payload}` on connect and a bare event afterwards
-        // — and every live frame then blew up in the reducer.
-        //
-        // Only an EMBEDDED agent can publish like this; an agent in its own
-        // process needs the NOTIFY bus of phase 3 to reach the hub.
-        onFlushed: (runId, projection) =>
-          runHub.publish(
-            runId,
-            projection.events.map((e) => ({
-              seq: e.seq,
-              type: e.type,
-              at: e.at.toISOString(),
-              level: e.level,
-              payload: e.payload as unknown as Record<string, unknown>,
-            }))
-          ),
+        // No onFlushed broadcast: every batch commits a NOTIFY, and the feed
+        // below delivers it — the same path an agent in another process uses.
       }
     );
 
