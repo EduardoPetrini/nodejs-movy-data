@@ -85,4 +85,47 @@ describe('SyncSchemaUseCase', () => {
     const appliedDiff = (synchronizer.apply as any).mock.calls[0][1] as SchemaDiff;
     expect(appliedDiff.columnsToAdd[0].column.defaultValue).toBe('CURRENT_TIMESTAMP');
   });
+
+  describe('auto-increment across engines', () => {
+    const serial = {
+      name: 'id', dataType: 'integer', isNullable: false,
+      defaultValue: "nextval('users_id_seq'::regclass)", autoIncrement: true,
+      characterMaxLength: null, numericPrecision: null, numericScale: null,
+    };
+    const pk = { name: 'users_pkey', type: 'PRIMARY KEY' as const, columns: ['id'] };
+
+    async function applied(source: DatabaseType, dest: DatabaseType, diff: SchemaDiff): Promise<SchemaDiff> {
+      await new SyncSchemaUseCase(synchronizer, translator, source, dest, logger).execute(createMockConnection(), diff);
+      return (synchronizer.apply as any).mock.calls[0][1] as SchemaDiff;
+    }
+
+    it('creates a PG serial on MySQL as AUTO_INCREMENT without its nextval() default', async () => {
+      const table: TableSchema = { name: 'users', columns: [serial], constraints: [pk], indexes: [] };
+      const out = await applied(DatabaseType.POSTGRES, DatabaseType.MYSQL, { ...emptyDiff(), tablesToCreate: [table] });
+      expect(out.tablesToCreate[0].columns[0]).toMatchObject({ autoIncrement: true, defaultValue: null });
+      expect(translator.translateDefaultValue).not.toHaveBeenCalled();
+    });
+
+    it('warns, naming the column, when the destination cannot keep auto-increment', async () => {
+      const table: TableSchema = { name: 'users', columns: [serial], constraints: [], indexes: [] };
+      const out = await applied(DatabaseType.POSTGRES, DatabaseType.MYSQL, { ...emptyDiff(), tablesToCreate: [table] });
+      expect(out.tablesToCreate[0].columns[0].autoIncrement).toBe(false);
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('users.id'));
+    });
+
+    it('adds a column to an existing MySQL table without auto-increment or nextval()', async () => {
+      const out = await applied(DatabaseType.POSTGRES, DatabaseType.MYSQL, {
+        ...emptyDiff(), columnsToAdd: [{ tableName: 'users', column: serial }],
+      });
+      expect(out.columnsToAdd[0].column).toMatchObject({ autoIncrement: false, defaultValue: null });
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('users.id'));
+    });
+
+    it('leaves a same-engine table exactly as inspected', async () => {
+      const table: TableSchema = { name: 'users', columns: [serial], constraints: [pk], indexes: [] };
+      const out = await applied(DatabaseType.POSTGRES, DatabaseType.POSTGRES, { ...emptyDiff(), tablesToCreate: [table] });
+      expect(out.tablesToCreate[0].columns[0].defaultValue).toBe(serial.defaultValue);
+      expect(logger.warn).not.toHaveBeenCalled();
+    });
+  });
 });

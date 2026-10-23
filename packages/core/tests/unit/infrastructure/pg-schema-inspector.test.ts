@@ -183,6 +183,19 @@ describe('PgSchemaInspector', () => {
       expect(schema.tables[0].indexes[0].method).toBe('btree');
     });
 
+    it('flags serial and identity columns as autoIncrement, and nothing else', async () => {
+      const base = { table_name: 't', data_type: 'integer', udt_name: 'int4', is_nullable: 'NO', character_maximum_length: null, numeric_precision: 32, numeric_scale: 0 };
+      mockQuerySequence(conn, [[
+        { ...base, column_name: 'id', column_default: "nextval('t_id_seq'::regclass)", is_identity: 'NO' },
+        { ...base, column_name: 'ident', column_default: null, is_identity: 'YES' },
+        { ...base, column_name: 'qty', column_default: '1', is_identity: 'NO' },
+      ], [], [], [], []]);
+      const schema = await inspector.inspect(conn);
+      expect(schema.tables[0].columns.map((c) => c.autoIncrement)).toEqual([true, true, false]);
+      // The default stays as inspected: PG→PG recreates the sequence and needs it.
+      expect(schema.tables[0].columns[0].defaultValue).toBe("nextval('t_id_seq'::regclass)");
+    });
+
     it('builds sequences', async () => {
       const seqRows = [
         { sequence_name: 'users_id_seq', start_value: '1', minimum_value: '1', maximum_value: '9223372036854775807', increment: '1', cycle_option: 'NO' },

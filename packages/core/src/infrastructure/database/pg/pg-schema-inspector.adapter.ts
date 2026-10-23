@@ -19,6 +19,7 @@ interface RawColumn {
   udt_name: string;
   is_nullable: string;
   column_default: string | null;
+  is_identity: string;
   character_maximum_length: number | null;
   numeric_precision: number | null;
   numeric_scale: number | null;
@@ -129,6 +130,7 @@ export class PgSchemaInspector implements ISchemaInspector {
          c.udt_name,
          c.is_nullable,
          c.column_default,
+         c.is_identity,
          c.character_maximum_length,
          c.numeric_precision,
          c.numeric_scale
@@ -297,6 +299,10 @@ export class PgSchemaInspector implements ISchemaInspector {
           dataType: c.data_type === 'USER-DEFINED' ? c.udt_name : c.data_type,
           isNullable: c.is_nullable === 'YES',
           defaultValue: c.column_default,
+          // A serial says so only through its default; an identity column has none.
+          // The flag is what other engines' synchronizers turn into AUTO_INCREMENT
+          // or IDENTITY, since the nextval() default means nothing there.
+          autoIncrement: c.is_identity === 'YES' || /^\s*nextval\s*\(/i.test(c.column_default ?? ''),
           characterMaxLength: c.character_maximum_length,
           numericPrecision: c.numeric_precision,
           numericScale: c.numeric_scale,
