@@ -163,6 +163,13 @@ describe('SyncSchemaUseCase', () => {
       expect(await altersFor(DatabaseType.POSTGRES, DatabaseType.MSSQL, alter('numeric(12,2)', 'decimal(12,2)'))).toEqual([]);
     });
 
+    it('treats decimal and numeric as one type, as every engine does', async () => {
+      // SQL Server refused ALTER COLUMN decimal(12,2) on a numeric(12,2) column
+      // that a default constraint uses, on a re-run that changed nothing.
+      (translator.translateColumnType as any).mockReturnValue('decimal(12,2)');
+      expect(await altersFor(DatabaseType.MYSQL, DatabaseType.MSSQL, alter('decimal(12,2)', 'numeric(12,2)'))).toEqual([]);
+    });
+
     it('keeps a real type change', async () => {
       (translator.translateColumnType as any).mockReturnValue('bigint');
       const out = await altersFor(DatabaseType.POSTGRES, DatabaseType.MYSQL, alter('bigint', 'int'));

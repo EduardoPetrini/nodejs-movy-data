@@ -90,7 +90,8 @@ export class SyncSchemaUseCase {
    */
   private alreadyTranslated(translated: string, target: string): boolean {
     if (this.sourceType === this.destType) return false;
-    const norm = (t: string): string => t.trim().toLowerCase().replace(/\s+/g, '');
+    // decimal and numeric are one type in SQL Server, MySQL and PostgreSQL alike.
+    const norm = (t: string): string => t.trim().toLowerCase().replace(/\s+/g, '').replace(/^numeric/, 'decimal');
     const base = (t: string): string => norm(t).replace(/\(.*\)$/, '');
     if (norm(translated).includes('(') && norm(target).includes('(')) {
       return norm(translated) === norm(target);
