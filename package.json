@@ -16,7 +16,12 @@
     "db:generate": "pnpm --filter @movy/web db:generate",
     "seed:dev": "pnpm --filter @movy/web exec tsx --env-file=.env scripts/seed-dev.ts",
     "simulate": "tsx --tsconfig apps/runner/tsconfig.dev.json apps/runner/src/main.ts",
-    "test:e2e": "pnpm --filter @movy/web test:e2e"
+    "test:e2e": "pnpm --filter @movy/web test:e2e",
+    "docker:init": "bash scripts/docker-init.sh",
+    "docker:up": "docker compose up -d --build && docker compose up -d --wait --wait-timeout 600 web pg-lab mysql-lab mssql-lab",
+    "docker:down": "docker compose down",
+    "docker:cli": "docker compose run --rm cli",
+    "docker:e2e": "docker compose --profile e2e run --rm --build e2e"
   },
   "keywords": [],
   "author": "",

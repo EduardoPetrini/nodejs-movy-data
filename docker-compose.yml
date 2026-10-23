@@ -1,0 +1,179 @@
+# Movy — the whole stack on one machine.
+#
+#   pnpm docker:init     once: writes docker/*.env with fresh secrets
+#   pnpm docker:up       build + start; UI on http://localhost:3000
+#   pnpm docker:cli      the interactive CLI, inside the network
+#   pnpm docker:e2e      Playwright against the running stack
+#
+# Sign in as admin@ / editor@ / viewer@movy.local, password `movy-dev`.
+#
+# Runner service plan, Phase 0 (docs/runner-service-plan.md): the web container
+# still FORKS the runner per run, over IPC, so the runner lives in this image
+# and dies with this container. Phase 6 moves runs to separate runner services.
+#
+# Networking:
+#   container -> container  service names on movy-net. In the UI a lab
+#                           connection is pg-lab:5432, never localhost:5433.
+#   host -> container       ports bound to 127.0.0.1 only, never the LAN.
+#   container -> host       host.docker.internal, for databases outside Docker.
+
+name: movy
+
+x-app: &app
+  image: movy:local
+  build: { context: ., dockerfile: docker/Dockerfile, target: runtime }
+  networks: [movy]
+
+# migrate and seed need drizzle-kit and tsx, which are devDependencies.
+x-tools: &tools
+  image: movy:build
+  build: { context: ., dockerfile: docker/Dockerfile, target: build }
+  env_file: [docker/movy.env]
+  networks: [movy]
+  restart: "no"
+
+services:
+  # ── Movy's own metadata: the only database whose data must survive ──────────
+  meta-db:
+    image: postgres:17-alpine
+    env_file: [docker/meta-db.env]
+    environment: { POSTGRES_USER: movy, POSTGRES_DB: movy_data }
+    volumes: [movy-meta:/var/lib/postgresql/data]
+    # 5442, not 5432: a developer's own Postgres usually holds the default.
+    ports: ["127.0.0.1:${MOVY_META_PORT:-5442}:5432"]
+    # -h 127.0.0.1: during initdb the server listens on its socket only, so a
+    # TCP probe cannot report ready before initialisation has finished.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U movy -d movy_data"]
+      interval: 3s
+      retries: 30
+    networks: [movy]
+    restart: unless-stopped
+
+  migrate:
+    <<: *tools
+    command: pnpm --filter @movy/web db:migrate
+    depends_on: { meta-db: { condition: service_healthy } }
+
+  # Idempotent: dev users and orgs, then the lab connections in `acme`.
+  seed:
+    <<: *tools
+    env_file: [docker/movy.env, docker/lab.env]
+    working_dir: /app/apps/web
+    command: sh -c "pnpm exec tsx scripts/seed-dev.ts && pnpm exec tsx scripts/seed-lab.ts"
+    depends_on: { migrate: { condition: service_completed_successfully } }
+
+  # ── The console ──────────────────────────────────────────────────────────────
+  web:
+    <<: *app
+    env_file: [docker/movy.env]
+    # Phase 0 only: reaps the runners this process forks. A zombie keeps its
+    # pid, so it would pass the liveness check that settles vanished runs.
+    init: true
+    working_dir: /app/apps/web
+    command: node .output/server/index.mjs
+    environment:
+      HOST: 0.0.0.0
+      PORT: "3000"
+      # Resolved explicitly: the defaults are relative to a dev checkout.
+      MOVY_RUNNER_ENTRY: /app/apps/runner/dist/main.js
+      MOVY_SIMULATION_FIXTURE: /app/apps/runner/fixtures/pg-to-pg-315k.ndjson
+      MOVY_JOURNAL_DIR: /data/runs
+    volumes: [movy-journals:/data/runs]
+    ports: ["127.0.0.1:${MOVY_WEB_PORT:-3000}:3000"]
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/login').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 3s
+      retries: 40
+    depends_on: { migrate: { condition: service_completed_successfully } }
+    restart: unless-stopped
+
+  # ── Lab databases: disposable, seeded, ready to migrate ─────────────────────
+  # Each holds movy_src (the shop fixture) and an empty movy_dst.
+  pg-lab:
+    image: postgres:17
+    env_file: [docker/lab.env]
+    volumes: [./docker/fixtures/postgres:/docker-entrypoint-initdb.d:ro]
+    ports: ["127.0.0.1:5433:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "psql -h 127.0.0.1 -U postgres -d movy_src -tAc 'SELECT 1 FROM order_items LIMIT 1' | grep -q 1"]
+      interval: 3s
+      retries: 40
+    networks: [movy]
+
+  mysql-lab:
+    image: mysql:8.4
+    env_file: [docker/lab.env]
+    volumes: [./docker/fixtures/mysql:/docker-entrypoint-initdb.d:ro]
+    ports: ["127.0.0.1:3307:3306"]
+    # Over TCP, which the image keeps off while init scripts run.
+    healthcheck:
+      test: ["CMD-SHELL", "mysql -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" -NBe 'SELECT 1 FROM movy_src.order_items LIMIT 1' | grep -q 1"]
+      interval: 3s
+      retries: 60
+    networks: [movy]
+
+  mssql-lab:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    # No arm64 build exists; Docker Desktop runs it under Rosetta.
+    platform: linux/amd64
+    env_file: [docker/lab.env]
+    environment: { ACCEPT_EULA: "Y", MSSQL_PID: Developer }
+    ports: ["127.0.0.1:1434:1433"]
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -C -S 127.0.0.1 -U sa -P \"$$MSSQL_SA_PASSWORD\" -Q 'SELECT 1' -b -o /dev/null"]
+      interval: 5s
+      retries: 40
+      start_period: 20s
+    networks: [movy]
+
+  # SQL Server has no init directory; this loads the fixture once it is up.
+  mssql-init:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    platform: linux/amd64
+    env_file: [docker/lab.env]
+    entrypoint: ["/fixtures/init.sh"]
+    volumes: [./docker/fixtures/mssql:/fixtures:ro]
+    depends_on: { mssql-lab: { condition: service_healthy } }
+    networks: [movy]
+    restart: "no"
+
+  # ── On demand ────────────────────────────────────────────────────────────────
+  cli:
+    <<: *app
+    profiles: [cli]
+    env_file: [docker/cli.env]
+    working_dir: /app
+    command: node apps/cli/dist/main.js
+    stdin_open: true
+    tty: true
+    volumes: [./logs:/app/logs]
+
+  e2e:
+    image: movy:e2e
+    build: { context: ., dockerfile: docker/Dockerfile, target: e2e }
+    profiles: [e2e]
+    # Shares web's network namespace, so the app is http://localhost:3000. The
+    # session cookie is Secure, and browsers only send one over plain HTTP to
+    # localhost — at http://web:3000 sign-in would silently not stick.
+    network_mode: service:web
+    environment:
+      MOVY_E2E_EXTERNAL_SERVER: "1"
+      MOVY_E2E_LIVE: "1"
+    working_dir: /app/apps/web
+    command: pnpm exec playwright test
+    volumes: [./apps/web/test-results:/app/apps/web/test-results]
+    depends_on:
+      web: { condition: service_healthy }
+      seed: { condition: service_completed_successfully }
+      pg-lab: { condition: service_healthy }
+      mysql-lab: { condition: service_healthy }
+      mssql-init: { condition: service_completed_successfully }
+
+networks:
+  movy: { name: movy-net }
+
+volumes:
+  movy-meta: {}
+  movy-journals: {}

@@ -24,6 +24,7 @@ A database-agnostic CLI migration tool. Migrates schema and data between Postgre
 
 - Node.js 18+
 - Access to source and destination databases
+- Or only Docker: see [Running with Docker](#running-with-docker)
 
 ## Installation
 
@@ -230,6 +231,53 @@ pnpm seed:dev      # admin@ / editor@ / viewer@movy.local, password movy-dev
 
 See `docs/web-ui-progress.md` for what is built and what is not.
 
+## Running with Docker
+
+One Compose file brings up the console, its metadata database, and three seeded lab
+databases to migrate between. You need Docker only, no Node.
+
+```bash
+pnpm docker:init   # once: writes docker/*.env with fresh secrets (never overwrites)
+pnpm docker:up     # build, start, wait until healthy → http://localhost:3000
+pnpm docker:cli    # the interactive CLI, pre-filled for lab MySQL → lab PostgreSQL
+pnpm docker:e2e    # Playwright against the running stack, incl. a real migration
+pnpm docker:down   # stop; add -v to `docker compose down` to reset all data
+```
+
+Sign in as `admin@` / `editor@` / `viewer@movy.local` with password `movy-dev`. The
+`acme` org already has **Lab PostgreSQL**, **Lab MySQL** and **Lab SQL Server**
+connections. Each lab database holds `movy_src`, a small shop (four tables, about 22k
+rows, a self-referencing FK), and an empty `movy_dst`.
+
+| Service | Reach it from the host | Inside the stack |
+|---|---|---|
+| Console | `http://localhost:3000` | `web:3000` |
+| Metadata DB (persistent) | `localhost:5442`, user `movy` | `meta-db:5432` |
+| Lab PostgreSQL | `localhost:5433`, user `postgres` | `pg-lab:5432` |
+| Lab MySQL | `localhost:3307`, user `root` | `mysql-lab:3306` |
+| Lab SQL Server | `localhost:1434`, user `sa` | `mssql-lab:1433` |
+
+The passwords are in `docker/lab.env` and `docker/meta-db.env`. Ports are bound to
+127.0.0.1 only. If 3000 or 5442 is taken, publish elsewhere:
+`MOVY_WEB_PORT=3010 MOVY_META_PORT=5443 pnpm docker:up`. Containers keep their
+internal ports, so nothing else changes.
+
+**Name databases the way the stack sees them.** Tests and runs execute inside a
+container, so a connection saved in the console is `pg-lab:5432`, never
+`localhost:5433`, which is the web container itself. A database running on your machine
+outside Docker is `host.docker.internal`.
+
+Only `meta-db` keeps its data across `down`/`up`. The lab databases are re-seeded
+whenever their volumes are recreated. SQL Server has no arm64 image: on Apple Silicon it
+runs under Rosetta (enable it in Docker Desktop) and wants about 2 GB of memory.
+
+The run is forked inside the `web` container for now, so **restarting `web` mid-run
+kills the run**. It is settled `failed` / `RunnerVanished`. Moving runs to separately
+scalable runner services is the plan in `docs/runner-service-plan.md`.
+
+This is a local stack, not a production deployment: password sign-in is on and the
+seeded passwords are public.
+
 ## Logs
 
 Each run writes a log file to `logs/movy_YYYY-MM-DD_HH-MM-SS_<src>_to_<dst>.log`.
@@ -253,6 +301,7 @@ Two suites do need one, and are therefore not part of `pnpm test`:
 
 ```bash
 pnpm test:e2e           # Playwright, needs a migrated database + `pnpm seed:dev`
+pnpm docker:e2e         # the same suite inside Compose, plus a live PG → PG migration
 ```
 
 `packages/core/tests/integration/` needs real source and destination databases and is not

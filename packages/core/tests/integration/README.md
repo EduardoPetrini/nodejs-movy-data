@@ -1,6 +1,10 @@
 # Integration Tests
 
-Integration tests require two live PostgreSQL instances. Use Docker Compose to spin them up.
+Integration tests require live databases. The quickest way to get them is the repo's
+Compose stack: `pnpm docker:init && pnpm docker:up` starts seeded PostgreSQL
+(`localhost:5433`), MySQL (`localhost:3307`) and SQL Server (`localhost:1434`), each with a
+`movy_src` fixture and an empty `movy_dst`; passwords are in `docker/lab.env`. See
+"Running with Docker" in the root README. The manual setup below still works.
 
 ## Setup
 

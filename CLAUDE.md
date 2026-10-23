@@ -31,7 +31,27 @@ pnpm seed:dev                # dev users: admin@/editor@/viewer@movy.local
 
 # Run a single test file
 pnpm exec vitest run packages/core/tests/unit/application/migration-orchestrator.service.test.ts
+
+# Docker Compose: console + meta-db + seeded PG/MySQL/MSSQL lab databases
+pnpm docker:init             # once: docker/*.env with fresh secrets; never overwrites
+pnpm docker:up               # build + start + wait healthy → http://localhost:3000
+pnpm docker:e2e              # Playwright in a container, incl. a live PG→PG run
+pnpm docker:cli              # interactive CLI inside movy-net
 ```
+
+**Compose rules** (`docker-compose.yml`, `docker/`):
+- One image (`docker/Dockerfile`, target `runtime`) serves web, runner and CLI. `migrate`
+  and `seed` use the `build` target because drizzle-kit and tsx are devDependencies.
+- **Inside the stack, databases are service names** (`pg-lab:5432`). `localhost` in a
+  connection means the web container itself.
+- The `e2e` service uses `network_mode: service:web`. The session cookie is `Secure`,
+  and a browser sends it over plain HTTP only to `localhost`, so at `http://web:3000`
+  sign-in would silently not stick. Do not "fix" this by weakening the cookie.
+- Compose never reads the root `.env`, which belongs to the CLI. Its env files are
+  `docker/{movy,meta-db,lab,cli}.env`, and regenerating `NUXT_ENCRYPTION_KEY` makes every
+  saved connection undecryptable, which is why `docker:init` refuses to overwrite.
+- Phase 0 of `docs/runner-service-plan.md`: `web` still forks the runner, so it carries
+  `init: true` (a zombie runner would pass the liveness check) and the journal volume.
 
 ## Architecture
 
