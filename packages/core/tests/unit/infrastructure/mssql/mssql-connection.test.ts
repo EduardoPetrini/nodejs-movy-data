@@ -8,6 +8,7 @@ const mockQueryResult = { recordset: mockRecordset };
 const mockRequest = {
   input: vi.fn().mockReturnThis(),
   query: vi.fn().mockResolvedValue(mockQueryResult),
+  batch: vi.fn().mockResolvedValue(mockQueryResult),
 };
 
 const mockInnerConn = {
@@ -21,11 +22,25 @@ const mockPool = {
   close: vi.fn().mockResolvedValue(undefined),
 };
 
+// The client's own single-connection pool. mssql's `pool.connect()` resolves to
+// the pool itself, never to one connection, so a session can only be pinned by
+// a pool that has exactly one.
+const dedicatedPool = {
+  connect: vi.fn(),
+  request: vi.fn().mockReturnValue(mockRequest),
+  close: vi.fn().mockResolvedValue(undefined),
+};
+
+/** The configs each ConnectionPool was built with, in order. */
+const poolConfigs: Array<Record<string, unknown>> = [];
+
 vi.mock('mssql', () => {
   return {
     default: {
-      ConnectionPool: vi.fn().mockImplementation(function () {
-        return mockPool;
+      ConnectionPool: vi.fn().mockImplementation(function (cfg: Record<string, unknown>) {
+        poolConfigs.push(cfg);
+        // The first pool is the connection's own; any later one is a client's.
+        return poolConfigs.length === 1 ? mockPool : dedicatedPool;
       }),
     },
   };
@@ -45,8 +60,13 @@ const config = {
 describe('MssqlConnection', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    poolConfigs.length = 0;
+    dedicatedPool.connect.mockResolvedValue(dedicatedPool);
+    dedicatedPool.request.mockReturnValue(mockRequest);
+    dedicatedPool.close.mockResolvedValue(undefined);
     mockRequest.input.mockReturnThis();
     mockRequest.query.mockResolvedValue(mockQueryResult);
+    mockRequest.batch.mockResolvedValue(mockQueryResult);
     mockPool.connect.mockResolvedValue(mockInnerConn);
     mockPool.request.mockReturnValue(mockRequest);
     mockPool.close.mockResolvedValue(undefined);
@@ -108,11 +128,52 @@ describe('MssqlConnection', () => {
       expect(rows).toEqual(mockRecordset);
     });
 
-    it('client release() calls conn.close()', async () => {
+    it('pins the client to one session with a dedicated single-connection pool', async () => {
+      // SET IDENTITY_INSERT is per session; through the shared pool it and the
+      // INSERT after it could land on two different connections.
+      const conn = new MssqlConnection(config);
+      const client = await conn.getClient();
+      await client.query('SET IDENTITY_INSERT [t] ON');
+      await client.query('INSERT INTO [t] VALUES (1)');
+
+      expect(poolConfigs).toHaveLength(2);
+      expect(poolConfigs[1]).toMatchObject({ server: 'localhost', database: 'testdb', pool: { max: 1, min: 0 } });
+      expect(dedicatedPool.connect).toHaveBeenCalledOnce();
+      expect(dedicatedPool.request).toHaveBeenCalledTimes(2);
+      expect(mockPool.request).not.toHaveBeenCalled();
+    });
+
+    it('sends a statement without parameters as a batch, so a SET outlives it', async () => {
+      // Through query() (sp_executesql) SET IDENTITY_INSERT ON reverted the
+      // moment it returned, and the explicit-id INSERT after it was refused.
+      const conn = new MssqlConnection(config);
+      const client = await conn.getClient();
+      await client.query('SET IDENTITY_INSERT [t] ON');
+      expect(mockRequest.batch).toHaveBeenCalledWith('SET IDENTITY_INSERT [t] ON');
+      expect(mockRequest.query).not.toHaveBeenCalled();
+    });
+
+    it('sends a statement with parameters through query(), with named inputs', async () => {
+      const conn = new MssqlConnection(config);
+      const client = await conn.getClient();
+      await client.query('INSERT INTO [t] VALUES (?, ?)', [1, 'a']);
+      expect(mockRequest.query).toHaveBeenCalledWith('INSERT INTO [t] VALUES (@p0, @p1)');
+      expect(mockRequest.input).toHaveBeenCalledWith('p0', 1);
+      expect(mockRequest.batch).not.toHaveBeenCalled();
+    });
+
+    it('release() closes only the client pool, never the shared one', async () => {
       const conn = new MssqlConnection(config);
       const client = await conn.getClient();
       client.release();
-      expect(mockInnerConn.close).toHaveBeenCalledOnce();
+      expect(dedicatedPool.close).toHaveBeenCalledOnce();
+      expect(mockPool.close).not.toHaveBeenCalled();
+    });
+
+    it('throws ConnectionError when the client pool cannot connect', async () => {
+      dedicatedPool.connect.mockRejectedValueOnce(new Error('login failed'));
+      const conn = new MssqlConnection(config);
+      await expect(conn.getClient()).rejects.toThrow(ConnectionError);
     });
   });
 

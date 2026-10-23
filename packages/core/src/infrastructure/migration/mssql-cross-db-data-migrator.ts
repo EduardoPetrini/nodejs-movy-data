@@ -11,6 +11,7 @@ import { MssqlConnection } from '../database/mssql/mssql-connection.adapter.js';
 import { PgConnection } from '../database/pg/pg-connection.adapter.js';
 import { MysqlConnection } from '../database/mysql/mysql-connection.adapter.js';
 import { throwIfCancelled, rethrowIfCancelled } from './cancellation.js';
+import { insertMssqlRows } from './mssql-insert.js';
 
 const BATCH_SIZE = 500;
 const DEFAULT_SCHEMA_MSSQL = 'dbo';
@@ -231,8 +232,6 @@ export class MssqlCrossDbDataMigrator implements IDataMigrator {
       const hasIdentity = identityColumns.length > 0;
       if (hasIdentity) await destClient.query(`SET IDENTITY_INSERT ${escapeId(table)} ON`);
 
-      const colList = columns.map(escapeId).join(', ');
-      const placeholder = `(${columns.map(() => '?').join(', ')})`;
 
       let offset = 0;
       let totalCopied = 0;
@@ -247,15 +246,7 @@ export class MssqlCrossDbDataMigrator implements IDataMigrator {
           );
           if (rows.length === 0) break;
 
-          const values: unknown[] = [];
-          const rowPlaceholders = rows.map(() => placeholder);
-          for (const row of rows) {
-            for (const col of columns) values.push(row[col] ?? null);
-          }
-          await destClient.query(
-            `INSERT INTO ${escapeId(table)} (${colList}) VALUES ${rowPlaceholders.join(', ')}`,
-            values
-          );
+          await insertMssqlRows(destClient, escapeId(table), columns, rows);
 
           totalCopied += rows.length;
           offset += rows.length;
@@ -315,8 +306,6 @@ export class MssqlCrossDbDataMigrator implements IDataMigrator {
       const hasIdentity = identityColumns.length > 0;
       if (hasIdentity) await destClient.query(`SET IDENTITY_INSERT ${escapeId(table)} ON`);
 
-      const mssqlColList = columns.map(escapeId).join(', ');
-      const placeholder = `(${columns.map(() => '?').join(', ')})`;
 
       let offset = 0;
       let totalCopied = 0;
@@ -331,15 +320,7 @@ export class MssqlCrossDbDataMigrator implements IDataMigrator {
           );
           if (rows.length === 0) break;
 
-          const values: unknown[] = [];
-          const rowPlaceholders = rows.map(() => placeholder);
-          for (const row of rows) {
-            for (const col of columns) values.push(row[col] ?? null);
-          }
-          await destClient.query(
-            `INSERT INTO ${escapeId(table)} (${mssqlColList}) VALUES ${rowPlaceholders.join(', ')}`,
-            values
-          );
+          await insertMssqlRows(destClient, escapeId(table), columns, rows);
 
           totalCopied += rows.length;
           offset += rows.length;

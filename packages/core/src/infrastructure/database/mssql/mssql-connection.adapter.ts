@@ -60,7 +60,7 @@ function replacePositionalParams(sqlText: string): string {
 export class MssqlConnection implements IDatabaseConnection {
   private pool: sql.ConnectionPool;
 
-  constructor(config: ConnectionConfig) {
+  constructor(private readonly config: ConnectionConfig) {
     this.pool = new (unwrapMssql(sql).ConnectionPool)(buildPoolConfig(config));
   }
 
@@ -86,25 +86,47 @@ export class MssqlConnection implements IDatabaseConnection {
     }
   }
 
+  /**
+   * One session for the caller's exclusive use, closed by `release()`.
+   *
+   * A pool of exactly one connection, because that is the only way mssql pins a
+   * session: `pool.connect()` resolves to the pool itself, not to a connection,
+   * so the earlier version handed out the shared pool — each statement could
+   * take a different connection, and `release()` closed the whole pool.
+   * Session state is what callers rely on: `SET IDENTITY_INSERT … ON` holds for
+   * the session that ran it, so the INSERT after it must run there too — and
+   * only if the SET ran as a batch (see `query` below).
+   */
   async getClient(): Promise<IDbClient> {
+    const session = new (unwrapMssql(sql).ConnectionPool)({
+      ...buildPoolConfig(this.config),
+      pool: { max: 1, min: 0 },
+    });
     try {
-      const conn = await this.pool.connect();
-      return {
-        query: async <T>(sqlText: string, params?: unknown[]): Promise<T[]> => {
-          const normalised = params?.length ? replacePositionalParams(sqlText) : sqlText;
-          const request = conn.request();
-          if (params?.length) addParams(request, params);
-          const result = await request.query<T>(normalised);
-          return result.recordset;
-        },
-        release: () => {
-          conn.close();
-        },
-      };
+      await session.connect();
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       throw new ConnectionError(`Failed to acquire client: ${message}`);
     }
+    return {
+      query: async <T>(sqlText: string, params?: unknown[]): Promise<T[]> => {
+        const request = session.request();
+        // Without parameters, a plain batch. mssql's query() always goes through
+        // sp_executesql, and a SET inside it reverts when that call returns — so
+        // `SET IDENTITY_INSERT … ON` never outlived its own statement, on any
+        // connection. Sent as a batch, it holds for the session.
+        if (!params?.length) return (await request.batch<T>(sqlText)).recordset;
+        addParams(request, params);
+        const result = await request.query<T>(replacePositionalParams(sqlText));
+        return result.recordset;
+      },
+      release: () => {
+        // `release()` is synchronous by contract. A close that fails leaves a
+        // socket the server times out on its own; left unhandled, the rejection
+        // would crash the process mid-migration instead.
+        session.close().catch(() => undefined);
+      },
+    };
   }
 
   async end(): Promise<void> {
