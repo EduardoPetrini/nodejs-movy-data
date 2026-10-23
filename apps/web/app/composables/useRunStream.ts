@@ -1,5 +1,5 @@
-import type { ServerFrame, WireEvent } from '#shared/run-wire'
-import { applyFrame, applyEvents, emptyRunState, runIsOver } from '../utils/run-reducer'
+import type { ServerFrame, WireEvent, WireRun } from '#shared/run-wire'
+import { applyFrame, applyEvents, applyRunRow, emptyRunState, runIsOver } from '../utils/run-reducer'
 import type { RunState } from '../utils/run-reducer'
 
 export type StreamStatus = 'connecting' | 'live' | 'catching-up' | 'closed' | 'revoked' | 'failed'
@@ -130,6 +130,21 @@ export function useRunStream(orgSlug: string, runId: string) {
     ws.onerror = () => { try { ws.close() } catch { /* already gone */ } }
   }
 
+  /** A status no event will announce, such as a queued run cancelled outright. */
+  function adoptRun(run: WireRun): void {
+    state.value = applyRunRow(state.value, run)
+    if (runIsOver(state.value)) stop()
+  }
+
+  async function refreshRun(): Promise<void> {
+    try {
+      const res = await $fetch<{ run: WireRun }>(`/api/orgs/${orgSlug}/runs/${runId}`)
+      adoptRun(res.run)
+    } catch {
+      // The socket is still the main path; a missed refresh changes nothing.
+    }
+  }
+
   function stop(): void {
     stopped = true
     if (reconnectTimer) clearTimeout(reconnectTimer)
@@ -140,5 +155,5 @@ export function useRunStream(orgSlug: string, runId: string) {
   onMounted(() => { void connect() })
   onBeforeUnmount(stop)
 
-  return { state, status, detail, stop, retry: () => { stopped = false; attempts = 0; void connect() } }
+  return { state, status, detail, stop, adoptRun, refreshRun, retry: () => { stopped = false; attempts = 0; void connect() } }
 }

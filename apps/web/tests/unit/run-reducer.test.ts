@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { applyEvents, applyFrame, applySnapshot, emptyRunState, runIsOver } from '../../app/utils/run-reducer'
+import { applyEvents, applyFrame, applyRunRow, applySnapshot, emptyRunState, runIsOver } from '../../app/utils/run-reducer'
 import type { RunState } from '../../app/utils/run-reducer'
 import type { ServerFrame, WireEvent, WireRun } from '../../shared/run-wire'
 
@@ -23,7 +23,7 @@ function fixtureEvents(): WireEvent[] {
 }
 
 const RUN: WireRun = {
-  id: 'run-1', status: 'queued', mode: 'full', simulated: true,
+  id: 'run-1', status: 'queued', mode: 'full', simulated: true, runnerClass: 'default',
   source: { engine: 'postgres', database: 'movy_fixture_src' },
   target: { engine: 'postgres', database: 'movy_fixture_dst' },
   progress: { rowsDone: 0, rowsTotal: 0, tablesDone: 0, tablesTotal: 0, pct: 0 },
@@ -235,5 +235,26 @@ describe('empty and degenerate input', () => {
     applyEvents(before, fixtureEvents())
     expect(before.logs).toBe(snapshotOfLogs)
     expect(before.lastSeq).toBe(0)
+  })
+})
+
+describe('a run row read over REST', () => {
+  it('settles a queued run cancelled outright, which no event will ever announce', () => {
+    const state = applyRunRow(applySnapshot(snapshot()), { ...RUN, status: 'cancelled', finishedAt: '2026-10-23T10:00:00.000Z' })
+    expect(state.run).toMatchObject({ status: 'cancelled', finishedAt: '2026-10-23T10:00:00.000Z' })
+    expect(runIsOver(state)).toBe(true)
+  })
+
+  it('never moves a run backwards, so a stale response cannot un-finish it', () => {
+    const finished = stateFromWholeRun()
+    expect(applyRunRow(finished, { ...RUN, status: 'running' })).toBe(finished)
+    const running = applySnapshot(snapshot({ run: { ...RUN, status: 'running' } }))
+    expect(applyRunRow(running, { ...RUN, status: 'queued' })).toBe(running)
+    expect(applyRunRow(running, { ...RUN, status: 'cancelling' }).run?.status).toBe('cancelling')
+  })
+
+  it('ignores a row for another run', () => {
+    const state = applySnapshot(snapshot())
+    expect(applyRunRow(state, { ...RUN, id: 'run-2', status: 'cancelled' })).toBe(state)
   })
 })

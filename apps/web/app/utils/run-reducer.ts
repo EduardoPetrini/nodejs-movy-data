@@ -258,6 +258,33 @@ export function applyFrame(state: RunState, frame: ServerFrame): RunState {
   }
 }
 
+const STATUS_RANK: Record<string, number> = {
+  queued: 0, running: 1, cancelling: 2, succeeded: 3, failed: 3, cancelled: 3,
+}
+
+/**
+ * A run row read over REST, for the status changes no event announces: a
+ * queued run cancelled outright never reached a runner, so nothing will ever
+ * stream its `run_finished`. Only ever moves the status FORWARD — a stale
+ * response arriving after the socket has moved on must not un-finish a run —
+ * and leaves steps, tables and logs to the events.
+ */
+export function applyRunRow(state: RunState, row: WireRun): RunState {
+  const current = state.run
+  if (!current || current.id !== row.id) return state
+  if ((STATUS_RANK[row.status] ?? -1) <= (STATUS_RANK[current.status] ?? -1)) return state
+  return {
+    ...state,
+    run: {
+      ...current,
+      status: row.status,
+      error: row.error ?? current.error,
+      finishedAt: row.finishedAt ?? current.finishedAt,
+      startedAt: current.startedAt ?? row.startedAt,
+    },
+  }
+}
+
 export function runIsOver(state: RunState): boolean {
   return state.run !== null && isTerminal(state.run.status)
 }

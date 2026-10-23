@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { isTerminal } from '#shared/run-wire'
+import { isTerminal, type WireRun } from '#shared/run-wire'
 
 const route = useRoute()
 const orgSlug = route.params.orgSlug as string
@@ -8,13 +8,16 @@ const runId = route.params.runId as string
 const { data: me } = await useFetch('/api/me')
 const mayCancel = computed(() => me.value?.orgs.find((o) => o.slug === orgSlug)?.permissions.includes('run:cancel') ?? false)
 
-const { state, status, detail } = useRunStream(orgSlug, runId)
+const { state, status, detail, adoptRun, refreshRun } = useRunStream(orgSlug, runId)
 
 const cancelling = ref(false)
 async function cancel() {
   cancelling.value = true
   try {
-    await $fetch(`/api/orgs/${orgSlug}/runs/${runId}/cancel`, { method: 'POST' })
+    const res = await $fetch<{ run: WireRun }>(`/api/orgs/${orgSlug}/runs/${runId}/cancel`, { method: 'POST' })
+    // A queued run is cancelled outright and no runner will stream that, so
+    // the answer is applied here; a running one goes `cancelling` the same way.
+    adoptRun(res.run)
   } finally {
     cancelling.value = false
   }
@@ -43,7 +46,7 @@ const canCancel = computed(
         </template>
       </RunHeader>
 
-      <QueueNotice v-if="state.run.status === 'queued'" :org-slug="orgSlug" :run-id="runId" />
+      <QueueNotice v-if="state.run.status === 'queued'" :org-slug="orgSlug" :run-id="runId" @left="refreshRun" />
 
       <!-- Cancellation is cooperative: the orchestrator only observes the abort
            at a step boundary, so saying so beats a spinner that looks stuck. -->

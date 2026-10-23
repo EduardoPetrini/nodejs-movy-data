@@ -7,6 +7,8 @@ import { queueSentence, type QueueState } from '#shared/queue-wire'
  * slot frees, the destination is released — and none of that is a run event.
  */
 const props = defineProps<{ orgSlug: string; runId: string }>()
+/** It is no longer queued — claimed, or cancelled from somewhere else. */
+const emit = defineEmits<{ left: [] }>()
 
 const POLL_MS = 5000
 
@@ -18,6 +20,10 @@ async function poll() {
   try {
     const res = await $fetch<{ queue: QueueState | null }>(`/api/orgs/${props.orgSlug}/runs/${props.runId}/queue`)
     queue.value = res.queue
+    if (res.queue === null) {
+      emit('left')
+      return
+    }
   } catch {
     // A missed poll keeps the last answer; the next one corrects it.
   }
