@@ -178,6 +178,15 @@ is set only by the MySQL and MSSQL inspectors, and only MySQL's and MSSQL's
 arrives at PG with no sequence at all. Nothing in step 9 can fix that — there is no
 counter on the destination to reset.
 
+**On MySQL that is not degraded, it is fatal** (found by the Compose live e2e,
+2026-10-22): the default is emitted as the string literal
+`` `id` int NOT NULL DEFAULT 'nextval(\'customers_id_seq\'::regclass)' ``, MySQL rejects
+it, and schema sync fails on the first table. **PG→MySQL therefore fails for any source
+table with a `serial` column.** PG→MSSQL is unverified and probably the same.
+`live-migration.spec.ts` carries the PG→MySQL case as `test.fixme`; flip it when the
+translator drops the `nextval` default and sets AUTO_INCREMENT. MySQL→PG works (verified
+through the Compose CLI): the ids copy, only the counter is missing.
+
 ### Run events (the observable contract)
 
 `MigrationOrchestrator.run()` and `MigrateDataUseCase.execute()` take an **optional
@@ -585,6 +594,12 @@ suite is mock-driven and runs with nothing installed; this needs a migrated data
 The run it drives is **simulated** — the bundled fixture replayed through the real
 runner, socket, writer and reducer — so it exercises the whole machinery without
 depending on two throwaway databases existing on whoever's machine runs it.
+
+`live-migration.spec.ts` is the exception: a REAL PostgreSQL→PostgreSQL run against the
+Compose lab, checked by a row-count comparison (PG→MySQL is there as `test.fixme`, see
+the auto-increment gap). It skips unless `MOVY_E2E_LIVE` is set,
+which only `pnpm docker:e2e` does, and it finds its connections by the names
+`seed-lab.ts` saves. `MOVY_E2E_EXTERNAL_SERVER` turns off Playwright's own `webServer`.
 
 **The mid-run reload is the point.** Everything else is covered by unit tests against
 mocks; what none of them can cover is a real browser losing its WebSocket, re-fetching a
