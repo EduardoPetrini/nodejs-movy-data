@@ -69,8 +69,8 @@ test.describe('probes', () => {
     const targetId = await labConnectionId(page.request, 'Lab PostgreSQL');
     await page.goto(`/o/${ORG}/runs/new`);
     await page.waitForLoadState('networkidle');
-    await page.getByLabel('Source', { exact: true }).selectOption(sourceId);
-    await page.getByLabel('Destination', { exact: true }).selectOption(targetId);
+    await page.getByRole('combobox', { name: 'Source', exact: true }).selectOption(sourceId);
+    await page.getByRole('combobox', { name: 'Destination', exact: true }).selectOption(targetId);
     await page.getByTestId('probe-via').selectOption('default');
     await page.getByRole('button', { name: 'Preview' }).click();
     await expect(page.getByTestId('preview-via')).toHaveText('Inspected from the Default runner.', { timeout: 60_000 });
