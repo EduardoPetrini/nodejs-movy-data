@@ -196,6 +196,19 @@ describe('PgSchemaInspector', () => {
       expect(schema.tables[0].columns[0].defaultValue).toBe("nextval('t_id_seq'::regclass)");
     });
 
+    it('carries a numeric column\'s precision and scale in its type, as MySQL and MSSQL do', async () => {
+      // Reported as bare `numeric`, a PG numeric(12,2) became MySQL's
+      // decimal(10,0) and SQL Server's numeric(18,0): 4.50 was stored as 5.
+      const base = { table_name: 't', udt_name: 'numeric', is_nullable: 'NO', column_default: null, is_identity: 'NO', character_maximum_length: null };
+      mockQuerySequence(conn, [[
+        { ...base, column_name: 'price', data_type: 'numeric', numeric_precision: 12, numeric_scale: 2 },
+        { ...base, column_name: 'any', data_type: 'numeric', numeric_precision: null, numeric_scale: null },
+        { ...base, column_name: 'n', data_type: 'integer', udt_name: 'int4', numeric_precision: 32, numeric_scale: 0 },
+      ], [], [], [], []]);
+      const schema = await inspector.inspect(conn);
+      expect(schema.tables[0].columns.map((c) => c.dataType)).toEqual(['numeric(12,2)', 'numeric', 'integer']);
+    });
+
     it('builds sequences', async () => {
       const seqRows = [
         { sequence_name: 'users_id_seq', start_value: '1', minimum_value: '1', maximum_value: '9223372036854775807', increment: '1', cycle_option: 'NO' },

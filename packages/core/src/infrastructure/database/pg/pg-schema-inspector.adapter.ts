@@ -59,6 +59,23 @@ interface RawRowEstimate {
   reltuples: number;
 }
 
+/**
+ * The column's type, with a numeric's precision and scale folded in.
+ *
+ * `information_schema` reports `numeric` and keeps (12,2) in separate columns,
+ * which type translation never reads, so a PG numeric(12,2) arrived on MySQL as
+ * decimal(10,0) and on SQL Server as numeric(18,0) — rounding away every cent.
+ * The MySQL and MSSQL inspectors already carry it in the type string.
+ * An unconstrained `numeric` reports no precision and stays as it is.
+ */
+function pgDataType(c: RawColumn): string {
+  if (c.data_type === 'USER-DEFINED') return c.udt_name;
+  if (c.data_type === 'numeric' && c.numeric_precision != null) {
+    return `numeric(${c.numeric_precision},${c.numeric_scale ?? 0})`;
+  }
+  return c.data_type;
+}
+
 export class PgSchemaInspector implements ISchemaInspector {
   async inspect(
     connection: IDatabaseConnection,
@@ -296,7 +313,7 @@ export class PgSchemaInspector implements ISchemaInspector {
         .filter((c) => c.table_name === tableName)
         .map((c) => ({
           name: c.column_name,
-          dataType: c.data_type === 'USER-DEFINED' ? c.udt_name : c.data_type,
+          dataType: pgDataType(c),
           isNullable: c.is_nullable === 'YES',
           defaultValue: c.column_default,
           // A serial says so only through its default; an identity column has none.

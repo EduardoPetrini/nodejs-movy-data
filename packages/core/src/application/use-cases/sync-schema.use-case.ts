@@ -82,13 +82,19 @@ export class SyncSchemaUseCase {
    * NULL and AUTO_INCREMENT, and is refused outright for a column a foreign key
    * uses. Translated, most of them name the type the column already has.
    *
-   * Compared by base name: the destination's type arrives without its length,
-   * so a length-only change across engines is not detected. Same-engine Pairs
-   * keep every alteration, since there a differing name is a real change.
+   * When both types carry a length or precision, all of it is compared, so a
+   * destination created as decimal(10,0) is repaired rather than left rounding.
+   * When the destination's does not (PG reports `character varying` bare), only
+   * the base name can be, and a length-only change goes unseen. Same-engine
+   * Pairs keep every alteration, since there a differing name is a real change.
    */
   private alreadyTranslated(translated: string, target: string): boolean {
     if (this.sourceType === this.destType) return false;
-    const base = (t: string): string => t.trim().toLowerCase().replace(/\s*\(.*\)$/, '');
+    const norm = (t: string): string => t.trim().toLowerCase().replace(/\s+/g, '');
+    const base = (t: string): string => norm(t).replace(/\(.*\)$/, '');
+    if (norm(translated).includes('(') && norm(target).includes('(')) {
+      return norm(translated) === norm(target);
+    }
     return base(translated) === base(target);
   }
 

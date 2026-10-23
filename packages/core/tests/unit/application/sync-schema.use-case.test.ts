@@ -150,6 +150,19 @@ describe('SyncSchemaUseCase', () => {
       expect(await altersFor(DatabaseType.POSTGRES, DatabaseType.MYSQL, alter('character varying(255)', 'varchar'))).toEqual([]);
     });
 
+    it('keeps a precision change when both sides carry one', async () => {
+      // A destination created as decimal(10,0) must be repaired, not left
+      // rounding every value: the base names match, the precision does not.
+      (translator.translateColumnType as any).mockReturnValue('decimal(12,2)');
+      const out = await altersFor(DatabaseType.POSTGRES, DatabaseType.MYSQL, alter('numeric(12,2)', 'decimal(10,0)'));
+      expect(out[0].diff.sourceType).toBe('decimal(12,2)');
+    });
+
+    it('drops one whose precision matches up to spacing', async () => {
+      (translator.translateColumnType as any).mockReturnValue('decimal(12, 2)');
+      expect(await altersFor(DatabaseType.POSTGRES, DatabaseType.MSSQL, alter('numeric(12,2)', 'decimal(12,2)'))).toEqual([]);
+    });
+
     it('keeps a real type change', async () => {
       (translator.translateColumnType as any).mockReturnValue('bigint');
       const out = await altersFor(DatabaseType.POSTGRES, DatabaseType.MYSQL, alter('bigint', 'int'));
