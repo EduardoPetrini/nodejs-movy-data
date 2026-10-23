@@ -6,6 +6,7 @@ import {
   MigrationStepId,
   MIGRATION_STEP_ORDER,
   SchemaDiffSummary,
+  SerialisedError,
   StepDetail,
 } from '../../domain/types/events.types.js';
 import { MigrationCancelledError, ConnectionError } from '../../domain/errors/migration.errors.js';
@@ -19,6 +20,33 @@ import { retryWithBackoff } from '../../shared/utils.js';
 
 const MAX_CONNECT_RETRIES = 3;
 const CONNECT_BASE_DELAY_MS = 1000;
+
+/** How many failed tables a run's error names before it just counts the rest. */
+const FAILED_TABLES_NAMED = 3;
+/** Each table's reason is a driver message, of no fixed length. */
+const TABLE_ERROR_MAX_CHARS = 200;
+
+/**
+ * The reason a run that threw nothing still failed.
+ *
+ * A migrator records a table that failed to copy and carries on, so a run can
+ * end `failed` with no exception to report. Without this, `run_finished` had no
+ * error, the stored error message was empty, and the run page said "failed"
+ * and nothing else. The per-table detail stays in `result`.
+ */
+function describeFailedTables(result: MigrationResult): SerialisedError {
+  const failed = result.tables.filter((t) => !t.success);
+  const named = failed.slice(0, FAILED_TABLES_NAMED).map((t) => {
+    const reason = (t.error ?? 'no reason reported').slice(0, TABLE_ERROR_MAX_CHARS);
+    return `${t.tableName}: ${reason}`;
+  });
+  const rest = failed.length - named.length;
+  const list = named.join('; ') + (rest > 0 ? `; and ${rest} more` : '');
+  return {
+    name: 'TablesFailed',
+    message: `${failed.length} of ${result.tables.length} tables failed: ${list}`,
+  };
+}
 
 export class MigrationOrchestrator {
   constructor(
@@ -172,6 +200,7 @@ export class MigrationOrchestrator {
         status: result.success ? 'succeeded' : 'failed',
         durationMs: Date.now() - startedAt,
         result,
+        ...(result.success ? {} : { error: describeFailedTables(result) }),
       });
 
       return result;
