@@ -9,6 +9,7 @@ import {
 } from '../../../domain/types/schema.types.js';
 import { SchemaDiff } from '../../../domain/types/migration.types.js';
 import { SchemaSyncError } from '../../../domain/errors/migration.errors.js';
+import { constraintKey } from '../constraint-key.js';
 
 function escapeId(name: string): string {
   return '[' + name.replace(/]/g, ']]') + ']';
@@ -253,20 +254,20 @@ export class MssqlSchemaSynchronizer implements ISchemaSynchronizer {
     toAdd: SchemaDiff['constraintsToAdd'],
     toDrop: SchemaDiff['constraintsToDrop']
   ): void {
-    const targetConstraints = new Map(target.constraints.map((c) => [c.name, c]));
-    const sourceConstraints = new Map(source.constraints.map((c) => [c.name, c]));
+    const targetConstraints = new Map(target.constraints.map((c) => [constraintKey(c), c]));
+    const sourceConstraints = new Map(source.constraints.map((c) => [constraintKey(c), c]));
     const columnTypes: Record<string, string> = Object.fromEntries(
       source.columns.map((c) => [c.name, c.dataType])
     );
 
     for (const constraint of source.constraints) {
-      if (!targetConstraints.has(constraint.name)) {
+      if (!targetConstraints.has(constraintKey(constraint))) {
         toAdd.push({ tableName: source.name, constraint, columnTypes });
       }
     }
 
     for (const constraint of target.constraints) {
-      if (!sourceConstraints.has(constraint.name)) {
+      if (!sourceConstraints.has(constraintKey(constraint))) {
         toDrop.push({ tableName: source.name, constraintName: constraint.name, constraintType: constraint.type });
       }
     }

@@ -59,18 +59,37 @@ export class SyncSchemaUseCase {
         tableName,
         column: translateCol(this.carryAddedColumn(tableName, column)),
       })),
-      columnsToAlter: diff.columnsToAlter.map(({ tableName, diff: colDiff }) => ({
-        tableName,
-        diff: {
-          ...colDiff,
-          sourceType: this.translator.translateColumnType(colDiff.sourceType, this.sourceType, this.destType),
-        },
-      })),
+      columnsToAlter: diff.columnsToAlter
+        .map(({ tableName, diff: colDiff }) => ({
+          tableName,
+          diff: {
+            ...colDiff,
+            sourceType: this.translator.translateColumnType(colDiff.sourceType, this.sourceType, this.destType),
+          },
+        }))
+        .filter(({ diff: colDiff }) => !this.alreadyTranslated(colDiff.sourceType, colDiff.targetType)),
       constraintsToAdd: diff.constraintsToAdd.map(({ tableName, constraint }) => ({
         tableName,
         constraint: translateConstraint(constraint),
       })),
     };
+  }
+
+  /**
+   * The synchronizers diff the source's type names against the destination's,
+   * so across engines every column differs — `integer` is not `int` — and each
+   * re-run emitted a MODIFY COLUMN for all of them. On MySQL that strips NOT
+   * NULL and AUTO_INCREMENT, and is refused outright for a column a foreign key
+   * uses. Translated, most of them name the type the column already has.
+   *
+   * Compared by base name: the destination's type arrives without its length,
+   * so a length-only change across engines is not detected. Same-engine Pairs
+   * keep every alteration, since there a differing name is a real change.
+   */
+  private alreadyTranslated(translated: string, target: string): boolean {
+    if (this.sourceType === this.destType) return false;
+    const base = (t: string): string => t.trim().toLowerCase().replace(/\s*\(.*\)$/, '');
+    return base(translated) === base(target);
   }
 
   /** Runs before type translation, so no translator ever sees a foreign `nextval()`. */

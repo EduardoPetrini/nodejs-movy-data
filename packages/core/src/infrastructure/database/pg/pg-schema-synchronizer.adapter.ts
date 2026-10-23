@@ -12,6 +12,7 @@ import {
 import { SchemaDiff } from '../../../domain/types/migration.types.js';
 import { SchemaSyncError } from '../../../domain/errors/migration.errors.js';
 import { escapeIdentifier } from '../../../shared/utils.js';
+import { constraintKey } from '../constraint-key.js';
 
 // PostgreSQL types that accept a length/precision modifier via characterMaxLength.
 // All other types ignore it — e.g. "text" is always unlimited.
@@ -453,17 +454,17 @@ export class PgSchemaSynchronizer implements ISchemaSynchronizer {
     toAdd: SchemaDiff['constraintsToAdd'],
     toDrop: SchemaDiff['constraintsToDrop']
   ): void {
-    const targetConstraints = new Map(target.constraints.map((c) => [c.name, c]));
-    const sourceConstraints = new Map(source.constraints.map((c) => [c.name, c]));
+    const targetConstraints = new Map(target.constraints.map((c) => [constraintKey(c), c]));
+    const sourceConstraints = new Map(source.constraints.map((c) => [constraintKey(c), c]));
 
     for (const constraint of source.constraints) {
-      if (!targetConstraints.has(constraint.name)) {
+      if (!targetConstraints.has(constraintKey(constraint))) {
         toAdd.push({ tableName: source.name, constraint });
       }
     }
 
     for (const constraint of target.constraints) {
-      if (!sourceConstraints.has(constraint.name)) {
+      if (!sourceConstraints.has(constraintKey(constraint))) {
         toDrop.push({ tableName: source.name, constraintName: constraint.name, constraintType: constraint.type });
       }
     }

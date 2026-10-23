@@ -34,6 +34,15 @@ describe('PgSchemaSynchronizer', () => {
       expect(diff.columnsToAdd).toHaveLength(0);
     });
 
+    it('matches primary keys by type, so a MySQL source PRIMARY never drops customers_pkey', () => {
+      const pk = (name: string) => ({ name, type: 'PRIMARY KEY' as const, columns: ['id'] });
+      const source: DatabaseSchema = { tables: [makeTable('customers', { constraints: [pk('PRIMARY')] })], sequences: [], enums: [] };
+      const target: DatabaseSchema = { tables: [makeTable('customers', { constraints: [pk('customers_pkey')] })], sequences: [], enums: [] };
+      const diff = sync.diff(source, target);
+      expect(diff.constraintsToAdd).toHaveLength(0);
+      expect(diff.constraintsToDrop).toHaveLength(0);
+    });
+
     it('identifies tables to create', () => {
       const source: DatabaseSchema = { tables: [makeTable('users')], sequences: [], enums: [] };
       const diff = sync.diff(source, emptySchema());

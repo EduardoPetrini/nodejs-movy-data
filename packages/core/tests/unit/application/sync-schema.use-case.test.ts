@@ -128,4 +128,37 @@ describe('SyncSchemaUseCase', () => {
       expect(logger.warn).not.toHaveBeenCalled();
     });
   });
+
+  describe('column alterations across engines', () => {
+    const alter = (sourceType: string, targetType: string) => ({
+      ...emptyDiff(),
+      columnsToAlter: [{ tableName: 'customers', diff: { columnName: 'id', sourceType, targetType } }],
+    });
+
+    async function altersFor(source: DatabaseType, dest: DatabaseType, diff: SchemaDiff) {
+      await new SyncSchemaUseCase(synchronizer, translator, source, dest, logger).execute(createMockConnection(), diff);
+      return ((synchronizer.apply as any).mock.calls[0][1] as SchemaDiff).columnsToAlter;
+    }
+
+    it('drops an alteration whose translated type is the one the column already has', async () => {
+      (translator.translateColumnType as any).mockReturnValue('int');
+      expect(await altersFor(DatabaseType.POSTGRES, DatabaseType.MYSQL, alter('integer', 'int'))).toEqual([]);
+    });
+
+    it('drops one that differs only by a length the destination type does not carry', async () => {
+      (translator.translateColumnType as any).mockReturnValue('varchar(255)');
+      expect(await altersFor(DatabaseType.POSTGRES, DatabaseType.MYSQL, alter('character varying(255)', 'varchar'))).toEqual([]);
+    });
+
+    it('keeps a real type change', async () => {
+      (translator.translateColumnType as any).mockReturnValue('bigint');
+      const out = await altersFor(DatabaseType.POSTGRES, DatabaseType.MYSQL, alter('bigint', 'int'));
+      expect(out[0].diff.sourceType).toBe('bigint');
+    });
+
+    it('keeps every alteration between two databases of the same engine', async () => {
+      expect(await altersFor(DatabaseType.MYSQL, DatabaseType.MYSQL, alter('int', 'int(11)'))).toHaveLength(1);
+    });
+  });
 });
+
