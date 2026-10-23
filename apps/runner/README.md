@@ -74,9 +74,18 @@ interrupted from Node without per-driver support.
 | `--run-id <id>` | Required with `--simulate`; otherwise taken from the spec. |
 | `--stdin-timeout <ms>` | How long to wait for the spec (default 10000). |
 
+## The host side: `src/agent/`
+
+The code that forks this process, reads its IPC and journal, and folds the events
+into the metadata database lives here too, exported as `@movy/runner/agent`:
+`RunManager`, `EventWriter`, `projectEvents`, the journal tailer and the ingestion
+helpers. The web console uses it today and still forks every run itself; the runner
+agent in `docs/runner-service-plan.md` (phase 2) will run the same modules, which is
+why they sit beside the contract they implement rather than in the web app.
+
 ## Tests
 
-`tests/unit/` covers each module against fakes. `tests/process/` forks the real
+`tests/unit/` covers each module against fakes, `tests/unit/agent/` the host side. `tests/process/` forks the real
 binary the way the host will — detached, with IPC — and asserts the contract the
 web app depends on: `ready` then events, `cancel` accepted, exit code matching
 the outcome, and the journal agreeing with what went over the wire.

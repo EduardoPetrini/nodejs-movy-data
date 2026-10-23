@@ -68,8 +68,9 @@ packages/core/          # @movy/core — the hexagon. No I/O entry points.
 ├── src/index.ts        # Public barrel — apps import ONLY from '@movy/core'
 └── tests/              # Mock-driven unit tests
 
+packages/db/            # @movy/db — metadata DB: Drizzle schema, migrations, createDb(), secret crypto
 apps/cli/               # @movy/cli — interactive command-line surface
-apps/runner/            # @movy/runner — forked per run (scaffolded; Phase 3)
+apps/runner/            # @movy/runner — forked per run; src/agent/ is the host side (run control)
 apps/web/               # @movy/web — Nuxt 4 console (orgs, RBAC, connections)
 ```
 
@@ -295,11 +296,23 @@ and `runs`, plus `run_events` and the two projections `run_steps` /
 
 | Module | Purpose |
 |--------|---------|
-| `server/runs/run-projection.ts` | **Pure.** Folds a batch of events into row patches. No I/O, so every ordering rule is testable against the recorded fixture. |
-| `server/runs/event-writer.ts` | Batches events (200 / 250ms) into one transaction per run. Never rethrows: a failed metadata write must not kill a live migration. |
-| `server/runs/journal-tailer.ts` | Reads a journal forward from a `seq` cursor; tolerates a half-written trailing line. |
-| `server/runs/run-manager.ts` | Forks the runner `detached`, feeds IPC to the writer, cancels, and re-attaches on boot. |
-| `server/repositories/runs.repo.ts` | Org-scoped reads; plus the unscoped ingestion helpers the manager uses. |
+| `apps/runner/src/agent/run-projection.ts` | **Pure.** Folds a batch of events into row patches. No I/O, so every ordering rule is testable against the recorded fixture. |
+| `apps/runner/src/agent/event-writer.ts` | Batches events (200 / 250ms) into one transaction per run. Never rethrows: a failed metadata write must not kill a live migration. |
+| `apps/runner/src/agent/journal-tailer.ts` | Reads a journal forward from a `seq` cursor; tolerates a half-written trailing line. |
+| `apps/runner/src/agent/run-manager.ts` | Forks the runner `detached`, feeds IPC to the writer, cancels, and re-attaches on boot. |
+| `apps/runner/src/agent/ingestion.ts` | The unscoped ingestion helpers the manager uses (`applyProjection` and friends). |
+| `server/repositories/runs.repo.ts` | Org-scoped reads, and the retention sweep. |
+| `server/runs/index.ts` | Wires the agent modules above to `useDb()` and the hub. Imports `@movy/runner/agent`. |
+
+**Run control lives in `apps/runner/src/agent/`, not in the web app** (phase 1 of
+`docs/runner-service-plan.md`). The web console still forks every run through it; the
+runner agent of phase 2 will run the same modules. The schema, migrations, `createDb()`
+and the connection-secret crypto are `@movy/db`, which both share.
+`server/db/schema/index.ts`, `server/db/client.ts` and `server/utils/crypto.ts` re-export
+it, so the web app's imports did not move. `pnpm db:migrate` / `db:generate` run in
+`packages/db`. Like `@movy/core`, `@movy/db` and `@movy/runner/agent` resolve to their
+built `dist` outside the test suite, so **`pnpm build` after editing them** — vitest
+aliases all three to source.
 | `server/runs/resolve-target.ts` | Settles definition, connections, databases and mode for **both** preview and launch. |
 | `server/definitions/build-preview.ts` | **Pure.** Two schemas + a diff + a plan → the review screen and its warnings. |
 

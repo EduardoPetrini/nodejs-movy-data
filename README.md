@@ -169,8 +169,10 @@ packages/core/   @movy/core    the hexagon; no I/O entry points
 ├── src/infrastructure/   # Concrete adapters (pg, mysql, mssql, translators, migrators)
 └── src/composition/      # buildRegistry() — the composition root
 
+packages/db/     @movy/db      the metadata database: schema, migrations, client, secret crypto
 apps/cli/        @movy/cli     the interactive command line
-apps/runner/     @movy/runner  one forked process per run: argv, stdin, signals, journal
+apps/runner/     @movy/runner  one forked process per run: argv, stdin, signals, journal;
+                               src/agent/ is the host side that forks and follows it
 apps/web/        @movy/web     Nuxt 4 console: orgs, connections, runs, history
 ```
 

@@ -389,6 +389,14 @@ Web, agents and CLI share `movy:local`, so a deploy can't leave the agent on a d
 
 ## Code moves
 
+> **As built in Phase 1 (2026-10-22), two deviations from this table.** The ingestion
+> helpers went to `apps/runner/src/agent/ingestion.ts`, not `@movy/db/ingestion`:
+> `applyProjection` takes the agent's `Projection` type, so in `@movy/db` it would have
+> made the two packages depend on each other. And `crypto.test.ts` stayed in web,
+> unchanged: it imports through web's re-export, so it now covers the moved code and
+> the facade with no test edit. The `MOVY_ENCRYPTION_KEY` alias is deferred to Phase 2,
+> the first phase with a reader for it.
+
 | From | To | Note |
 |---|---|---|
 | `apps/web/server/db/schema/*`, `migrations/`, `drizzle.config.ts`, `client.ts` factory | **new `packages/db` (`@movy/db`)** | CommonJS like `@movy/core`. `apps/web/server/db/schema/index.ts` and `client.ts` re-export it, so the ~40 web imports stay put. The unscoped ingestion helpers (`applyProjection`, `finaliseRunIfUnsettled`, `findUnsettledRuns`, `markRunLaunched`) move to `@movy/db/ingestion`; the org-scoped repo stays in web. `db:migrate` moves to `@movy/db`; web's script delegates. |

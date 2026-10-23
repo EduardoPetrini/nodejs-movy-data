@@ -40,6 +40,7 @@ phase is indistinguishable from one that was never started.
 | — connection lifecycle | **DONE** (2026-09-09) | edit, delete behind a typed confirmation, failure reason inline |
 | — sequence reseed + test before save | **DONE** (2026-09-17) | step 9 reads the destination's `MAX()`; create form tests unsaved credentials |
 | R0 — Compose foundations (runner service plan) | **DONE** (2026-10-22) | `docker-compose.yml`: meta-db, migrate, seed, web, three seeded lab DBs, CLI, e2e. Live gate moved PG→MySQL → PG→PG + MySQL→PG after it found the auto-increment gap; see *R0* below. Next: R1 (extract `@movy/db`) |
+| R1 — extract `@movy/db`, move run control into `apps/runner` | **DONE** (2026-10-22) | no behaviour change; web still forks. Gate met: moved tests changed import paths only, 1262/1262, `pnpm docker:e2e` green. See *R1* below. Next: R2 (queue and agent) |
 
 ### Remaining work
 
@@ -1353,4 +1354,36 @@ first table.
   sequence sat at 10; PG `orders.id` is an identity at 5001 after MySQL→PG.
   `pnpm test` 1261/1261, `pnpm typecheck` clean.
 - **Not fixed:** the MSSQL-destination gap above. Next: R1.
+
+## R1 — extract `@movy/db`, move run control into `apps/runner` (2026-10-22)
+
+**No behaviour change**, by construction: sources moved with `git mv` and came out
+R100/R099; the five moved tests changed import paths and nothing else.
+
+- **`packages/db` (`@movy/db`)**, CommonJS like core: `src/schema/*`, `migrations/`,
+  `drizzle.config.ts`, `createDb(url, { max })`, and the connection-secret half of
+  `crypto.ts`. Subpaths `@movy/db/schema` and `@movy/db/crypto`. It builds with
+  `module: node16` — under the base config's `node10`, declaration emit cannot name
+  Drizzle's inferred table types (TS2883). Output is still CommonJS.
+- **Web keeps its imports**: `server/db/schema/index.ts`, `server/db/client.ts` (now
+  `useDb()` over `createDb`) and `server/utils/crypto.ts` (re-export + the dev-only
+  password hashing) are shims. `db:migrate` / `db:generate` / `db:studio` delegate.
+- **`apps/runner/src/agent/`**: `event-writer`, `run-projection`, `journal-tailer`,
+  `run-manager`, plus `ingestion.ts` (the four unscoped helpers, out of `runs.repo.ts`).
+  Exported as `@movy/runner/agent`; `server/runs/index.ts` imports it.
+- **Wiring**: root `build`/`typecheck` include `packages/db`; vitest gains a `db`
+  project and anchored source aliases for `@movy/db`, its subpaths and
+  `@movy/runner/agent`; the Dockerfile copies `packages/db/dist`; Compose's `migrate`
+  calls `@movy/db` directly. One `drizzle-orm` install variant, so types are shared.
+- **Deviations from the plan** (recorded in its *Code moves*): ingestion went to the
+  runner, not `@movy/db/ingestion`, to avoid a package cycle; `crypto.test.ts` stayed
+  in web unchanged; the `MOVY_ENCRYPTION_KEY` alias waits for Phase 2.
+- **Dev note**: like core, `@movy/db` and `@movy/runner/agent` resolve to `dist`
+  outside the tests, so a fresh clone needs `pnpm build` before `pnpm dev:web` or
+  `pnpm seed:dev` (true for core already).
+- **Verified**: `pnpm test` 1262/1262 (same count as before); `pnpm typecheck` clean;
+  `pnpm build` green; `pnpm docker:e2e` 11 passed, 1 skipped (the PG→MSSQL fixme);
+  the moved migrations applied to an empty scratch database (4 migrations, 13 tables).
+- **Next — R2**: migration `0004`, the agent (claim, heartbeat, lease, fencing, drain),
+  the sweeper, embedded mode; the web stops forking.
 
