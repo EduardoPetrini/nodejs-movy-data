@@ -1,6 +1,6 @@
 import {
   pgTable, text, integer, bigint, smallint, real, boolean, jsonb, timestamp, uuid,
-  index, primaryKey, unique, foreignKey, customType,
+  index, uniqueIndex, primaryKey, unique, foreignKey, customType,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 import { organizations } from './orgs';
@@ -91,6 +91,14 @@ export const runs = pgTable(
      * child. A runner declared dead must never keep writing.
      */
     leaseExpiresAt: timestamp('lease_expires_at', { withTimezone: true }),
+    /**
+     * Which database this run writes to, hashed: sha256 of engine, host, port
+     * and database. One run per destination at a time, across every org
+     * (decision 5) — two runs into one database clear each other's tables.
+     * Null for a simulated run, which writes nowhere. Never serialised: it is
+     * derived from another org's credentials as readily as from this one's.
+     */
+    targetLockKey: text('target_lock_key'),
 
     /**
      * The replay cursor: the highest `seq` durably stored in `run_events`.
@@ -152,6 +160,11 @@ export const runs = pgTable(
     index('runs_status_idx').on(t.status),
     // The queue: oldest first, one class at a time, queued rows only.
     index('runs_queue_idx').on(t.runnerClass, t.createdAt).where(sql`status = 'queued'`),
+    // The destination lock. The claim already skips a busy destination; this
+    // is what makes two agents claiming at the same instant safe as well.
+    uniqueIndex('runs_target_busy_uq')
+      .on(t.targetLockKey)
+      .where(sql`status IN ('running', 'cancelling')`),
   ]
 );
 

@@ -108,12 +108,29 @@ export async function setRunnerState(
   );
 }
 
+/** How many destination-lock collisions one claim tolerates before it gives up until the next wake. */
+const MAX_CLAIM_ATTEMPTS = 5;
+
+/** PostgreSQL's unique_violation — here, only ever `runs_target_busy_uq`. */
+function isUniqueViolation(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as { code?: unknown }).code === '23505';
+}
+
 /**
- * Takes the oldest queued run of this class, or nothing.
+ * Takes the oldest queued run of this class whose destination is free, or nothing.
  *
  * One statement: two agents racing for the same row cannot both win, and the
  * loser skips to the next row instead of waiting on the winner's lock. A run
  * cancelled while queued is no longer `queued`, so it can never be claimed.
+ *
+ * **One run per destination** (decision 5), whatever org or class holds it. The
+ * claim skips a queued run whose `target_lock_key` a running run already holds,
+ * so it waits — still `queued` — while younger runs to other databases go
+ * ahead. Two agents claiming two such runs at the same instant both pass that
+ * check, because neither sees the other's uncommitted claim; the partial unique
+ * index `runs_target_busy_uq` refuses the second. A unique check waits for the
+ * conflicting transaction, so by the time it is refused the winner's claim is
+ * committed — and simply asking again skips that destination.
  */
 export async function claimNextRun(
   sql: SqlClient,
@@ -121,20 +138,31 @@ export async function claimNextRun(
   runnerClass: string,
   leaseMs = DEFAULT_LEASE_MS
 ): Promise<ClaimedRun | null> {
-  const { rows } = await sql.query<{ id: string; org_id: string; simulated: boolean }>(
-    `UPDATE runs SET status = 'running', runner_id = $1, claimed_at = now(),
-            started_at = coalesce(started_at, now()), updated_at = now(),
-            lease_expires_at = now() + $3::interval
-      WHERE id = (SELECT id FROM runs
-                   WHERE status = 'queued' AND runner_class = $2
-                   ORDER BY created_at, id
-                   FOR UPDATE SKIP LOCKED
-                   LIMIT 1)
-      RETURNING id, org_id, simulated`,
-    [runnerId, runnerClass, interval(leaseMs)]
-  );
-  const row = rows[0];
-  return row ? { id: row.id, orgId: row.org_id, simulated: row.simulated } : null;
+  for (let attempt = 0; attempt < MAX_CLAIM_ATTEMPTS; attempt += 1) {
+    try {
+      const { rows } = await sql.query<{ id: string; org_id: string; simulated: boolean }>(
+        `UPDATE runs SET status = 'running', runner_id = $1, claimed_at = now(),
+                started_at = coalesce(started_at, now()), updated_at = now(),
+                lease_expires_at = now() + $3::interval
+          WHERE id = (SELECT q.id FROM runs q
+                       WHERE q.status = 'queued' AND q.runner_class = $2
+                         AND (q.target_lock_key IS NULL OR NOT EXISTS (
+                               SELECT 1 FROM runs b
+                                WHERE b.target_lock_key = q.target_lock_key
+                                  AND b.status IN ('running', 'cancelling')))
+                       ORDER BY q.created_at, q.id
+                       FOR UPDATE OF q SKIP LOCKED
+                       LIMIT 1)
+          RETURNING id, org_id, simulated`,
+        [runnerId, runnerClass, interval(leaseMs)]
+      );
+      const row = rows[0];
+      return row ? { id: row.id, orgId: row.org_id, simulated: row.simulated } : null;
+    } catch (err) {
+      if (!isUniqueViolation(err)) throw err;
+    }
+  }
+  return null;
 }
 
 /**

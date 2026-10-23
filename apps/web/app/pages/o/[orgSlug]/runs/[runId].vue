@@ -43,6 +43,8 @@ const canCancel = computed(
         </template>
       </RunHeader>
 
+      <QueueNotice v-if="state.run.status === 'queued'" :org-slug="orgSlug" :run-id="runId" />
+
       <!-- Cancellation is cooperative: the orchestrator only observes the abort
            at a step boundary, so saying so beats a spinner that looks stuck. -->
       <p v-if="state.run.status === 'cancelling'" class="notice">

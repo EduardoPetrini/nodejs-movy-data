@@ -27,12 +27,14 @@ const ORG = '11111111-1111-1111-1111-111111111111';
 let db: PGlite;
 let sql: SqlClient;
 
-async function enqueue(opts: { runnerClass?: string; createdAt?: string; spec?: boolean } = {}): Promise<string> {
+async function enqueue(
+  opts: { runnerClass?: string; createdAt?: string; spec?: boolean; lockKey?: string; orgId?: string } = {}
+): Promise<string> {
   const id = randomUUID();
   await db.query(
-    `INSERT INTO runs (id, org_id, source_engine, source_database, target_engine, target_database, runner_class, created_at)
-     VALUES ($1, $2, 'postgres', 'a', 'postgres', 'b', $3, coalesce($4::timestamptz, now()))`,
-    [id, ORG, opts.runnerClass ?? 'default', opts.createdAt ?? null]
+    `INSERT INTO runs (id, org_id, source_engine, source_database, target_engine, target_database, runner_class, created_at, target_lock_key)
+     VALUES ($1, $2, 'postgres', 'a', 'postgres', 'b', $3, coalesce($4::timestamptz, now()), $5)`,
+    [id, opts.orgId ?? ORG, opts.runnerClass ?? 'default', opts.createdAt ?? null, opts.lockKey ?? null]
   );
   if (opts.spec !== false) {
     await db.query(`INSERT INTO run_specs (run_id, spec_version, ciphertext) VALUES ($1, 1, $2)`, [id, Buffer.from('sealed')]);
@@ -76,6 +78,76 @@ describe('claimNextRun', () => {
     await enqueue();
     expect(await claimNextRun(sql, 'agent-1', 'default')).not.toBeNull();
     expect(await claimNextRun(sql, 'agent-2', 'default')).toBeNull();
+  });
+});
+
+describe('claimNextRun and the destination lock', () => {
+  const OTHER_ORG = '22222222-2222-2222-2222-222222222222';
+
+  it('skips a run whose destination another run is writing to, and claims the next one', async () => {
+    await db.query(`INSERT INTO organizations (id, slug, name) VALUES ($1, 'other', 'Other')`, [OTHER_ORG]);
+    // Held by another org's run on another class: the lock is per database, not per org or class.
+    const holder = await enqueue({ orgId: OTHER_ORG, runnerClass: 'large', lockKey: 'dst-1', createdAt: '2026-10-22T09:00:00Z' });
+    await db.query(`UPDATE runs SET status = 'running' WHERE id = $1`, [holder]);
+    const blocked = await enqueue({ lockKey: 'dst-1', createdAt: '2026-10-22T10:00:00Z' });
+    const free = await enqueue({ lockKey: 'dst-2', createdAt: '2026-10-22T10:00:01Z' });
+
+    expect((await claimNextRun(sql, 'agent-1', 'default'))?.id).toBe(free);
+    expect(await statusOf(blocked)).toMatchObject({ status: 'queued' });
+    expect(await claimNextRun(sql, 'agent-1', 'default')).toBeNull();
+  });
+
+  it('claims the waiting run once the destination is free again', async () => {
+    const holder = await enqueue({ lockKey: 'dst-1', createdAt: '2026-10-22T09:00:00Z' });
+    const waiting = await enqueue({ lockKey: 'dst-1', createdAt: '2026-10-22T10:00:00Z' });
+    expect((await claimNextRun(sql, 'agent-1', 'default'))?.id).toBe(holder);
+    expect(await claimNextRun(sql, 'agent-1', 'default')).toBeNull();
+
+    await db.query(`UPDATE runs SET status = 'succeeded' WHERE id = $1`, [holder]);
+    expect((await claimNextRun(sql, 'agent-1', 'default'))?.id).toBe(waiting);
+  });
+
+  it('treats a cancelling run as still writing', async () => {
+    const holder = await enqueue({ lockKey: 'dst-1' });
+    await db.query(`UPDATE runs SET status = 'cancelling' WHERE id = $1`, [holder]);
+    await enqueue({ lockKey: 'dst-1' });
+    expect(await claimNextRun(sql, 'agent-1', 'default')).toBeNull();
+  });
+
+  it('never locks a simulated run, which has no destination', async () => {
+    const a = await enqueue();
+    await db.query(`UPDATE runs SET status = 'running' WHERE id = $1`, [a]);
+    await enqueue();
+    expect(await claimNextRun(sql, 'agent-1', 'default')).not.toBeNull();
+  });
+
+  it('is enforced by the index too, for two claims at the same instant', async () => {
+    const a = await enqueue({ lockKey: 'dst-1' });
+    const b = await enqueue({ lockKey: 'dst-1' });
+    await db.query(`UPDATE runs SET status = 'running' WHERE id = $1`, [a]);
+    await expect(db.query(`UPDATE runs SET status = 'running' WHERE id = $1`, [b])).rejects.toMatchObject({ code: '23505' });
+  });
+
+  it('asks again when the index refuses its claim, rather than failing the agent', async () => {
+    const id = await enqueue({ lockKey: 'dst-1' });
+    let refused = 0;
+    const racing: SqlClient = {
+      async query(text, params) {
+        if (refused === 0 && text.includes('UPDATE runs SET status')) {
+          refused += 1;
+          throw Object.assign(new Error('duplicate key value violates unique constraint "runs_target_busy_uq"'), { code: '23505' });
+        }
+        return sql.query(text, params);
+      },
+    } as SqlClient;
+
+    expect((await claimNextRun(racing, 'agent-1', 'default'))?.id).toBe(id);
+    expect(refused).toBe(1);
+  });
+
+  it('still throws anything that is not the lock', async () => {
+    const broken = { query: async () => { throw Object.assign(new Error('boom'), { code: '57P01' }); } } as SqlClient;
+    await expect(claimNextRun(broken, 'agent-1', 'default')).rejects.toThrow('boom');
   });
 });
 

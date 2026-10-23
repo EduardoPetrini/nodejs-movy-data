@@ -6,6 +6,7 @@ import { toPublicRun } from '~~/server/serializers/run.serializer';
 import { sealRunSpec } from '@movy/runner/agent';
 import { assertSimulationAvailable, useRunnerAgent } from '~~/server/runs';
 import { resolveRunTarget, type RunTargetBody } from '~~/server/runs/resolve-target';
+import { targetLockKey } from '~~/server/runs/target-lock';
 
 interface Body extends RunTargetBody {
   /**
@@ -89,6 +90,16 @@ export default defineEventHandler(async (event) => {
       targetDatabase: target.targetDatabase,
       mode: target.mode,
       simulated: Boolean(body?.simulate),
+      // One run per destination, across orgs: the claim waits while another
+      // run holds it. A replay writes nowhere, so it locks nothing.
+      targetLockKey: body?.simulate
+        ? null
+        : targetLockKey({
+            engine: target.target.engine,
+            host: target.target.host,
+            port: target.target.port,
+            database: target.targetDatabase,
+          }),
       requestedByUserId: org.userId,
     },
     sealed
