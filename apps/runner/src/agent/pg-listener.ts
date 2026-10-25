@@ -54,6 +54,14 @@ export class PgListener {
 
     try {
       await client.connect();
+      // stop() during the connect saw no client to end; nothing else ever would.
+      if (this.stopped) {
+        this.dead.add(client);
+        client.removeAllListeners();
+        client.on('error', () => undefined);
+        await client.end().catch(() => undefined);
+        return;
+      }
       for (const channel of this.options.channels) {
         // Channel names are this codebase's constants, never input; quoted anyway.
         await client.query(`LISTEN "${channel.replace(/"/g, '""')}"`);
