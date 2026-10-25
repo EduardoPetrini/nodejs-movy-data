@@ -118,20 +118,30 @@ export class RunnerAgent {
    * lease stops it. Its renewal time is unknown — the last beat was the old
    * process's — so until a beat here confirms it, it counts as already due:
    * the first beat answers for it, and if that beat fails it is stopped.
+   *
+   * The lease watchdog is armed BEFORE that beat. The beat awaits a heartbeat
+   * and then the whole claim loop; a heartbeat that hangs — the embedded pool
+   * has no query timeout — would otherwise leave the recovered runs writing
+   * with nothing to stop them. A first beat slower than one check interval
+   * therefore stops them: the remaining lease is unknown, and guessing it is
+   * long is the guess that lets two writers share a destination.
    */
   async start(): Promise<void> {
     const { queue, control } = this.options;
     await queue.register();
     const recovered = await control.reattach();
     for (const runId of recovered.leased ?? []) this.owned.set(runId, Number.NEGATIVE_INFINITY);
+
+    const leaseCheckMs = this.options.leaseCheckIntervalMs ?? DEFAULT_LEASE_CHECK_MS;
+    if (leaseCheckMs > 0 && !this.leaseTimer) {
+      this.leaseTimer = unref(setInterval(() => this.checkLeases(), leaseCheckMs));
+    }
     await this.beat();
 
     const pollMs = this.options.pollIntervalMs ?? DEFAULT_POLL_MS;
     const beatMs = this.options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_MS;
-    const leaseCheckMs = this.options.leaseCheckIntervalMs ?? DEFAULT_LEASE_CHECK_MS;
     if (pollMs > 0) this.pollTimer = unref(setInterval(() => void this.wake(), pollMs));
     if (beatMs > 0) this.beatTimer = unref(setInterval(() => void this.beat(), beatMs));
-    if (leaseCheckMs > 0) this.leaseTimer = unref(setInterval(() => this.checkLeases(), leaseCheckMs));
   }
 
   /** Claims queued runs until its slots are full or the queue is empty. */
@@ -348,7 +358,12 @@ export class RunnerAgent {
       );
     }
 
-    // Fenced while its spec was being read: the lease is gone, so is the run.
+    // Judged here, synchronously before the launch, not only by the timer: a
+    // claim whose answer arrived past its deadline was never visible to the
+    // watchdog, and launched now it would write until the next tick — into a
+    // destination the sweeper may already have handed to someone else.
+    this.checkLeases();
+    // Fenced while its spec was being read, or just now: the lease is gone, so is the run.
     if (!this.owned.has(claimed.id)) return;
 
     try {

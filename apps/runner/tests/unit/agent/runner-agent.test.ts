@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { RunnerAgent, type AgentQueue, type AgentRunControl } from '../../../src/agent/runner-agent';
 import { RunSpecIncompatibleError, type RunSpecEnvelope } from '../../../src/agent/run-spec-envelope';
 import type { ClaimedRun, HeartbeatResult, SealedSpec, Settlement } from '../../../src/agent/queue-store';
@@ -432,6 +432,74 @@ describe('RunnerAgent cut off from the database', () => {
     await claiming;
 
     expect(c.control.launch).not.toHaveBeenCalled();
+  });
+
+  it('never launches a run whose claim was answered past its deadline', async () => {
+    // The watchdog cannot see a claim in flight; the answer must be judged
+    // before the launch, not on the next tick after the run started writing.
+    const clock = { t: 0 };
+    const q = fakeQueue();
+    const c = fakeControl();
+    const onFenced = vi.fn();
+    const agent = new RunnerAgent({
+      queue: q.queue, control: c.control, slots: 1,
+      journalPathFor: () => '/j', simulationFixture: () => undefined,
+      openSpec: (_o, _r, sealed) => JSON.parse(sealed.ciphertext.toString()) as RunSpecEnvelope,
+      pollIntervalMs: 0, heartbeatIntervalMs: 0, leaseCheckIntervalMs: 0, leaseMs: 30_000, fenceMarginMs: 5_000, now: () => clock.t, onFenced,
+    });
+    await agent.start();
+    const claim = deferred<ClaimedRun | null>();
+    (q.queue.claimNext as ReturnType<typeof vi.fn>).mockImplementationOnce(() => claim.promise);
+
+    const claiming = agent.wake();
+    clock.t = 25_000; // the claim's lease, measured from when it was SENT, is due
+    claim.resolve(run('late'));
+    await claiming;
+
+    expect(c.control.launch).not.toHaveBeenCalled();
+    expect(onFenced).toHaveBeenCalledWith('late');
+  });
+});
+
+describe('RunnerAgent starting while the database hangs', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('arms the lease watchdog before the first heartbeat, so a hung one cannot shelter recovered runs', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const q = fakeQueue();
+    const c = fakeControl();
+    c.control.reattach = vi.fn(async () => { c.live.add('old'); return { recovered: 1, settled: 0, following: 1, leased: ['old'] }; });
+    // A blackholed connection: the first heartbeat neither answers nor rejects.
+    (q.queue.heartbeat as ReturnType<typeof vi.fn>).mockImplementation(() => new Promise(() => {}));
+    const agent = new RunnerAgent({
+      queue: q.queue, control: c.control, slots: 1,
+      journalPathFor: () => '/j', simulationFixture: () => undefined,
+      pollIntervalMs: 0, heartbeatIntervalMs: 0, leaseCheckIntervalMs: 1_000,
+    });
+
+    void agent.start();
+    await flush();
+    expect(c.control.terminate).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(1_000);
+    expect(c.control.terminate).toHaveBeenCalledWith('old');
+    await agent.stop();
+  });
+
+  it('arms the watchdog once, however often start is retried', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const q = fakeQueue();
+    const c = fakeControl();
+    const agent = new RunnerAgent({
+      queue: q.queue, control: c.control, slots: 1,
+      journalPathFor: () => '/j', simulationFixture: () => undefined,
+      pollIntervalMs: 0, heartbeatIntervalMs: 0, leaseCheckIntervalMs: 1_000,
+    });
+    await agent.start();
+    await agent.start();
+    expect(vi.getTimerCount()).toBe(1);
+    await agent.stop();
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
 
