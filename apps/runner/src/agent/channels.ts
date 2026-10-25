@@ -24,3 +24,32 @@ export const RUNS_QUEUED_CHANNEL = 'movy_runs';
 
 /** `{runId}` — a user asked to cancel a running run; only the agent holding it acts. */
 export const RUN_CANCEL_CHANNEL = 'movy_run_cancel';
+
+/**
+ * One string field of a pointer, or null. A payload is data from the database,
+ * so it is checked rather than trusted, and an unreadable one is never thrown
+ * out of a LISTEN handler: every receiver re-reads on its own anyway.
+ */
+export function parseStringField(payload: string, key: string): string | null {
+  const parsed = parseObject(payload);
+  const value = parsed?.[key];
+  return typeof value === 'string' ? value : null;
+}
+
+/** `{runId, lastSeq}` from `RUN_EVENTS_CHANNEL`, or null; the next pointer catches up. */
+export function parseEventPointer(payload: string): { runId: string; lastSeq: number } | null {
+  const parsed = parseObject(payload);
+  if (typeof parsed?.runId !== 'string' || typeof parsed.lastSeq !== 'number') return null;
+  return { runId: parsed.runId, lastSeq: parsed.lastSeq };
+}
+
+function parseObject(payload: string): Record<string, unknown> | null {
+  try {
+    const parsed: unknown = JSON.parse(payload);
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}

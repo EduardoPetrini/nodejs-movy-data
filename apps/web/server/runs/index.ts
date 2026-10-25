@@ -27,6 +27,8 @@ import {
   finaliseRunIfUnsettled,
   journalPathIn,
   markRunLaunched,
+  parseEventPointer,
+  parseStringField,
   reattachableRuns,
   sqlAgentQueue,
   sqlProbeQueue,
@@ -174,17 +176,17 @@ export function useBusListener(): PgListener {
           return;
         }
         if (channel === RUN_CANCEL_CHANNEL) {
-          const runId = parseIdPointer(payload, 'runId');
+          const runId = parseStringField(payload, 'runId');
           if (runId) void useRunnerAgent()?.cancel(runId);
           return;
         }
         if (channel === PROBE_DONE_CHANNEL) {
-          const id = parseIdPointer(payload);
+          const id = parseStringField(payload, 'id');
           if (id) useProbeWaiters().notify(id);
           return;
         }
         if (channel !== RUN_EVENTS_CHANNEL) return;
-        const pointer = parsePointer(payload);
+        const pointer = parseEventPointer(payload);
         if (pointer) runFeed.notify(pointer.runId, pointer.lastSeq);
       },
       onConnected: () => {
@@ -197,29 +199,6 @@ export function useBusListener(): PgListener {
     });
   }
   return listener;
-}
-
-/** A NOTIFY payload is data from the database, so it is checked rather than trusted. */
-function parsePointer(payload: string): { runId: string; lastSeq: number } | null {
-  try {
-    const parsed = JSON.parse(payload) as { runId?: unknown; lastSeq?: unknown };
-    if (typeof parsed.runId === 'string' && typeof parsed.lastSeq === 'number') {
-      return { runId: parsed.runId, lastSeq: parsed.lastSeq };
-    }
-  } catch {
-    // fall through: a malformed pointer is ignored, and the next one catches up
-  }
-  return null;
-}
-
-function parseIdPointer(payload: string, key: 'id' | 'runId' = 'id'): string | null {
-  try {
-    const parsed = JSON.parse(payload) as Record<string, unknown>;
-    const value = parsed[key];
-    return typeof value === 'string' ? value : null;
-  } catch {
-    return null;
-  }
 }
 
 /** The requests on this host waiting for a probe's answer. */

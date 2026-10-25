@@ -34,6 +34,7 @@ import {
   finaliseRunIfUnsettled,
   journalPathIn,
   markRunLaunched,
+  parseStringField,
   readAgentConfig,
   reattachableRuns,
   sqlAgentQueue,
@@ -54,25 +55,6 @@ function log(level: 'info' | 'warn' | 'error', message: string): void {
 function bundledFixture(): string | undefined {
   const bundled = path.resolve(__dirname, '../fixtures/pg-to-pg-315k.ndjson');
   return fs.existsSync(bundled) ? bundled : undefined;
-}
-
-/** `{runnerClass}` from the queued channel; anything unreadable wakes the agent anyway. */
-function queuedFor(payload: string): string | null {
-  try {
-    const parsed = JSON.parse(payload) as { runnerClass?: unknown };
-    return typeof parsed.runnerClass === 'string' ? parsed.runnerClass : null;
-  } catch {
-    return null;
-  }
-}
-
-function cancelledRun(payload: string): string | null {
-  try {
-    const parsed = JSON.parse(payload) as { runId?: unknown };
-    return typeof parsed.runId === 'string' ? parsed.runId : null;
-  } catch {
-    return null;
-  }
 }
 
 async function run(config: AgentConfig): Promise<void> {
@@ -142,11 +124,12 @@ async function run(config: AgentConfig): Promise<void> {
     channels: [RUNS_QUEUED_CHANNEL, RUN_CANCEL_CHANNEL, PROBES_CHANNEL],
     onNotification: (channel, payload) => {
       if (channel === RUN_CANCEL_CHANNEL) {
-        const runId = cancelledRun(payload);
+        const runId = parseStringField(payload, 'runId');
         if (runId) void agent.cancel(runId);
         return;
       }
-      const forClass = queuedFor(payload);
+      // Anything unreadable wakes the agent anyway.
+      const forClass = parseStringField(payload, 'runnerClass');
       if (forClass !== null && forClass !== config.runnerClass) return;
       if (channel === RUNS_QUEUED_CHANNEL) void agent.wake();
       else void probes.wake();
