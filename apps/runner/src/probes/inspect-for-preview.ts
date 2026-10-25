@@ -51,9 +51,11 @@ export class PreviewConnectionError extends Error {
  * connection it opened is closed whatever happens — a preview leaking a client
  * per click would take its host down long before anyone migrated anything.
  *
- * `signal` aborts it: every connection is closed at once, which is what ends a
- * catalogue query blocked on a lock or a dead socket — nobody is waiting for
- * the answer any more, and the slot it holds is shared by every org.
+ * `signal` aborts it: every statement in flight is cancelled on the server and
+ * every connection closed — nobody is waiting for the answer any more, and the
+ * slot it holds is shared by every org. Closing alone is not enough: a pool
+ * waits for its busy clients, so a catalogue query blocked on a lock survived
+ * it. An adapter without `abort()` is only closed.
  */
 export async function inspectForPreview(
   sourceConfig: ConnectionConfig,
@@ -71,9 +73,11 @@ export async function inspectForPreview(
   const adminConnection = destAdapters.createConnection({ ...destConfig, database: destAdapters.adminDatabase });
 
   const open: IDatabaseConnection[] = [];
+  // `abort()`, not `end()`: a pool's end waits for its busy clients, so ending
+  // alone freed the probe slot while the blocked query and its connection lived on.
   const closeAll = (): void => {
     for (const connection of [sourceConnection, destConnection, adminConnection]) {
-      void connection.end().catch(() => {});
+      void (connection.abort ? connection.abort() : connection.end()).catch(() => {});
     }
   };
   signal?.addEventListener('abort', closeAll, { once: true });
