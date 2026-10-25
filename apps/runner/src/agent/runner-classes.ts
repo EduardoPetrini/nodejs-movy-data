@@ -26,15 +26,48 @@ export class RunnerClassesFileError extends Error {
 /** Lowercase, short, and safe to print in a `docker compose` service name. */
 const CLASS_NAME = /^[a-z][a-z0-9-]{0,31}$/;
 
+/**
+ * `via: 'web'` on Test and Preview means the console itself, and is read as
+ * that before any class is looked up: a class of this name could never be
+ * chosen, and every test run on it would be recorded as the console's.
+ */
+const RESERVED_NAMES: ReadonlySet<string> = new Set(['web']);
+
+/**
+ * The one rule for a class name — the class file, `MOVY_RUNNER_CLASS` and a
+ * saved definition all hold to it, so a name one accepts the others cannot
+ * refuse later.
+ */
+export function isRunnerClassName(name: string): boolean {
+  return CLASS_NAME.test(name) && !RESERVED_NAMES.has(name);
+}
+
+export const RUNNER_CLASS_NAME_RULE =
+  'lowercase letters, digits and dashes, starting with a letter (at most 32), and not "web"';
+
+/** Postgres `integer`, the type of `cpu_millis`, `memory_mb` and `max_replicas`. */
+const INT4_MAX = 2_147_483_647;
+
 const KEYS = new Set([
   'name', 'label', 'description', 'cpuMillis', 'memoryMb', 'maxReplicas', 'suggestAboveBytes', 'isDefault',
 ]);
 
-function optionalCount(raw: Record<string, unknown>, key: string, at: string, min: number): number | null {
+function optionalCount(
+  raw: Record<string, unknown>,
+  key: string,
+  at: string,
+  min: number,
+  max: number = Number.MAX_SAFE_INTEGER
+): number | null {
   const value = raw[key];
   if (value === undefined || value === null) return null;
-  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < min) {
-    throw new RunnerClassesFileError(`${at}.${key} must be a whole number of at least ${min}.`);
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < min || value > max) {
+    // Checked here rather than left to the upsert, whose "out of range" names no field.
+    throw new RunnerClassesFileError(
+      max === Number.MAX_SAFE_INTEGER
+        ? `${at}.${key} must be a whole number of at least ${min}.`
+        : `${at}.${key} must be a whole number from ${min} to ${max}.`
+    );
   }
   return value;
 }
@@ -50,10 +83,8 @@ function parseClass(raw: unknown, at: string): RunnerClassConfig {
   if (unknown.length > 0) throw new RunnerClassesFileError(`${at} has unknown keys: ${unknown.join(', ')}.`);
 
   const name = entry.name;
-  if (typeof name !== 'string' || !CLASS_NAME.test(name)) {
-    throw new RunnerClassesFileError(
-      `${at}.name must be lowercase letters, digits and dashes, starting with a letter (at most 32).`
-    );
+  if (typeof name !== 'string' || !isRunnerClassName(name)) {
+    throw new RunnerClassesFileError(`${at}.name must be ${RUNNER_CLASS_NAME_RULE}.`);
   }
   const label = typeof entry.label === 'string' ? entry.label.trim() : '';
   if (label.length === 0 || label.length > 40) {
@@ -70,9 +101,9 @@ function parseClass(raw: unknown, at: string): RunnerClassConfig {
     name,
     label,
     description: typeof entry.description === 'string' && entry.description.trim() ? entry.description.trim() : null,
-    cpuMillis: optionalCount(entry, 'cpuMillis', at, 1),
-    memoryMb: optionalCount(entry, 'memoryMb', at, 1),
-    maxReplicas: optionalCount(entry, 'maxReplicas', at, 0) ?? 1,
+    cpuMillis: optionalCount(entry, 'cpuMillis', at, 1, INT4_MAX),
+    memoryMb: optionalCount(entry, 'memoryMb', at, 1, INT4_MAX),
+    maxReplicas: optionalCount(entry, 'maxReplicas', at, 0, INT4_MAX) ?? 1,
     suggestAboveBytes: optionalCount(entry, 'suggestAboveBytes', at, 1),
     isDefault: entry.isDefault === true,
   };

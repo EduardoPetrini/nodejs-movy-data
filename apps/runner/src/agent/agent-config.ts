@@ -1,5 +1,6 @@
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { RUNNER_CLASS_NAME_RULE, isRunnerClassName } from './runner-classes';
 
 /**
  * Everything a standalone runner agent reads from its environment, parsed once.
@@ -37,6 +38,17 @@ export const DEFAULT_IDLE_EXIT_MS = 10 * 60_000;
 
 type Env = Readonly<Record<string, string | undefined>>;
 
+/** `MOVY_RUNNER_CLASS`, or `default`; refused when the class file could never define it. */
+export function readRunnerClass(env: Env): string {
+  const runnerClass = env.MOVY_RUNNER_CLASS || 'default';
+  // The class file's rule: a name it could never define would pass here and
+  // fail on the `runners.class` foreign key at registration instead.
+  if (!isRunnerClassName(runnerClass)) {
+    throw new AgentConfigError(`MOVY_RUNNER_CLASS must be ${RUNNER_CLASS_NAME_RULE}.`);
+  }
+  return runnerClass;
+}
+
 export function readAgentConfig(env: Env, hostname: string = os.hostname()): AgentConfig {
   const databaseUrl = env.MOVY_DATABASE_URL || env.NUXT_DATABASE_URL;
   if (!databaseUrl) throw new AgentConfigError('MOVY_DATABASE_URL is required: the metadata database this runner claims runs from.');
@@ -46,11 +58,7 @@ export function readAgentConfig(env: Env, hostname: string = os.hostname()): Age
     throw new AgentConfigError("MOVY_ENCRYPTION_KEY is required: the console's key, which seals every run spec.");
   }
 
-  const runnerClass = env.MOVY_RUNNER_CLASS || 'default';
-  if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(runnerClass)) {
-    throw new AgentConfigError('MOVY_RUNNER_CLASS must be lower-case letters, digits and dashes.');
-  }
-
+  const runnerClass = readRunnerClass(env);
   const fixture = env.MOVY_SIMULATION_FIXTURE;
   return {
     databaseUrl,

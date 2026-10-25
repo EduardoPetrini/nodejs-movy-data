@@ -41,6 +41,17 @@ describe('parseRunnerClassesFile', () => {
     expect(() => parseRunnerClassesFile(file([]))).toThrow(/non-empty/);
     expect(() => parseRunnerClassesFile([])).toThrow(RunnerClassesFileError);
   });
+
+  it('refuses the name "web", which Test and Preview read as the console itself', () => {
+    expect(() => parseRunnerClassesFile(file([def, { ...large, name: 'web' }]))).toThrow(/classes\[1\]\.name/);
+  });
+
+  it('refuses a count its integer column cannot hold, naming the field rather than failing the upsert', () => {
+    expect(() => parseRunnerClassesFile(file([def, { ...large, memoryMb: 3_000_000_000 }])))
+      .toThrow('classes[1].memoryMb must be a whole number from 1 to 2147483647.');
+    expect(() => parseRunnerClassesFile(file([def, { ...large, maxReplicas: 2_147_483_648 }]))).toThrow(/maxReplicas/);
+    expect(parseRunnerClassesFile(file([def, { ...large, cpuMillis: 2_147_483_647 }]))[1]!.cpuMillis).toBe(2_147_483_647);
+  });
 });
 
 describe('upsertRunnerClasses', () => {

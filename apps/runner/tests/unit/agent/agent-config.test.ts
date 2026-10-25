@@ -56,4 +56,11 @@ describe('readAgentConfig', () => {
   it('refuses a class name that could not be a class', () => {
     expect(() => readAgentConfig({ ...BASE, MOVY_RUNNER_CLASS: 'Large Runner' })).toThrow(/MOVY_RUNNER_CLASS/);
   });
+
+  it('holds a class name to the class file\'s rule, so a bad one fails at boot and not at registration', () => {
+    expect(() => readAgentConfig({ ...BASE, MOVY_RUNNER_CLASS: '1x' })).toThrow(/MOVY_RUNNER_CLASS/);
+    expect(() => readAgentConfig({ ...BASE, MOVY_RUNNER_CLASS: 'a'.repeat(33) })).toThrow(/MOVY_RUNNER_CLASS/);
+    expect(() => readAgentConfig({ ...BASE, MOVY_RUNNER_CLASS: 'web' })).toThrow(/MOVY_RUNNER_CLASS/);
+    expect(readAgentConfig({ ...BASE, MOVY_RUNNER_CLASS: 'a'.repeat(32) }).runnerClass).toBe('a'.repeat(32));
+  });
 });

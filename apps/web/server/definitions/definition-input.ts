@@ -1,3 +1,4 @@
+import { isRunnerClassName } from '@movy/runner/agent';
 import type { RunMode } from '../../shared/pair-capability';
 
 /**
@@ -59,9 +60,6 @@ function trimmed(value: unknown): string | null {
  */
 const TABLE_NAME = /^[A-Za-z_][A-Za-z0-9_$]*$/;
 
-/** The class file's own rule. Whether the class is configured is `prepareDefinition`'s question. */
-const RUNNER_CLASS = /^[a-z][a-z0-9-]{0,31}$/;
-
 export function parseDefinitionInput(body: unknown): ParseResult {
   if (typeof body !== 'object' || body === null || Array.isArray(body)) {
     return fail('body', 'Expected an object.');
@@ -101,7 +99,8 @@ export function parseDefinitionInput(body: unknown): ParseResult {
   }
 
   const runnerClass = trimmed(raw.runnerClass);
-  if (runnerClass && !RUNNER_CLASS.test(runnerClass)) {
+  // The class file's own rule. Whether the class is configured is `prepareDefinition`'s question.
+  if (runnerClass && !isRunnerClassName(runnerClass)) {
     return fail('runnerClass', 'That is not a runner class name.');
   }
 

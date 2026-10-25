@@ -183,4 +183,8 @@ describe('parseDefinitionInput — the runner class', () => {
     const error = rejection({ ...valid, runnerClass: 'Large; drop' });
     expect(error).toEqual({ field: 'runnerClass', message: 'That is not a runner class name.' });
   });
+
+  it('refuses "web", which names the console and never a class', () => {
+    expect(rejection({ ...valid, runnerClass: 'web' })).toEqual({ field: 'runnerClass', message: 'That is not a runner class name.' });
+  });
 });

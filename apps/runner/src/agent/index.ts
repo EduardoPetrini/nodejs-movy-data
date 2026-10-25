@@ -33,7 +33,9 @@ export {
 } from './run-spec-envelope';
 export type { RunSpecEnvelope } from './run-spec-envelope';
 export { RUN_EVENTS_CHANNEL, RUNNERS_CHANNEL } from './channels';
-export { RunnerClassesFileError, parseRunnerClassesFile, upsertRunnerClasses } from './runner-classes';
+export {
+  RUNNER_CLASS_NAME_RULE, RunnerClassesFileError, isRunnerClassName, parseRunnerClassesFile, upsertRunnerClasses,
+} from './runner-classes';
 export type { RunnerClassConfig } from './runner-classes';
 export { PROBES_CHANNEL, PROBE_DONE_CHANNEL, RUNS_QUEUED_CHANNEL, RUN_CANCEL_CHANNEL } from './channels';
 export {
