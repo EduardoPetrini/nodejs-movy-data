@@ -25,7 +25,7 @@ phase is indistinguishable from one that was never started.
 
 ## Status board
 
-*Last reviewed: 2026-10-25. 1528 unit tests (121 files) green; Compose E2E green at 26/26 (R6).*
+*Last reviewed: 2026-10-25. 1589 unit tests (129 files) green; Compose E2E green at 28/28 and host E2E 12/12 after the PR #8 review fixes. Work after this release is tracked in GitHub issues #9–#20.*
 
 | Phase | State | Notes |
 |-------|-------|-------|
@@ -46,7 +46,7 @@ phase is indistinguishable from one that was never started.
 | R4 — destination lock and runner classes | **DONE** (2026-10-23) | one run per destination (`target_lock_key`, migration `0005`) and why a run is queued; classes from `MOVY_RUNNER_CLASSES_FILE`, a class per definition and a Runner selector (`0006`); source size in bytes on the preview and a class suggestion. Gate: `pnpm docker:e2e` 19/19. See *R4* below. Next: R5 (probes) |
 | R5 — probes: Test and Preview from a runner | **DONE** (2026-10-23) | migration `0007` (`runner_probes`, `runners.probe_slots`, `connections.last_test_via`); executors in `@movy/runner/probes` shared by the in-request path and the agent's `ProbeWorker`; `via: 'web' | <class>` on both Test routes and on preview; 503 `no_runner`, 504 on silence; "Test from" and "Inspect from" selectors. Gate: `pnpm docker:e2e` 23/23. See *R5* below. Next: R6 (runner services) |
 | R6 — runner services and provisioning in Compose | **DONE** (2026-10-25) | `movy-runner-agent` as `runner-default`/`runner-large` under the least-privilege `movy_runner` role (`docker/runner.env`); `web` no longer forks; NOTIFY wakes agents on launch and cancel; `manual` and opt-in `docker` provisioners, Start a runner (`runner:scale`), auto mode, idle exit. Found and fixed: an agent wedged after a network partition (query timeouts), clone swap limit. Gate: the plan's Verification list in Compose, `pnpm docker:e2e` 26/26. See *R6* below. Next: R7 (Kubernetes) or R8 (runner classes in the UI) |
-| — PR #8 review fixes | **DONE** (2026-10-25) | platform operators (`platform_admins`, migration `0008`, `MOVY_PLATFORM_ADMINS`) replace the org-admin `runner:scale`; heartbeat/claim race in fencing; live feed retries a failed read; embedded agent retries its start and refuses bad config; one class-name rule; runner answers rebuilt, not cast; provisioner cap under concurrency; drain stops claiming first. See *PR #8 review fixes* below. `pnpm docker:e2e` not re-run |
+| — PR #8 review fixes | **DONE** (2026-10-25) | platform operators (`platform_admins`, migration `0008`, `MOVY_PLATFORM_ADMINS`) replace the org-admin `runner:scale`; heartbeat/claim race in fencing; live feed retries a failed read; embedded agent retries its start and refuses bad config; one class-name rule; runner answers rebuilt, not cast; provisioner cap under concurrency; drain stops claiming first. See *PR #8 review fixes* below. Gate re-run: `pnpm docker:e2e` 28/28, host `pnpm test:e2e` 12/12 |
 
 ### Remaining work
 
@@ -61,14 +61,14 @@ five tables), wrong for a database where one `COUNT(*)` takes minutes. The
 shaped for an out-of-band version; nothing else is. **Explicitly descoped from
 Phase 5** and recorded as such at the start: it needs a second runner mode
 rather than hardening, and doing it there would have crowded out seven items.
-Move it behind the runner before pointing this at anything large.
+Move it behind the runner before pointing this at anything large. Tracked in [#13](https://github.com/EduardoPetrini/nodejs-movy-data/issues/13).
 
 **A stalled run is reported to the server log and nowhere else.** The watchdog
 deliberately does not settle a live-but-silent run — that would free the org's
 concurrency slot and let a second run launch into a destination the first is
 still writing to. But surfacing it in the UI needs a `stalled` flag on `runs`
 and a migration, which Phase 5 did not add. Today an operator learns about it
-from `console.warn`. The review closed the other half of this: until `6f13fcd`
+from `console.warn`. Tracked in [#14](https://github.com/EduardoPetrini/nodejs-movy-data/issues/14). The review closed the other half of this: until `6f13fcd`
 the watchdog only ever watched runs ADOPTED after a restart, never the ones
 this host forked itself. See *Bugs found reviewing Phase 5* below.
 
@@ -78,11 +78,11 @@ up again, and the thresholds are re-ratcheted to the floor — set by NAME, sinc
 the report prints statements/branches/functions/lines and the `thresholds`
 object does not list them in that order. The largest remaining gaps are
 `apps/cli/src/presentation/cli/cli.ts` at 0% and the Vue components, neither of
-which is unit-tested at all.
+which is unit-tested at all. Tracked in [#17](https://github.com/EduardoPetrini/nodejs-movy-data/issues/17).
 
 **No `prefers-contrast` or screen-reader pass.** Phase 5 did keyboard and focus:
 a skip link, focus rings verified in a browser, and three Playwright tests. It
-did not audit with a screen reader, and `docs/agents/` records no commitment to.
+did not audit with a screen reader, and `docs/agents/` records no commitment to. Tracked in [#18](https://github.com/EduardoPetrini/nodejs-movy-data/issues/18).
 
 **Known bugs, tracked.** One open, CLI-side:
 [#4](https://github.com/EduardoPetrini/nodejs-movy-data/issues/4) `MssqlQueryAnalyzer`
@@ -100,11 +100,11 @@ earlier and left open on GitHub; both closed 2026-10-22.
 *Fix — SQL Server as a destination* below.
 
 **Comparisons count rows, never values.** A PG→MySQL run rounded every price to a
-whole number and its comparison still read 100%. Found by reading the column.
+whole number and its comparison still read 100%. Found by reading the column. Tracked in [#15](https://github.com/EduardoPetrini/nodejs-movy-data/issues/15).
 
 **The test-before-save endpoint has no unit test.**
 `connections/test.post.ts` (2026-09-17) was verified by hand only. See the
-section at the end of this file.
+section at the end of this file. Tracked in [#16](https://github.com/EduardoPetrini/nodejs-movy-data/issues/16).
 
 ---
 
@@ -1704,8 +1704,33 @@ Against the plan's Verification list:
 ### Verified
 
 - `pnpm test`, `pnpm typecheck` and `pnpm build` after every commit group.
-- **Not run**: `pnpm docker:e2e`. `runner-services.spec.ts` and
-  `runner-availability.spec.ts` changed (operator vs org admin), so run it before merge.
+- `pnpm docker:e2e`: **28/28** on a rebuilt stack (migration `0008` applied). The first
+  run failed one test: `runner-services.spec.ts` still read runner ids as `admin@`, who
+  since the operator change gets class counts but no `runners` list. The spec now signs in
+  as `ops@`, and reads the online count from `classes`, which every role gets.
+- Host `pnpm test:e2e` (embedded agent): **12/12**; the 16 skips are the Compose-only
+  specs (`live-migration`, `probes`, `runner-classes`, `runner-services`). A cold
+  `nuxt dev` can outlast Playwright's 120 s `webServer` timeout; start it yourself and set
+  `MOVY_E2E_EXTERNAL_SERVER=1` (plus `MOVY_E2E_BASE_URL` if Nuxt picks another port).
+
+### Tracked after this release
+
+Everything below is outside PR #8 and has its own issue:
+
+| Issue | What |
+|-------|------|
+| [#9](https://github.com/EduardoPetrini/nodejs-movy-data/issues/9) | simultaneous launches can pass `max_concurrent_runs` |
+| [#10](https://github.com/EduardoPetrini/nodejs-movy-data/issues/10) | two web replicas can start a runner past `max_replicas` |
+| [#11](https://github.com/EduardoPetrini/nodejs-movy-data/issues/11) | runner phase R7: Kubernetes (Deployment per class, KEDA, shared tickets) |
+| [#12](https://github.com/EduardoPetrini/nodejs-movy-data/issues/12) | runner phase R8: runner classes edited in the UI by platform operators |
+| [#13](https://github.com/EduardoPetrini/nodejs-movy-data/issues/13) | comparisons count inside the request and time out on large databases |
+| [#14](https://github.com/EduardoPetrini/nodejs-movy-data/issues/14) | a stalled run reaches only the server log |
+| [#15](https://github.com/EduardoPetrini/nodejs-movy-data/issues/15) | comparisons check counts, never values |
+| [#16](https://github.com/EduardoPetrini/nodejs-movy-data/issues/16) | unit tests for the test-before-save endpoint |
+| [#17](https://github.com/EduardoPetrini/nodejs-movy-data/issues/17) | coverage to the 80 % target |
+| [#18](https://github.com/EduardoPetrini/nodejs-movy-data/issues/18) | axe checks, screen-reader and `prefers-contrast` pass |
+| [#19](https://github.com/EduardoPetrini/nodejs-movy-data/issues/19) | automate the chaos steps 5–7 of the runner verification |
+| [#20](https://github.com/EduardoPetrini/nodejs-movy-data/issues/20) | a production Compose override (no seed or lab, SSO, TLS) |
 
 ### Out of scope, found on the way
 

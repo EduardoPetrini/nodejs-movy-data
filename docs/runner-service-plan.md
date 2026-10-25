@@ -1,6 +1,7 @@
 # Plan: Runners as an independent, scalable service (with Docker Compose)
 
-> **Status (2026-10-25): phases 0–6 built**; 7–8 to go. Progress and what each phase
+> **Status (2026-10-25): phases 0–6 built** and shipped in PR #8; 7 and 8 are tracked in
+> [#11](https://github.com/EduardoPetrini/nodejs-movy-data/issues/11) and [#12](https://github.com/EduardoPetrini/nodejs-movy-data/issues/12). Progress and what each phase
 > found: `docs/web-ui-progress.md` (R0–R6). Decisions are recorded in
 > [ADR 0004](adr/0004-runner-service.md). This plan absorbs the earlier
 > Docker plan: Compose foundations are Phase 0, runner services are Phase 6.
