@@ -4,12 +4,15 @@
 #   pnpm docker:up       build + start; UI on http://localhost:3000
 #   pnpm docker:cli      the interactive CLI, inside the network
 #   pnpm docker:e2e      Playwright against the running stack
+#   pnpm docker:scale N  N runners of the large class (0 by default)
 #
 # Sign in as admin@ / editor@ / viewer@movy.local, password `movy-dev`.
 #
-# Runner service plan, Phase 0 (docs/runner-service-plan.md): the web container
-# still FORKS the runner per run, over IPC, so the runner lives in this image
-# and dies with this container. Phase 6 moves runs to separate runner services.
+# Runs execute on runner services, never in `web` (docs/runner-service-plan.md,
+# phase 6): `runner-default` (one replica) and `runner-large` (none until
+# scaled). The console queues a run in the meta-db; a runner of its class
+# claims it, forks the runner process, and writes events back. To let the
+# console start runners itself, add docker-compose.provisioner.yml.
 #
 # Networking:
 #   container -> container  service names on movy-net. In the UI a lab
@@ -23,6 +26,32 @@ x-app: &app
   image: movy:local
   build: { context: ., dockerfile: docker/Dockerfile, target: runtime }
   networks: [movy]
+
+# A runner agent. Reaches nothing but the meta-db and the databases it
+# migrates; listens on no port.
+x-runner: &runner
+  <<: *app
+  # The least-privilege movy_runner role and the encryption key — never
+  # movy.env, which holds the meta-db owner's password and the session secret.
+  env_file: [docker/runner.env]
+  working_dir: /app
+  command: node apps/runner/dist/agent-main.js
+  # Reaps the runner processes the agent forks. A zombie keeps its pid, so it
+  # would pass the liveness check that settles vanished runs.
+  init: true
+  # = MOVY_RUNNER_DRAIN_MS plus a margin: `docker compose stop` lets live runs
+  # finish this long. Draining never cancels a run.
+  stop_grace_period: 2m
+  extra_hosts: ["host.docker.internal:host-gateway"]
+  depends_on: { migrate: { condition: service_completed_successfully } }
+  restart: unless-stopped
+
+x-runner-env: &runner-env
+  # Replica-local: the database is the record across hosts. Lost with the
+  # container, which is why a runner that dies is settled, never resumed.
+  MOVY_JOURNAL_DIR: /tmp/movy-journals
+  MOVY_RUNNER_DRAIN_MS: "110000"
+  MOVY_SIMULATION_FIXTURE: /app/apps/runner/fixtures/pg-to-pg-315k.ndjson
 
 # migrate and seed need drizzle-kit and tsx, which are devDependencies.
 x-tools: &tools
@@ -50,9 +79,12 @@ services:
     networks: [movy]
     restart: unless-stopped
 
+  # The migrations, then the movy_runner role and its grants (idempotent; it
+  # also resets the role's password from docker/runner.env).
   migrate:
     <<: *tools
-    command: pnpm --filter @movy/db db:migrate
+    env_file: [docker/movy.env, docker/runner.env]
+    command: sh -c "pnpm --filter @movy/db db:migrate && pnpm --filter @movy/db exec tsx scripts/runner-role.ts"
     depends_on: { meta-db: { condition: service_healthy } }
 
   # Idempotent: dev users and orgs, then the lab connections in `acme`.
@@ -67,22 +99,19 @@ services:
   web:
     <<: *app
     env_file: [docker/movy.env]
-    # Phase 0 only: reaps the runners this process forks. A zombie keeps its
-    # pid, so it would pass the liveness check that settles vanished runs.
-    init: true
     working_dir: /app/apps/web
     command: node .output/server/index.mjs
     environment:
       HOST: 0.0.0.0
       PORT: "3000"
-      # Resolved explicitly: the defaults are relative to a dev checkout.
-      MOVY_RUNNER_ENTRY: /app/apps/runner/dist/main.js
-      MOVY_SIMULATION_FIXTURE: /app/apps/runner/fixtures/pg-to-pg-315k.ndjson
-      MOVY_JOURNAL_DIR: /data/runs
+      # The runner services run every run; the console only queues them.
+      MOVY_EMBEDDED_RUNNER: "false"
+      # "Start a runner" shows the command. The provisioner override switches
+      # this to `docker`, which starts the container itself.
+      MOVY_PROVISIONER: manual
       # Upserted into runner_classes at boot; a class dropped from it stays as history.
       MOVY_RUNNER_CLASSES_FILE: /etc/movy/runner-classes.json
     volumes:
-      - movy-journals:/data/runs
       - ./docker/runner-classes.json:/etc/movy/runner-classes.json:ro
     ports: ["127.0.0.1:${MOVY_WEB_PORT:-3000}:3000"]
     extra_hosts: ["host.docker.internal:host-gateway"]
@@ -92,6 +121,23 @@ services:
       retries: 40
     depends_on: { migrate: { condition: service_completed_successfully } }
     restart: unless-stopped
+
+  # ── Runners ──────────────────────────────────────────────────────────────────
+  # Both carry the template label: the docker provisioner clones a runner from
+  # one of them (runner-large has no container until scaled, so usually from
+  # runner-default, with the class and limits taken from the class row).
+  runner-default:
+    <<: *runner
+    environment: { <<: *runner-env, MOVY_RUNNER_CLASS: default, MOVY_RUNNER_SLOTS: "2" }
+    labels: { movy.runner-template: "true", movy.runner-class: default }
+    deploy: { replicas: 1, resources: { limits: { cpus: "1", memory: 1g } } }
+
+  # None until asked for: `pnpm docker:scale 1`, "Start a runner", or auto mode.
+  runner-large:
+    <<: *runner
+    environment: { <<: *runner-env, MOVY_RUNNER_CLASS: large, MOVY_RUNNER_SLOTS: "1" }
+    labels: { movy.runner-template: "true", movy.runner-class: large }
+    deploy: { replicas: 0, resources: { limits: { cpus: "4", memory: 8g } } }
 
   # ── Lab databases: disposable, seeded, ready to migrate ─────────────────────
   # Each holds movy_src (the shop fixture) and an empty movy_dst.
@@ -165,11 +211,14 @@ services:
     environment:
       MOVY_E2E_EXTERNAL_SERVER: "1"
       MOVY_E2E_LIVE: "1"
+      # The specs that need runner services rather than an embedded agent.
+      MOVY_E2E_COMPOSE: "1"
     working_dir: /app/apps/web
     command: pnpm exec playwright test
     volumes: [./apps/web/test-results:/app/apps/web/test-results]
     depends_on:
       web: { condition: service_healthy }
+      runner-default: { condition: service_started }
       seed: { condition: service_completed_successfully }
       pg-lab: { condition: service_healthy }
       mysql-lab: { condition: service_healthy }
@@ -180,4 +229,3 @@ networks:
 
 volumes:
   movy-meta: {}
-  movy-journals: {}

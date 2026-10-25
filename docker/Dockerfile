@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1.7
 #
-# One image for every Movy process: the web console, the runner it forks, and
-# the CLI. Sharing it means a deploy cannot leave the runner on a different
-# @movy/core than the web app that wrote its spec.
+# One image for every Movy process: the web console, the runner agents (and the
+# runner each forks per run), and the CLI. Sharing it means a deploy cannot
+# leave a runner on a different @movy/core than the web app that wrote its spec.
 #
 # Stages:
 #   deps     store fetched from the lockfile alone, so a source edit does not

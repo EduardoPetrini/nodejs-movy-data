@@ -44,6 +44,22 @@ if write movy.env; then
   echo "  created   $DIR/movy.env"
 fi
 
+# The runner services' only env file: the least-privilege movy_runner role
+# (created by the migrate service from RUNNER_DB_PASSWORD) and the console's
+# encryption key, which seals every run spec. Never movy.env, which holds the
+# meta-db owner's password and the session secret.
+if write runner.env; then
+  KEY="$(sed -n 's/^NUXT_ENCRYPTION_KEY=//p' "$DIR/movy.env")"
+  [[ -n "$KEY" ]] || { echo "  $DIR/movy.env has no NUXT_ENCRYPTION_KEY" >&2; exit 1; }
+  RUNNER_PASSWORD="$(hex 16)"
+  {
+    printf 'RUNNER_DB_PASSWORD=%s\n' "$RUNNER_PASSWORD"
+    printf 'MOVY_DATABASE_URL=postgres://movy_runner:%s@meta-db:5432/movy_data\n' "$RUNNER_PASSWORD"
+    printf 'MOVY_ENCRYPTION_KEY=%s\n' "$KEY"
+  } > "$DIR/runner.env"
+  echo "  created   $DIR/runner.env"
+fi
+
 if write lab.env; then
   {
     printf 'POSTGRES_PASSWORD=%s\n' "$(hex 12)"

@@ -6,8 +6,8 @@ import { test, expect, type Page } from '@playwright/test';
  * its page, and cancelling it while queued settles it outright.
  *
  * Needs a configured `large` class with no runner online — what Compose ships
- * (docker/runner-classes.json, and only the embedded `default` agent) until
- * phase 6 adds runner services. Skipped where that is not the case.
+ * (docker/runner-classes.json, with `runner-large` at zero replicas until
+ * scaled). Skipped where that is not the case.
  */
 const ORG = 'acme';
 const EDITOR = { email: 'editor@movy.local', password: 'movy-dev' };

@@ -19,9 +19,11 @@
     "test:e2e": "pnpm --filter @movy/web test:e2e",
     "docker:init": "bash scripts/docker-init.sh",
     "docker:up": "docker compose up -d --build && docker compose up -d --wait --wait-timeout 600 web pg-lab mysql-lab mssql-lab",
-    "docker:down": "docker compose down",
+    "docker:up:provisioner": "docker compose -f docker-compose.yml -f docker-compose.provisioner.yml up -d --build && docker compose -f docker-compose.yml -f docker-compose.provisioner.yml up -d --wait --wait-timeout 600 web pg-lab mysql-lab mssql-lab",
+    "docker:down": "bash scripts/docker-remove-provisioned.sh && docker compose down",
     "docker:cli": "docker compose run --rm cli",
-    "docker:e2e": "docker compose --profile e2e run --rm --build e2e"
+    "docker:e2e": "docker compose --profile e2e run --rm --build e2e",
+    "docker:scale": "bash scripts/docker-scale.sh"
   },
   "keywords": [],
   "author": "",
