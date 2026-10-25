@@ -153,4 +153,59 @@ describe('RunEventFeed', () => {
     await feed.idle();
     expect(h.published.flat()).toEqual([1, 2]);
   });
+
+  it('retries a failed read on its own, since the last notification of a run has no successor', async () => {
+    // The read that fails may be the one carrying `run_finished`; nothing
+    // else will ever notify for that run again.
+    const h = harness({ stored: 0 });
+    const feed = new RunEventFeed(
+      { ...h.deps, readAfter: vi.fn().mockRejectedValueOnce(new Error('reset')).mockImplementation(h.deps.readAfter) },
+      { retryMs: 5 }
+    );
+    await feed.track(RUN);
+    h.store(2);
+    feed.notify(RUN, 2);
+    await feed.idle();
+    expect(h.published).toEqual([]);
+
+    await vi.waitFor(() => expect(h.published.flat()).toEqual([1, 2]));
+  });
+
+  it('re-reads events whose fan-out threw rather than skipping them', async () => {
+    const h = harness({ stored: 0 });
+    const delivered: number[] = [];
+    let fail = true;
+    const feed = new RunEventFeed(
+      {
+        ...h.deps,
+        publish: (_runId, events) => {
+          if (fail) {
+            fail = false;
+            throw new Error('socket write failed');
+          }
+          delivered.push(...events.map((e) => e.seq));
+        },
+      },
+      { retryMs: 5 }
+    );
+    await feed.track(RUN);
+    h.store(2);
+    feed.notify(RUN, 2);
+
+    await vi.waitFor(() => expect(delivered).toEqual([1, 2]));
+  });
+
+  it('stops retrying a run once nobody here watches it', async () => {
+    const h = harness({ stored: 0 });
+    const readAfter = vi.fn().mockRejectedValue(new Error('down'));
+    const feed = new RunEventFeed({ ...h.deps, readAfter }, { retryMs: 5 });
+    await feed.track(RUN);
+    feed.notify(RUN, 1);
+    await feed.idle();
+    h.unwatch();
+
+    await new Promise((r) => setTimeout(r, 30));
+    expect(readAfter).toHaveBeenCalledTimes(1);
+    expect(feed.tracked()).toEqual([]);
+  });
 });

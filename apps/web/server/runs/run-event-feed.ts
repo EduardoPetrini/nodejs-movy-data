@@ -14,6 +14,8 @@ export interface RunEventFeedDeps {
 
 export interface RunEventFeedOptions {
   readonly pageSize?: number;
+  /** Wait before re-reading after a failed read or fan-out. */
+  readonly retryMs?: number;
   readonly onError?: (err: Error, runId: string) => void;
 }
 
@@ -23,6 +25,8 @@ interface Cursor {
   reading: Promise<void> | null;
   /** A notification arrived during the read: read once more when it ends. */
   again: boolean;
+  /** A re-read scheduled after a failure. At most one per run. */
+  retry: NodeJS.Timeout | null;
 }
 
 /**
@@ -45,10 +49,12 @@ interface Cursor {
 export class RunEventFeed {
   private readonly cursors = new Map<string, Cursor>();
   private readonly pageSize: number;
+  private readonly retryMs: number;
   private readonly onError: NonNullable<RunEventFeedOptions['onError']>;
 
   constructor(private readonly deps: RunEventFeedDeps, options: RunEventFeedOptions = {}) {
     this.pageSize = options.pageSize ?? 500;
+    this.retryMs = options.retryMs ?? 2_000;
     this.onError = options.onError ?? (() => {});
   }
 
@@ -60,7 +66,7 @@ export class RunEventFeed {
   async track(runId: string): Promise<void> {
     if (this.cursors.has(runId)) return;
     const seq = await this.deps.currentSeq(runId);
-    if (!this.cursors.has(runId)) this.cursors.set(runId, { seq, reading: null, again: false });
+    if (!this.cursors.has(runId)) this.cursors.set(runId, { seq, reading: null, again: false, retry: null });
   }
 
   /** A notification arrived. Cheap and synchronous: the read is scheduled, not awaited. */
@@ -115,13 +121,34 @@ export class RunEventFeed {
       for (;;) {
         const events = await this.deps.readAfter(runId, cursor.seq, this.pageSize);
         if (events.length === 0) return;
-        cursor.seq = events[events.length - 1]!.seq;
         this.deps.publish(runId, events);
+        // Moved only once the fan-out returned: a throw re-reads the range, and
+        // an overlap is a duplicate the client drops by seq, which a gap is not.
+        cursor.seq = events[events.length - 1]!.seq;
         if (events.length < this.pageSize) return;
       }
     } catch (err) {
-      // The cursor did not move, so the next notification reads the same range.
       this.onError(err instanceof Error ? err : new Error(String(err)), runId);
+      this.scheduleRetry(runId, cursor);
     }
+  }
+
+  /**
+   * The cursor did not move, but waiting for the next notification is not
+   * enough: the read that failed may have held `run_finished`, after which no
+   * notification for this run ever comes. Stops once nobody here watches it.
+   */
+  private scheduleRetry(runId: string, cursor: Cursor): void {
+    if (cursor.retry) return;
+    cursor.retry = setTimeout(() => {
+      cursor.retry = null;
+      if (this.cursors.get(runId) !== cursor) return;
+      if (!this.deps.isWatched(runId)) {
+        this.cursors.delete(runId);
+        return;
+      }
+      this.pull(runId, cursor);
+    }, this.retryMs);
+    cursor.retry.unref?.();
   }
 }
