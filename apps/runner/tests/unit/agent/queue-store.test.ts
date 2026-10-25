@@ -328,4 +328,15 @@ describe('reattachableRuns', () => {
     const found = (await reattachableRuns(sql, 'agent-1')).map((r) => r.journalPath).sort();
     expect(found).toEqual(['/legacy', '/mine']);
   });
+
+  it('lists only its own for a standalone runner, which never forked the ownerless ones', async () => {
+    const mine = await enqueue();
+    await claimNextRun(sql, 'agent-1', 'default');
+    await db.query(`UPDATE runs SET journal_path = '/mine' WHERE id = $1`, [mine]);
+    const legacy = await enqueue({ spec: false });
+    await db.query(`UPDATE runs SET status = 'running', journal_path = '/legacy' WHERE id = $1`, [legacy]);
+
+    const found = await reattachableRuns(sql, 'agent-1', { includeOwnerless: false });
+    expect(found.map((r) => r.journalPath)).toEqual(['/mine']);
+  });
 });

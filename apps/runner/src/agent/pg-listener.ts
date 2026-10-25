@@ -43,7 +43,9 @@ export class PgListener {
 
   private async connect(): Promise<void> {
     if (this.stopped) return;
-    const client = new pg.Client({ connectionString: this.options.connectionString });
+    // Keepalive: a LISTEN connection is idle by nature, so without it a peer
+    // lost in a partition is never noticed and notifications silently stop.
+    const client = new pg.Client({ connectionString: this.options.connectionString, keepAlive: true });
     client.on('notification', (msg) => {
       if (msg.payload !== undefined) this.options.onNotification(msg.channel, msg.payload);
     });
@@ -71,7 +73,7 @@ export class PgListener {
     if (this.client === client) this.client = null;
     client.removeAllListeners();
     // A late 'error' on an emitter with no listener throws, which would take
-    // the whole web process down over a connection it already gave up on.
+    // the whole process down over a connection it already gave up on.
     client.on('error', () => undefined);
     void client.end().catch(() => undefined);
     if (this.stopped) return;

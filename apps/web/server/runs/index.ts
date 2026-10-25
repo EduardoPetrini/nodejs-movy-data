@@ -6,7 +6,6 @@ import { metaDatabaseUrl, useDb } from '../db/client';
 import { runEvents, runs } from '../db/schema';
 import { toPublicEvent } from '../serializers/run.serializer';
 import { RunEventFeed } from './run-event-feed';
-import { PgListener } from './pg-listener';
 import { RunnerHub, type RunnersGrant } from '../runners/runner-hub';
 import { loadRunnersSnapshot } from '../runners/runner-summary';
 import {
@@ -16,11 +15,15 @@ import {
   RUNNERS_CHANNEL,
   PROBES_CHANNEL,
   PROBE_DONE_CHANNEL,
+  RUNS_QUEUED_CHANNEL,
+  RUN_CANCEL_CHANNEL,
+  PgListener,
   ProbeWorker,
   RunnerAgent,
   SUPPORTED_SPEC_VERSIONS,
   applyProjection,
   finaliseRunIfUnsettled,
+  journalPathIn,
   markRunLaunched,
   reattachableRuns,
   sqlAgentQueue,
@@ -148,7 +151,11 @@ export function useBusListener(): PgListener {
     const runFeed = useRunEventFeed();
     listener = new PgListener({
       connectionString: metaDatabaseUrl(),
-      channels: [RUN_EVENTS_CHANNEL, RUNNERS_CHANNEL, PROBES_CHANNEL, PROBE_DONE_CHANNEL],
+      // The queued and cancel channels matter only to this host's embedded
+      // agent, for a run launched or cancelled through another web replica.
+      channels: isEmbeddedRunner()
+        ? [RUN_EVENTS_CHANNEL, RUNNERS_CHANNEL, PROBES_CHANNEL, PROBE_DONE_CHANNEL, RUNS_QUEUED_CHANNEL, RUN_CANCEL_CHANNEL]
+        : [RUN_EVENTS_CHANNEL, RUNNERS_CHANNEL, PROBES_CHANNEL, PROBE_DONE_CHANNEL],
       onNotification: (channel, payload) => {
         if (channel === RUNNERS_CHANNEL) {
           void useRunnerHub().refresh();
@@ -159,8 +166,17 @@ export function useBusListener(): PgListener {
           void useProbeWorker()?.wake();
           return;
         }
+        if (channel === RUNS_QUEUED_CHANNEL) {
+          void useRunnerAgent()?.wake();
+          return;
+        }
+        if (channel === RUN_CANCEL_CHANNEL) {
+          const runId = parseIdPointer(payload, 'runId');
+          if (runId) void useRunnerAgent()?.cancel(runId);
+          return;
+        }
         if (channel === PROBE_DONE_CHANNEL) {
-          const id = parseProbePointer(payload);
+          const id = parseIdPointer(payload);
           if (id) useProbeWaiters().notify(id);
           return;
         }
@@ -193,10 +209,11 @@ function parsePointer(payload: string): { runId: string; lastSeq: number } | nul
   return null;
 }
 
-function parseProbePointer(payload: string): string | null {
+function parseIdPointer(payload: string, key: 'id' | 'runId' = 'id'): string | null {
   try {
-    const parsed = JSON.parse(payload) as { id?: unknown };
-    return typeof parsed.id === 'string' ? parsed.id : null;
+    const parsed = JSON.parse(payload) as Record<string, unknown>;
+    const value = parsed[key];
+    return typeof value === 'string' ? value : null;
   } catch {
     return null;
   }
@@ -225,10 +242,10 @@ export function useProbeWorker(): ProbeWorker | undefined {
 /**
  * Whether this web process runs an agent in-process.
  *
- * On unless `MOVY_EMBEDDED_RUNNER=false`. Until the runner services of phase 6
- * (docs/runner-service-plan.md) exist, the embedded agent is the only thing
- * that claims runs, so turning it off without starting one leaves every run
- * queued — the UI says so, and nothing is lost.
+ * On unless `MOVY_EMBEDDED_RUNNER=false`, which a deployment with runner
+ * services sets (Compose does: `runner-default`, `runner-large`). Turning it
+ * off with no runner service running leaves every run queued — the UI says
+ * so and offers to start one, and nothing is lost.
  */
 export function isEmbeddedRunner(): boolean {
   return process.env.MOVY_EMBEDDED_RUNNER !== 'false';
@@ -335,21 +352,9 @@ function probeSlots(): number {
   return raw && Number.isInteger(n) && n >= 0 ? n : 2;
 }
 
-/**
- * Where this run's journal goes.
- *
- * Under a directory, one file per run id, so a run is recoverable knowing only
- * its id. The id is a UUID generated server-side and is checked here anyway:
- * this string becomes a filesystem path, and a path built from a request-shaped
- * value is exactly the kind of thing that stops being a UUID one refactor later.
- */
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
+/** Where this run's journal goes on this host (`MOVY_JOURNAL_DIR`, else `.movy/runs`). */
 export function journalPathFor(runId: string): string {
-  if (!UUID.test(runId)) throw new Error('runId must be a UUID');
-  const dir = process.env.MOVY_JOURNAL_DIR ?? path.resolve(process.cwd(), '.movy/runs');
-  fs.mkdirSync(dir, { recursive: true });
-  return path.join(dir, `${runId}.ndjson`);
+  return journalPathIn(process.env.MOVY_JOURNAL_DIR ?? path.resolve(process.cwd(), '.movy/runs'), runId);
 }
 
 /**

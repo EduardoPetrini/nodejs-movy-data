@@ -35,10 +35,16 @@ export type { RunSpecEnvelope } from './run-spec-envelope';
 export { RUN_EVENTS_CHANNEL, RUNNERS_CHANNEL } from './channels';
 export { RunnerClassesFileError, parseRunnerClassesFile, upsertRunnerClasses } from './runner-classes';
 export type { RunnerClassConfig } from './runner-classes';
-export { PROBES_CHANNEL, PROBE_DONE_CHANNEL } from './channels';
+export { PROBES_CHANNEL, PROBE_DONE_CHANNEL, RUNS_QUEUED_CHANNEL, RUN_CANCEL_CHANNEL } from './channels';
 export {
   abandonProbe, claimProbe, completeProbe, enqueueProbe, probeRunnerAvailable, takeProbeResult,
 } from './probe-store';
 export type { ClaimedProbe, NewProbe, ProbeKind } from './probe-store';
 export { ProbeWorker, sqlProbeQueue } from './probe-worker';
 export type { ProbeQueue, ProbeWorkerOptions } from './probe-worker';
+export { PgListener } from './pg-listener';
+export type { PgListenerOptions } from './pg-listener';
+export { journalPathIn } from './journal-path';
+export { AgentConfigError, readAgentConfig } from './agent-config';
+export type { AgentConfig } from './agent-config';
+export { IdleWatch } from './idle-watch';

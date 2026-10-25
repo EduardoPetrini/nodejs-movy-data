@@ -252,18 +252,21 @@ export async function cancelQueuedRun(sql: SqlClient, orgId: string, runId: stri
 
 /**
  * Runs this agent may be able to re-attach to after a restart: its own, plus
- * any forked before migration 0004, which have no owner at all. Never a queued
+ * any forked before migration 0004, which have no owner at all — those were
+ * forked by a web console, so only the embedded agent asks for them; a
+ * standalone runner could only find their journals missing and settle them. Never a queued
  * run — that one is waiting for a claim, not for a process that died.
  */
 export async function reattachableRuns(
   sql: SqlClient,
-  runnerId: string
+  runnerId: string,
+  { includeOwnerless = true }: { includeOwnerless?: boolean } = {}
 ): Promise<{ id: string; pid: number | null; journalPath: string; lastSeq: number }[]> {
   const { rows } = await sql.query<{ id: string; pid: number | null; journal_path: string; last_seq: number }>(
     `SELECT id, pid, journal_path, last_seq FROM runs
       WHERE status IN ('running', 'cancelling') AND journal_path IS NOT NULL
-        AND (runner_id = $1 OR runner_id IS NULL)`,
-    [runnerId]
+        AND (runner_id = $1 OR ($2 AND runner_id IS NULL))`,
+    [runnerId, includeOwnerless]
   );
   return rows.map((r) => ({ id: r.id, pid: r.pid, journalPath: r.journal_path, lastSeq: r.last_seq }));
 }

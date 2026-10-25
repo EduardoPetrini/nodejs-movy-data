@@ -232,6 +232,71 @@ describe('RunnerAgent leases', () => {
   });
 });
 
+describe('RunnerAgent cut off from the database', () => {
+  function cutOff(q: ReturnType<typeof fakeQueue>, c: ReturnType<typeof fakeControl>, clock: { t: number }) {
+    return new RunnerAgent({
+      queue: q.queue, control: c.control, slots: 1,
+      journalPathFor: () => '/j', simulationFixture: () => undefined,
+      openSpec: (_o, _r, sealed) => JSON.parse(sealed.ciphertext.toString()) as RunSpecEnvelope,
+      pollIntervalMs: 0, heartbeatIntervalMs: 0, leaseMs: 30_000, now: () => clock.t,
+    });
+  }
+
+  it('keeps running through failed beats while the lease could still be alive', async () => {
+    const clock = { t: 0 };
+    const q = fakeQueue([run('a')]);
+    const c = fakeControl();
+    const agent = cutOff(q, c, clock);
+    q.setBeat({ held: ['a'], cancelling: [] });
+    await agent.start();
+    (q.queue.heartbeat as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('ECONNREFUSED'));
+
+    clock.t = 29_000;
+    await agent.beat();
+
+    expect(c.control.terminate).not.toHaveBeenCalled();
+  });
+
+  it('stops its own runs once no beat has landed for a whole lease, since the sweeper may have settled them', async () => {
+    const clock = { t: 0 };
+    const q = fakeQueue([run('a')]);
+    const c = fakeControl();
+    const onFenced = vi.fn();
+    const agent = new RunnerAgent({
+      queue: q.queue, control: c.control, slots: 1,
+      journalPathFor: () => '/j', simulationFixture: () => undefined,
+      openSpec: (_o, _r, sealed) => JSON.parse(sealed.ciphertext.toString()) as RunSpecEnvelope,
+      pollIntervalMs: 0, heartbeatIntervalMs: 0, leaseMs: 30_000, now: () => clock.t, onFenced,
+    });
+    q.setBeat({ held: ['a'], cancelling: [] });
+    await agent.start();
+    (q.queue.heartbeat as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('ECONNREFUSED'));
+
+    clock.t = 30_000;
+    await agent.beat();
+
+    expect(c.control.terminate).toHaveBeenCalledWith('a');
+    expect(onFenced).toHaveBeenCalledWith('a');
+  });
+
+  it('measures the lease from the last beat that landed, not from start', async () => {
+    const clock = { t: 0 };
+    const q = fakeQueue([run('a')]);
+    const c = fakeControl();
+    const agent = cutOff(q, c, clock);
+    q.setBeat({ held: ['a'], cancelling: [] });
+    await agent.start();
+    clock.t = 20_000;
+    await agent.beat();
+    (q.queue.heartbeat as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('ECONNREFUSED'));
+
+    clock.t = 45_000;
+    await agent.beat();
+
+    expect(c.control.terminate).not.toHaveBeenCalled();
+  });
+});
+
 describe('RunnerAgent.cancel', () => {
   it('does nothing for a run this host is not running, leaving it to the runner that is', async () => {
     // RunManager.cancel on an unknown run settles it as gone, which for a run
@@ -251,6 +316,16 @@ describe('RunnerAgent.cancel', () => {
     await agent.start();
     expect(await agent.cancel('a', 4242)).toBe(true);
     expect(c.control.cancel).toHaveBeenCalledWith('a', 4242);
+  });
+
+  it('forwards once when the console and a NOTIFY both deliver the same cancel', async () => {
+    const q = fakeQueue([run('a')]);
+    const c = fakeControl();
+    const agent = agentWith(q, c);
+    await agent.start();
+    expect(await agent.cancel('a', 4242)).toBe(true);
+    expect(await agent.cancel('a')).toBe(true);
+    expect(c.control.cancel).toHaveBeenCalledTimes(1);
   });
 });
 

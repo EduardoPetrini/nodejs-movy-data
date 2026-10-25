@@ -1,7 +1,7 @@
 import { and, desc, eq, gt, inArray, lt, notInArray, or, sql } from 'drizzle-orm';
 import type { Db } from '../db/client';
 import { migrationDefinitions, runEvents, runSpecs, runSteps, runTableProgress, runs, TERMINAL_RUN_STATUSES } from '../db/schema';
-import { cancelQueuedRun, type SealedSpec, type SqlClient } from '@movy/runner/agent';
+import { RUNS_QUEUED_CHANNEL, RUN_CANCEL_CHANNEL, cancelQueuedRun, type SealedSpec, type SqlClient } from '@movy/runner/agent';
 import type { RunStatus } from '../db/schema';
 import { clampLimit, toPage, type Page, type PageCursor } from './paging';
 
@@ -155,6 +155,10 @@ export class RunsRepository {
         .returning();
       if (!created) throw new Error('insert into runs returned no row');
       await tx.insert(runSpecs).values({ runId: created.id, specVersion: spec.specVersion, ciphertext: spec.ciphertext });
+      // Delivered on commit, so an agent woken by it always finds the row and its spec.
+      await tx.execute(
+        sql`select pg_notify(${RUNS_QUEUED_CHANNEL}, ${JSON.stringify({ runnerClass: created.runnerClass })})`
+      );
       return created;
     });
   }
@@ -203,20 +207,25 @@ export class RunsRepository {
   }
 
   async requestCancel(runId: string, userId: string): Promise<RunRow | undefined> {
-    const [updated] = await this.db
-      .update(runs)
-      .set({ status: 'cancelling', cancelRequestedAt: new Date(), cancelRequestedByUserId: userId, updatedAt: new Date() })
-      .where(
-        and(
-          eq(runs.id, runId),
-          eq(runs.orgId, this.orgId),
-          // Cancelling an already-finished run must be a no-op, not a status
-          // that overwrites the outcome it actually had.
-          notInArray(runs.status, [...TERMINAL_RUN_STATUSES])
+    return this.db.transaction(async (tx) => {
+      const [updated] = await tx
+        .update(runs)
+        .set({ status: 'cancelling', cancelRequestedAt: new Date(), cancelRequestedByUserId: userId, updatedAt: new Date() })
+        .where(
+          and(
+            eq(runs.id, runId),
+            eq(runs.orgId, this.orgId),
+            // Cancelling an already-finished run must be a no-op, not a status
+            // that overwrites the outcome it actually had.
+            notInArray(runs.status, [...TERMINAL_RUN_STATUSES])
+          )
         )
-      )
-      .returning();
-    return updated;
+        .returning();
+      // The fast path to whichever agent holds it, in any process. Its next
+      // heartbeat finds the `cancelling` row anyway, so a lost NOTIFY only costs seconds.
+      if (updated) await tx.execute(sql`select pg_notify(${RUN_CANCEL_CHANNEL}, ${JSON.stringify({ runId })})`);
+      return updated;
+    });
   }
 
   private async requireRun(runId: string): Promise<RunRow> {

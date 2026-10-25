@@ -18,3 +18,9 @@ export const PROBES_CHANNEL = 'movy_probes';
 
 /** `{id}` — a runner wrote that probe's result. */
 export const PROBE_DONE_CHANNEL = 'movy_probe_done';
+
+/** `{runnerClass}` — a run of that class was queued; an agent of the class claims it. */
+export const RUNS_QUEUED_CHANNEL = 'movy_runs';
+
+/** `{runId}` — a user asked to cancel a running run; only the agent holding it acts. */
+export const RUN_CANCEL_CHANNEL = 'movy_run_cancel';

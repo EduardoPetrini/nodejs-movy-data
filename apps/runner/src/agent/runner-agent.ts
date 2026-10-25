@@ -49,6 +49,14 @@ export interface RunnerAgentOptions {
   readonly pollIntervalMs?: number;
   /** 0 disables the timer, for tests that drive `beat()` themselves. */
   readonly heartbeatIntervalMs?: number;
+  /**
+   * The lease the queue grants. When no heartbeat has succeeded for this long,
+   * the sweeper may already have settled this agent's runs, so it stops them
+   * itself rather than wait to hear so from a database it cannot reach.
+   */
+  readonly leaseMs?: number;
+  /** Injectable for tests. */
+  readonly now?: () => number;
   readonly onError?: (err: Error, runId?: string) => void;
   /** A run lost its lease and was stopped here. */
   readonly onFenced?: (runId: string) => void;
@@ -77,10 +85,14 @@ export class RunnerAgent {
   private beatTimer: NodeJS.Timeout | null = null;
   private readonly openSpec: NonNullable<RunnerAgentOptions['openSpec']>;
   private readonly onError: NonNullable<RunnerAgentOptions['onError']>;
+  private readonly now: () => number;
+  private lastBeatOkAt: number;
 
   constructor(private readonly options: RunnerAgentOptions) {
     this.openSpec = options.openSpec ?? openRunSpec;
     this.onError = options.onError ?? (() => {});
+    this.now = options.now ?? Date.now;
+    this.lastBeatOkAt = this.now();
   }
 
   /**
@@ -124,6 +136,8 @@ export class RunnerAgent {
    */
   async cancel(runId: string, pid: number | null = null): Promise<boolean> {
     if (!this.options.control.liveRunIds().includes(runId)) return false;
+    // A NOTIFY and the console's own fast path can both arrive; forward once.
+    if (this.cancelSent.has(runId)) return true;
     this.cancelSent.add(runId);
     return this.options.control.cancel(runId, pid);
   }
@@ -137,8 +151,10 @@ export class RunnerAgent {
     } catch (err) {
       // A missed beat is not fatal: the lease has five more before it expires.
       this.onError(toError(err));
+      this.selfFenceIfLeaseLost();
       return;
     }
+    this.lastBeatOkAt = this.now();
 
     const live = new Set(control.liveRunIds());
     const held = new Set(result.held);
@@ -159,6 +175,24 @@ export class RunnerAgent {
     }
 
     if (!this.draining) await this.wake();
+  }
+
+  /**
+   * Cut off from the database for a whole lease: as far as the ledger may
+   * already say, these runs are over and their destinations free. Stopping
+   * them is the only safe guess — a partially applied run is reported either
+   * way, but two writers into one destination is the harm the lease exists to
+   * prevent.
+   */
+  private selfFenceIfLeaseLost(): void {
+    const leaseMs = this.options.leaseMs ?? DEFAULT_LEASE_MS;
+    if (this.now() - this.lastBeatOkAt < leaseMs) return;
+    for (const runId of [...this.owned]) {
+      this.options.control.terminate(runId);
+      this.owned.delete(runId);
+      this.cancelSent.delete(runId);
+      this.options.onFenced?.(runId);
+    }
   }
 
   /**

@@ -5,7 +5,8 @@
   "description": "Movy run driver: forked once per migration run. Owns argv, stdin, signals, IPC, the event journal and exit codes.",
   "main": "dist/main.js",
   "bin": {
-    "movy-runner": "dist/main.js"
+    "movy-runner": "dist/main.js",
+    "movy-runner-agent": "dist/agent-main.js"
   },
   "exports": {
     ".": "./dist/main.js",
@@ -30,6 +31,7 @@
   "dependencies": {
     "@movy/core": "workspace:*",
     "@movy/db": "workspace:*",
-    "drizzle-orm": "^0.45.2"
+    "drizzle-orm": "^0.45.2",
+    "pg": "^8.20.0"
   }
 }
