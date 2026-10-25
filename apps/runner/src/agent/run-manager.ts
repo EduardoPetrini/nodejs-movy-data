@@ -51,6 +51,20 @@ export interface UnsettledRun {
   readonly pid: number | null;
   readonly journalPath: string;
   readonly lastSeq: number;
+  /**
+   * Claimed under a lease (migration 0004 on). Such a run is fenced like any
+   * other once its lease is lost; only an ownerless legacy run is exempt.
+   */
+  readonly leased?: boolean;
+}
+
+/** What `reattach()` found. */
+export interface ReattachResult {
+  readonly recovered: number;
+  readonly settled: number;
+  readonly following: number;
+  /** Followed runs that hold a lease, which the agent must fence if it goes. */
+  readonly leased: readonly string[];
 }
 
 /** How a run ended, as the manager reports it when no event said so. */
@@ -221,11 +235,12 @@ export class RunManager {
    * Re-delivered events are not a problem: `run_events` is keyed on
    * `(run_id, seq)`, so re-inserting one is a no-op.
    */
-  async reattach(): Promise<{ recovered: number; settled: number; following: number }> {
+  async reattach(): Promise<ReattachResult> {
     const unsettled = await this.store.unsettledRuns();
     let recovered = 0;
     let settled = 0;
     let following = 0;
+    const leased: string[] = [];
 
     for (const run of unsettled) {
       const caught = await this.catchUp(run, run.lastSeq);
@@ -236,10 +251,11 @@ export class RunManager {
       } else {
         this.follow(run, caught.cursor);
         following += 1;
+        if (run.leased) leased.push(run.id);
       }
     }
 
-    return { recovered, settled, following };
+    return { recovered, settled, following, leased };
   }
 
   /**
@@ -425,15 +441,24 @@ export class RunManager {
   }
 
   /**
-   * Stops a run this host forked, immediately. For fencing, not for users:
-   * a user's cancel is cooperative and goes through `cancel()`. Returns false
-   * for a run it holds no process for.
+   * Kills a run this host forked or follows, at once. For fencing, not for
+   * users: a user's cancel is cooperative and goes through `cancel()`.
+   *
+   * SIGKILL, never SIGTERM. The runner turns SIGTERM into the user's cancel,
+   * which is only checked between operations — a fenced run inside a COPY or a
+   * CREATE INDEX would keep writing into a destination the sweeper has already
+   * freed for someone else. The killed connection is what ends the statement.
+   * Returns false for a run it holds no live process for.
    */
   terminate(runId: string): boolean {
     const handle = this.handles.get(runId);
-    if (!handle) return false;
     try {
-      return handle.child.kill('SIGTERM');
+      if (handle) return handle.child.kill('SIGKILL');
+      // Followed after a restart: no ChildProcess, only the pid the run reported.
+      const pid = this.followedPids.get(runId) ?? null;
+      if (!this.followers.has(runId) || !isProcessAlive(pid)) return false;
+      process.kill(pid!, 'SIGKILL');
+      return true;
     } catch (err) {
       this.onError(toError(err), runId);
       return false;

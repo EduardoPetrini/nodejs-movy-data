@@ -314,7 +314,7 @@ describe('RunnerAgent cut off from the database', () => {
       queue: q.queue, control: c.control, slots: 1,
       journalPathFor: () => '/j', simulationFixture: () => undefined,
       openSpec: (_o, _r, sealed) => JSON.parse(sealed.ciphertext.toString()) as RunSpecEnvelope,
-      pollIntervalMs: 0, heartbeatIntervalMs: 0, leaseMs: 30_000, now: () => clock.t,
+      pollIntervalMs: 0, heartbeatIntervalMs: 0, leaseCheckIntervalMs: 0, leaseMs: 30_000, fenceMarginMs: 5_000, now: () => clock.t,
     });
   }
 
@@ -327,13 +327,13 @@ describe('RunnerAgent cut off from the database', () => {
     await agent.start();
     (q.queue.heartbeat as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('ECONNREFUSED'));
 
-    clock.t = 29_000;
+    clock.t = 24_000;
     await agent.beat();
 
     expect(c.control.terminate).not.toHaveBeenCalled();
   });
 
-  it('stops its own runs once no beat has landed for a whole lease, since the sweeper may have settled them', async () => {
+  it('stops its own runs BEFORE their lease can expire, since the sweeper may then settle them', async () => {
     const clock = { t: 0 };
     const q = fakeQueue([run('a')]);
     const c = fakeControl();
@@ -342,13 +342,13 @@ describe('RunnerAgent cut off from the database', () => {
       queue: q.queue, control: c.control, slots: 1,
       journalPathFor: () => '/j', simulationFixture: () => undefined,
       openSpec: (_o, _r, sealed) => JSON.parse(sealed.ciphertext.toString()) as RunSpecEnvelope,
-      pollIntervalMs: 0, heartbeatIntervalMs: 0, leaseMs: 30_000, now: () => clock.t, onFenced,
+      pollIntervalMs: 0, heartbeatIntervalMs: 0, leaseCheckIntervalMs: 0, leaseMs: 30_000, fenceMarginMs: 5_000, now: () => clock.t, onFenced,
     });
     q.setBeat({ held: ['a'], cancelling: [] });
     await agent.start();
     (q.queue.heartbeat as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('ECONNREFUSED'));
 
-    clock.t = 30_000;
+    clock.t = 25_000;
     await agent.beat();
 
     expect(c.control.terminate).toHaveBeenCalledWith('a');
@@ -366,9 +366,137 @@ describe('RunnerAgent cut off from the database', () => {
     await agent.beat();
     (q.queue.heartbeat as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('ECONNREFUSED'));
 
-    clock.t = 45_000;
+    clock.t = 44_000;
     await agent.beat();
 
+    expect(c.control.terminate).not.toHaveBeenCalled();
+  });
+
+  it('fences on its deadline while a heartbeat hangs, without waiting for the query to fail', async () => {
+    // A blackholed connection: the heartbeat neither answers nor rejects.
+    const clock = { t: 0 };
+    const q = fakeQueue([run('a')]);
+    const c = fakeControl();
+    const agent = cutOff(q, c, clock);
+    q.setBeat({ held: ['a'], cancelling: [] });
+    await agent.start();
+    (q.queue.heartbeat as ReturnType<typeof vi.fn>).mockImplementation(() => new Promise(() => {}));
+
+    clock.t = 5_000;
+    void agent.beat();
+    clock.t = 24_000;
+    agent.checkLeases();
+    expect(c.control.terminate).not.toHaveBeenCalled();
+
+    clock.t = 25_000;
+    agent.checkLeases();
+    expect(c.control.terminate).toHaveBeenCalledWith('a');
+  });
+
+  it('measures a lease from when its renewal was SENT, so a slow answer cannot stretch it', async () => {
+    const clock = { t: 0 };
+    const q = fakeQueue([run('a')]);
+    const c = fakeControl();
+    const agent = cutOff(q, c, clock);
+    q.setBeat({ held: ['a'], cancelling: [] });
+    await agent.start();
+    const answer = deferred<HeartbeatResult>();
+    (q.queue.heartbeat as ReturnType<typeof vi.fn>).mockImplementationOnce(() => answer.promise);
+
+    clock.t = 10_000;
+    const beating = agent.beat();
+    clock.t = 30_000; // answered twenty seconds later
+    answer.resolve({ held: ['a'], cancelling: [] });
+    await beating;
+
+    clock.t = 35_000;
+    agent.checkLeases();
+    expect(c.control.terminate).toHaveBeenCalledWith('a');
+  });
+
+  it('never launches a run fenced while its spec was being read', async () => {
+    const clock = { t: 0 };
+    const q = fakeQueue();
+    const c = fakeControl();
+    const agent = cutOff(q, c, clock);
+    await agent.start();
+    const spec = deferred<SealedSpec | null>();
+    (q.queue.takeSpec as ReturnType<typeof vi.fn>).mockImplementationOnce(() => spec.promise);
+
+    q.queued.push(run('b'));
+    const claiming = agent.wake();
+    await flush();
+    clock.t = 25_000;
+    agent.checkLeases();
+    spec.resolve({ specVersion: 1, ciphertext: Buffer.from(JSON.stringify({ simulate: false, spec: {} })) });
+    await claiming;
+
+    expect(c.control.launch).not.toHaveBeenCalled();
+  });
+});
+
+describe('RunnerAgent and the runs it recovered after a restart', () => {
+  function recovering(q: ReturnType<typeof fakeQueue>, c: ReturnType<typeof fakeControl>, leased: string[], onFenced = vi.fn()) {
+    c.control.reattach = vi.fn(async () => {
+      for (const id of leased) c.live.add(id);
+      return { recovered: leased.length, settled: 0, following: leased.length, leased };
+    });
+    return new RunnerAgent({
+      queue: q.queue, control: c.control, slots: 2,
+      journalPathFor: () => '/j', simulationFixture: () => undefined,
+      pollIntervalMs: 0, heartbeatIntervalMs: 0, leaseCheckIntervalMs: 0, onFenced,
+    });
+  }
+
+  it('fences a recovered run whose lease the sweeper already took', async () => {
+    const q = fakeQueue();
+    const c = fakeControl();
+    const onFenced = vi.fn();
+    q.setBeat({ held: [], cancelling: [] });
+    await recovering(q, c, ['old'], onFenced).start();
+    expect(c.control.terminate).toHaveBeenCalledWith('old');
+    expect(onFenced).toHaveBeenCalledWith('old');
+  });
+
+  it('keeps a recovered run its heartbeat still holds, and fences it once the lease goes', async () => {
+    const q = fakeQueue();
+    const c = fakeControl();
+    q.setBeat({ held: ['old'], cancelling: [] });
+    const agent = recovering(q, c, ['old']);
+    await agent.start();
+    expect(c.control.terminate).not.toHaveBeenCalled();
+
+    q.setBeat({ held: [], cancelling: [] });
+    await agent.beat();
+    expect(c.control.terminate).toHaveBeenCalledWith('old');
+  });
+
+  it('stops a recovered run when no beat here could confirm its lease', async () => {
+    const q = fakeQueue();
+    const c = fakeControl();
+    (q.queue.heartbeat as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('ECONNREFUSED'));
+    await recovering(q, c, ['old']).start();
+    expect(c.control.terminate).toHaveBeenCalledWith('old');
+  });
+});
+
+describe('RunnerAgent ownership bookkeeping', () => {
+  it('forgets a run that finished between two beats, so ownership does not grow with history', async () => {
+    const q = fakeQueue([run('a'), run('b'), run('c')]);
+    const c = fakeControl();
+    const agent = agentWith(q, c);
+    const owned = (agent as unknown as { owned: Map<string, number> }).owned;
+    q.setBeat({ held: ['a', 'b', 'c'], cancelling: [] });
+    await agent.start();
+    for (const id of ['a', 'b', 'c']) {
+      expect(c.live.has(id)).toBe(true);
+      // Finishes, and the next run is claimed, before any beat sees it gone:
+      // the run was never live at the start of a beat that missed it.
+      c.finish(id);
+      await agent.wake();
+    }
+    await agent.beat();
+    expect(owned.size).toBe(0);
     expect(c.control.terminate).not.toHaveBeenCalled();
   });
 });

@@ -10,7 +10,7 @@ import { EventWriter } from '../../../src/agent/event-writer';
 import { RunManager } from '../../../src/agent/run-manager';
 import type { RunManagerStore } from '../../../src/agent/run-manager';
 
-type Unsettled = { id: string; pid: number | null; journalPath: string; lastSeq: number };
+type Unsettled = { id: string; pid: number | null; journalPath: string; lastSeq: number; leased?: boolean };
 
 function fakeStore(unsettled: Unsettled[] = []) {
   const launched: { runId: string; pid: number; journalPath: string }[] = [];
@@ -103,12 +103,14 @@ describe('RunManager.liveRunIds and terminate', () => {
     h.manager.shutdown();
   });
 
-  it('terminates a run it forked with SIGTERM, and reports a run it does not hold', () => {
+  it('kills a run it forked with SIGKILL, and reports a run it does not hold', () => {
     // Fencing: an agent whose lease was taken away must stop writing at once.
+    // SIGTERM is the runner's cancel, checked only between operations, so a
+    // fenced run inside a COPY would keep writing into a freed destination.
     const h = harness();
     h.manager.launch({ runId: RUN_ID, journalPath: '/tmp/j.ndjson', spec: {} });
     expect(h.manager.terminate(RUN_ID)).toBe(true);
-    expect(h.children[0].signals).toEqual(['SIGTERM']);
+    expect(h.children[0].signals).toEqual(['SIGKILL']);
     expect(h.manager.terminate('99999999-9999-9999-9999-999999999999')).toBe(false);
   });
 });
@@ -129,6 +131,36 @@ describe('RunManager.cancel for a run it re-attached to', () => {
       expect(h.settled).toEqual([]);
     } finally {
       kill.mockRestore();
+      h.manager.shutdown();
+    }
+  });
+
+  it('kills a followed process by its stored pid when fenced, and names it leased', async () => {
+    // A run recovered after a restart has no ChildProcess, only a pid; without
+    // this it outlived its lease and kept writing.
+    const dir = mkdtempSync(join(tmpdir(), 'movy-fence-'));
+    const journalPath = join(dir, 'j.ndjson');
+    writeFileSync(journalPath, '');
+    const h = harness([{ id: RUN_ID, pid: process.pid, journalPath, lastSeq: 0, leased: true }]);
+    expect((await h.manager.reattach()).leased).toEqual([RUN_ID]);
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    try {
+      expect(h.manager.terminate(RUN_ID)).toBe(true);
+      expect(kill).toHaveBeenCalledWith(process.pid, 'SIGKILL');
+    } finally {
+      kill.mockRestore();
+      h.manager.shutdown();
+    }
+  });
+
+  it('does not name an ownerless legacy run as leased', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'movy-legacy-'));
+    const journalPath = join(dir, 'j.ndjson');
+    writeFileSync(journalPath, '');
+    const h = harness([{ id: RUN_ID, pid: process.pid, journalPath, lastSeq: 0 }]);
+    try {
+      expect((await h.manager.reattach()).leased).toEqual([]);
+    } finally {
       h.manager.shutdown();
     }
   });
@@ -319,7 +351,7 @@ describe('RunManager.reattach', () => {
 
     const result = await h.manager.reattach();
 
-    expect(result).toEqual({ recovered: 1, settled: 1, following: 0 });
+    expect(result).toEqual({ recovered: 1, settled: 1, following: 0, leased: [] });
     expect(h.applied[0].events.map((e) => e.seq)).toEqual([2, 3]);
     expect(h.settled[0]).toMatchObject({ status: 'succeeded' });
   });
@@ -332,7 +364,7 @@ describe('RunManager.reattach', () => {
     const h = harness([{ id: RUN_ID, pid: process.pid, journalPath, lastSeq: 0 }]);
     try {
       const result = await h.manager.reattach();
-      expect(result).toEqual({ recovered: 1, settled: 0, following: 1 });
+      expect(result).toEqual({ recovered: 1, settled: 0, following: 1, leased: [] });
       expect(h.settled).toHaveLength(0);
     } finally {
       h.manager.shutdown();

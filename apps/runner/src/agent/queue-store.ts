@@ -261,14 +261,14 @@ export async function reattachableRuns(
   sql: SqlClient,
   runnerId: string,
   { includeOwnerless = true }: { includeOwnerless?: boolean } = {}
-): Promise<{ id: string; pid: number | null; journalPath: string; lastSeq: number }[]> {
-  const { rows } = await sql.query<{ id: string; pid: number | null; journal_path: string; last_seq: number }>(
-    `SELECT id, pid, journal_path, last_seq FROM runs
+): Promise<{ id: string; pid: number | null; journalPath: string; lastSeq: number; leased: boolean }[]> {
+  const { rows } = await sql.query<{ id: string; pid: number | null; journal_path: string; last_seq: number; leased: boolean }>(
+    `SELECT id, pid, journal_path, last_seq, lease_expires_at IS NOT NULL AS leased FROM runs
       WHERE status IN ('running', 'cancelling') AND journal_path IS NOT NULL
         AND (runner_id = $1 OR ($2 AND runner_id IS NULL))`,
     [runnerId, includeOwnerless]
   );
-  return rows.map((r) => ({ id: r.id, pid: r.pid, journalPath: r.journal_path, lastSeq: r.last_seq }));
+  return rows.map((r) => ({ id: r.id, pid: r.pid, journalPath: r.journal_path, lastSeq: r.last_seq, leased: r.leased }));
 }
 
 /**
