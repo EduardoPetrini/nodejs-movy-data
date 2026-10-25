@@ -211,9 +211,12 @@ export class RunnerHub {
     const key = roomKey(grant);
     const room = this.rooms.get(key) ?? { orgId: grant.orgId, audience, members: new Set(), last: null };
     room.last = null;
-    room.members.add({ peer: membership.peer, grant, room: key });
+    // ONE object in both indexes: `unsubscribe` removes it from the room by
+    // identity, and two copies left a revoked operator in the operator room.
+    const moved: Membership = { peer: membership.peer, grant, room: key };
+    room.members.add(moved);
     this.rooms.set(key, room);
-    this.byPeer.set(membership.peer, { peer: membership.peer, grant, room: key });
+    this.byPeer.set(membership.peer, moved);
     this.arm();
   }
 

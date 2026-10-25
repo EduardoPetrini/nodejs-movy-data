@@ -115,6 +115,35 @@ describe('RunnerHub', () => {
     expect(p.frames.at(-1)).toHaveProperty('runners');
   });
 
+  it('stops runner ids for an operator promoted and then revoked while connected', async () => {
+    const l = loader();
+    let operators = new Set(['u1']);
+    const hub = new RunnerHub({ load: l.load, resolveOperators: async () => operators });
+    const p = fakePeer();
+    await hub.subscribe(p.peer, grant());
+    await hub.refresh(); // promoted: into the operator room
+    operators = new Set();
+    await hub.refresh(); // revoked: out of it again
+    expect(hub.stats().rooms).toBe(1);
+
+    l.setFree(0);
+    const before = p.frames.length;
+    await hub.refresh();
+    const sent = p.frames.slice(before);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).not.toHaveProperty('runners');
+  });
+
+  it('leaves no room behind when a moved member disconnects', async () => {
+    const l = loader();
+    const hub = new RunnerHub({ load: l.load, resolveOperators: async () => new Set(['u1']) });
+    const p = fakePeer();
+    await hub.subscribe(p.peer, grant());
+    await hub.refresh();
+    hub.unsubscribe(p.peer);
+    expect(hub.stats()).toEqual({ peers: 0, rooms: 0 });
+  });
+
   it('keeps an org admin who is no operator in the member room: orgs are self-serve', async () => {
     const l = loader();
     const roles = new Map<string, OrgRole>([[memberKey(ORG_A, 'u1'), 'admin']]);
