@@ -131,58 +131,6 @@ describe('EventWriter', () => {
     expect(applied).toHaveLength(0);
   });
 
-  it('announces a batch only after it is durably stored', async () => {
-    // The ordering the socket fan-out depends on. Broadcasting first would
-    // leave every event between a client's snapshot read and the next flush
-    // invisible to it — a hole the client cannot even detect.
-    const order: string[] = [];
-    const store: ProjectionStore = {
-      async apply() {
-        order.push('stored');
-        await new Promise((r) => setTimeout(r, 5));
-        order.push('stored:done');
-      },
-    };
-    const writer = new EventWriter(store, {
-      maxBatch: 1,
-      onFlushed: () => order.push('broadcast'),
-      ...manualTimer(),
-    });
-
-    writer.push('r1', logEvent());
-    await writer.flush();
-
-    expect(order).toEqual(['stored', 'stored:done', 'broadcast']);
-  });
-
-  it('does not announce a batch that failed to store', async () => {
-    // Otherwise a reconnecting client asks for events past a cursor the
-    // database never advanced to.
-    const onFlushed = vi.fn();
-    const store: ProjectionStore = { apply: () => Promise.reject(new Error('db down')) };
-    const writer = new EventWriter(store, { maxBatch: 1, onFlushed, onError: () => {}, ...manualTimer() });
-
-    writer.push('r1', logEvent());
-    await writer.flush();
-
-    expect(onFlushed).not.toHaveBeenCalled();
-  });
-
-  it('passes the folded projection to the broadcaster, not the raw batch', async () => {
-    const seen: unknown[] = [];
-    const writer = new EventWriter(
-      { async apply() {} },
-      { maxBatch: 2, onFlushed: (_runId, projection) => seen.push(projection), ...manualTimer() }
-    );
-
-    writer.push('r1', logEvent());
-    writer.push('r1', logEvent());
-    await writer.flush();
-
-    expect(seen).toHaveLength(1);
-    expect((seen[0] as { events: unknown[] }).events).toHaveLength(2);
-  });
-
   it('waits for a write that is already in flight, not just for buffered events', async () => {
     // Regression: flush() looked only at the buffer, so it resolved instantly
     // whenever a write was already running. RunManager awaits flush() before

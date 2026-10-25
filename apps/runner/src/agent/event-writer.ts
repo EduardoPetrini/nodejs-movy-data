@@ -17,16 +17,6 @@ export interface EventWriterOptions {
   /** …and at least this often, so a quiet run still lands its last event. */
   readonly flushIntervalMs?: number;
   readonly onError?: (err: Error, runId: string) => void;
-  /**
-   * Called AFTER a batch is durably stored, never before.
-   *
-   * That ordering is what lets a client load a snapshot from the database and
-   * then go live without a hole: by the time anyone is told an event exists,
-   * it is already queryable. Broadcasting first would leave every event
-   * between the snapshot read and the next flush invisible to a client that
-   * joined in that window.
-   */
-  readonly onFlushed?: (runId: string, projection: Projection) => void;
   readonly setTimer?: (fn: () => void, ms: number) => NodeJS.Timeout | number;
   readonly clearTimer?: (handle: NodeJS.Timeout | number) => void;
   /**
@@ -76,7 +66,6 @@ export class EventWriter {
   private readonly maxBatch: number;
   private readonly flushIntervalMs: number;
   private readonly onError: (err: Error, runId: string) => void;
-  private readonly onFlushed: (runId: string, projection: Projection) => void;
   private readonly setTimer: NonNullable<EventWriterOptions['setTimer']>;
   private readonly clearTimer: NonNullable<EventWriterOptions['clearTimer']>;
   private readonly maxLogEventsPerRun: number;
@@ -89,7 +78,6 @@ export class EventWriter {
     this.maxBatch = options.maxBatch ?? 200;
     this.flushIntervalMs = options.flushIntervalMs ?? 250;
     this.onError = options.onError ?? (() => {});
-    this.onFlushed = options.onFlushed ?? (() => {});
     this.setTimer = options.setTimer ?? ((fn, ms) => setTimeout(fn, ms));
     this.clearTimer = options.clearTimer ?? ((h) => clearTimeout(h as NodeJS.Timeout));
     this.maxLogEventsPerRun = options.maxLogEventsPerRun ?? DEFAULT_MAX_LOG_EVENTS_PER_RUN;
@@ -215,17 +203,10 @@ export class EventWriter {
 
     const projection = projectEvents(batch);
     const promise = this.store
+      // Announced by the store itself: `applyProjection` sends its NOTIFY in the
+      // same transaction, which Postgres delivers only on commit — so nobody is
+      // told of an event before it is queryable, from any process.
       .apply(runId, projection)
-      .then(() => {
-        // Only on success. A batch that failed to store must not be announced
-        // as live, or a reconnecting client would ask for events past a cursor
-        // the database never advanced to.
-        try {
-          this.onFlushed(runId, projection);
-        } catch (err) {
-          this.onError(err instanceof Error ? err : new Error(String(err)), runId);
-        }
-      })
       .catch((err: unknown) => {
         // Never rethrown into the IPC handler: a failed metadata write must
         // not take down the process supervising a live migration. The journal

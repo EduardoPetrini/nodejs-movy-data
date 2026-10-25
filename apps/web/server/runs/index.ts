@@ -300,8 +300,8 @@ export function useRunnerAgent(): RunnerAgent | undefined {
         onError: (err, runId) => console.error(`[runs] event write failed for ${runId}:`, err.message),
         onTruncated: (runId, atSeq) =>
           console.warn(`[runs] ${runId} exceeded its log-event cap at seq ${atSeq}; later log lines are not stored.`),
-        // No onFlushed broadcast: every batch commits a NOTIFY, and the feed
-        // below delivers it — the same path an agent in another process uses.
+        // No broadcast here: every batch commits a NOTIFY, and the feed below
+        // delivers it — the same path an agent in another process uses.
       }
     );
 

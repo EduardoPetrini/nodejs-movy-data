@@ -36,8 +36,7 @@ interface Cursor {
  * payloads are capped at 8 KB, and the events are in `run_events` already. So
  * the feed keeps a cursor per watched run and reads past it.
  *
- * The ordering rules this replaces were properties of `EventWriter.onFlushed`
- * in one process. They are properties of the database now, so they hold for an
+ * The ordering rules are properties of the database, so they hold for an
  * agent in any process:
  * - **after the durable write**: NOTIFY is delivered only on commit, and the
  *   feed reads committed rows;
