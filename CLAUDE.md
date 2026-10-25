@@ -359,6 +359,14 @@ never capped: losing a `run_finished` leaves a run permanently unsettled. Separa
 `run-retention.ts` sweeps daily and honours `organizations.retention_days` — only
 `run_events`, never `runs`/`run_steps`/`run_table_progress`, which are the ledger.
 
+**Every settlement is announced by the database, not by the code that wrote it.** The
+`runs_settled_notify` trigger (migration 0009) sends `movy_run_settled` whenever a run's
+status becomes terminal. Most settlements carry no event — a fenced or crashed runner,
+a refused spec, the sweeper — and only the sweeper's statement used to notify, so the
+others left the page on "running" forever. Do not add hand-written NOTIFYs for it. On a
+LISTEN reconnect the console re-reads every watched run (`SettledStatusFeed.resync`),
+because a notification sent meanwhile is gone.
+
 **A stalled run is reported, not settled.** `onStalled` fires after 30 minutes of
 silence from a process that is still alive. It does not fail the run: marking a live run
 failed frees its org's concurrency slot and lets a second run launch into a destination
@@ -501,8 +509,10 @@ at enqueue), `movy_run_cancel` (`{runId}`, sent by `requestCancel`) and `movy_pr
   (`checkLeases`) stops any run within `fenceMarginMs` (5 s) of `leaseMs` — never only
   after a heartbeat fails, because a query into a blackholed connection outlasts the
   lease, and the embedded pool has no query timeout at all. A run fenced while its spec
-  was being read is never launched. A recovered run counts as due until a beat here
-  confirms it.
+  was being read is never launched, and leases are checked once more synchronously
+  before `launch`, so a claim answered past its deadline never starts. A recovered run
+  counts as due until a beat here confirms it, and the timer is armed BEFORE the first
+  beat: that beat awaits the claim loop, and a hung heartbeat must not shelter it.
 - **Re-attach is scoped to its own runs** (`includeOwnerless: false`); ownerless pre-0004
   runs were forked by a web console and are the embedded agent's to adopt.
 - **Idle exit only when provisioned** (`MOVY_RUNNER_PROVISIONED_BY`): no run AND no probe

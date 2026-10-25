@@ -1758,6 +1758,33 @@ Eleven more findings, each fixed with a test that failed first:
 
 `pnpm test` 1614/1614, `pnpm typecheck`, `pnpm build` green. Compose E2E not re-run.
 
+### Third review pass (2026-10-25)
+
+Five findings, each fixed with a test that failed first:
+
+- **Fencing at startup** (`runner-agent.ts`): the lease watchdog is armed BEFORE the
+  first beat. That beat awaits a heartbeat and the whole claim loop, so a heartbeat that
+  hung left recovered runs writing unchecked. A first beat slower than one check
+  interval now stops them: their remaining lease is unknown.
+- **A claim answered late** (`runner-agent.ts`): leases are checked synchronously right
+  before `launch`, not only on the timer, so a claim whose answer arrived past its
+  deadline is never started.
+- **Preview abort** (`pg-connection.adapter.ts`, `inspect-for-preview.ts`):
+  `IDatabaseConnection.abort?()` cancels in-flight statements on the server
+  (`pg_cancel_backend` on a connection of its own), then ends. `pool.end()` alone waits
+  for busy clients, so a blocked catalogue query outlived the freed slot. `end()` is now
+  idempotent. MySQL and MSSQL have no `abort()` yet and are only closed.
+- **Every settlement is announced**: migration `0009` adds the `runs_settled_notify`
+  trigger, which NOTIFYs `movy_run_settled` whenever a run's status becomes terminal,
+  whoever wrote it. Only the sweeper did before; a fenced, crashed or refused run left
+  the page on "running". The sweep's hand-written NOTIFY is gone.
+  `run-settled-notify.test.ts` drives every settlement path against the real migrations.
+- **Settlements across a LISTEN reconnect** (`server/runs/settled-status.ts`): on
+  reconnect the console re-reads every watched run and pushes the settled ones, as the
+  event feed re-reads events. NOTIFY has no replay.
+
+`pnpm test` 1637/1637, `pnpm typecheck`, `pnpm build` green. Compose E2E not re-run.
+
 ### Out of scope, found on the way
 
 - Launching checks `countActive()` and then enqueues without a lock, so two
