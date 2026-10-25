@@ -5,7 +5,11 @@ import {
   type SqlClient,
 } from '@movy/runner/agent';
 
+/** Matches the embedded agent's start retry. */
+const SYNC_RETRY_MS = 5_000;
+
 let synced: Promise<void> | undefined;
+let retryTimer: NodeJS.Timeout | undefined;
 
 /**
  * Applies `MOVY_RUNNER_CLASSES_FILE` to `runner_classes`, once per process.
@@ -14,24 +18,55 @@ let synced: Promise<void> | undefined;
  * class the file defines. Never rejects: a broken file is reported loudly and
  * the table keeps what it had, because a console that will not boot over a
  * typo in its class list is worse than one with yesterday's classes.
+ *
+ * Only a SUCCESS is memoised, and a broken file. A failed upsert is the
+ * meta-db still booting, and remembering it would leave a class the file adds
+ * missing until the next restart — every runner registering under it refused
+ * by its foreign key. So it is retried on its own timer (the console may run no
+ * embedded agent to ask again), and the next caller tries too.
  */
-export function ensureRunnerClasses(sql: SqlClient, file = process.env.MOVY_RUNNER_CLASSES_FILE): Promise<void> {
-  synced ??= (async () => {
-    if (!file) return;
-    try {
-      const classes = parseRunnerClassesFile(JSON.parse(fs.readFileSync(file, 'utf8')));
-      await upsertRunnerClasses(sql, classes);
-      console.info(`[runners] ${classes.length} runner class(es) from ${file}: ${classes.map((c) => c.name).join(', ')}`);
-    } catch (err) {
-      console.error(`[runners] runner classes NOT applied from ${file}:`, err instanceof Error ? err.message : err);
-    }
-  })();
+export function ensureRunnerClasses(
+  sql: SqlClient,
+  file = process.env.MOVY_RUNNER_CLASSES_FILE,
+  retryMs = SYNC_RETRY_MS
+): Promise<void> {
+  synced ??= syncRunnerClasses(sql, file, retryMs);
   return synced;
 }
 
-/** For tests: forget the memoised sync. */
+async function syncRunnerClasses(sql: SqlClient, file: string | undefined, retryMs: number): Promise<void> {
+  if (!file) return;
+  let classes: ReturnType<typeof parseRunnerClassesFile>;
+  try {
+    classes = parseRunnerClassesFile(JSON.parse(fs.readFileSync(file, 'utf8')));
+  } catch (err) {
+    // Retrying cannot fix a typo; the next deploy does.
+    console.error(`[runners] runner classes NOT applied from ${file}:`, err instanceof Error ? err.message : err);
+    return;
+  }
+  try {
+    await upsertRunnerClasses(sql, classes);
+    console.info(`[runners] ${classes.length} runner class(es) from ${file}: ${classes.map((c) => c.name).join(', ')}`);
+  } catch (err) {
+    console.error(
+      `[runners] runner classes NOT applied from ${file} (${err instanceof Error ? err.message : err}); retrying in ${retryMs / 1000}s.`
+    );
+    synced = undefined;
+    if (retryMs > 0 && !retryTimer) {
+      retryTimer = setTimeout(() => {
+        retryTimer = undefined;
+        void ensureRunnerClasses(sql, file, retryMs);
+      }, retryMs);
+      retryTimer.unref?.();
+    }
+  }
+}
+
+/** For tests: forget the memoised sync and any pending retry. */
 export function resetRunnerClassesSync(): void {
   synced = undefined;
+  if (retryTimer) clearTimeout(retryTimer);
+  retryTimer = undefined;
 }
 
 export interface ConfiguredClass {
