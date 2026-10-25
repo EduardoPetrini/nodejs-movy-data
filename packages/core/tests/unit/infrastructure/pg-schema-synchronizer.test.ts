@@ -43,6 +43,15 @@ describe('PgSchemaSynchronizer', () => {
       expect(diff.constraintsToDrop).toHaveLength(0);
     });
 
+    it('replaces a primary key over different columns, whatever either is called', () => {
+      const pk = (name: string, columns: string[]) => ({ name, type: 'PRIMARY KEY' as const, columns });
+      const source: DatabaseSchema = { tables: [makeTable('orders', { constraints: [pk('PRIMARY', ['tenant_id', 'id'])] })], sequences: [], enums: [] };
+      const target: DatabaseSchema = { tables: [makeTable('orders', { constraints: [pk('orders_pkey', ['id'])] })], sequences: [], enums: [] };
+      const diff = sync.diff(source, target);
+      expect(diff.constraintsToDrop).toEqual([expect.objectContaining({ constraintName: 'orders_pkey' })]);
+      expect(diff.constraintsToAdd).toEqual([expect.objectContaining({ constraint: expect.objectContaining({ columns: ['tenant_id', 'id'] }) })]);
+    });
+
     it('identifies tables to create', () => {
       const source: DatabaseSchema = { tables: [makeTable('users')], sequences: [], enums: [] };
       const diff = sync.diff(source, emptySchema());
