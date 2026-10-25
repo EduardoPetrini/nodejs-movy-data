@@ -13,6 +13,9 @@ export class NoRunnerTemplateError extends Error {
   override readonly name = 'NoRunnerTemplateError';
 }
 
+/** A container in any of these is gone or going; every other state counts against the cap. */
+const FINISHED_STATES: ReadonlySet<string> = new Set(['exited', 'dead', 'removing']);
+
 /** Variables the clone sets itself; the template's own values are dropped. */
 const OWN_ENV = ['MOVY_RUNNER_CLASS=', 'MOVY_RUNNER_PROVISIONED_BY=', 'MOVY_RUNNER_ID='];
 
@@ -34,9 +37,32 @@ const OWN_ENV = ['MOVY_RUNNER_CLASS=', 'MOVY_RUNNER_PROVISIONED_BY=', 'MOVY_RUNN
 export class DockerProvisioner implements RunnerProvisioner {
   readonly kind = 'docker' as const;
 
+  /** The scale-up in flight per class, so the next one counts what it started. */
+  private readonly scaling = new Map<string, Promise<ProvisionResult>>();
+
   constructor(private readonly engine: DockerEngine) {}
 
-  async scaleUp(c: ClassCapacity): Promise<ProvisionResult> {
+  /**
+   * One at a time per class, on this replica: two requests for the last slot
+   * would otherwise both count it free and both start a runner. Two web
+   * replicas asked within the same second can still pass the cap by one —
+   * closing that would hold a database lock across several Docker calls.
+   */
+  scaleUp(c: ClassCapacity): Promise<ProvisionResult> {
+    const previous = this.scaling.get(c.name) ?? Promise.resolve(undefined);
+    const current = previous.then(
+      () => this.scaleUpNow(c),
+      () => this.scaleUpNow(c)
+    );
+    this.scaling.set(c.name, current);
+    const clear = () => {
+      if (this.scaling.get(c.name) === current) this.scaling.delete(c.name);
+    };
+    current.then(clear, clear);
+    return current;
+  }
+
+  private async scaleUpNow(c: ClassCapacity): Promise<ProvisionResult> {
     if ((await this.liveCount(c)) >= c.maxReplicas) {
       return { status: 'at_capacity', runnerClass: c.name, maxReplicas: c.maxReplicas };
     }
@@ -55,15 +81,17 @@ export class DockerProvisioner implements RunnerProvisioner {
   }
 
   /**
-   * Runners alive in the class, counting a container that has started but not
-   * registered yet — otherwise two clicks a second apart start two runners
-   * past the cap. A registered container's runner id is its hostname, which
-   * Docker sets to the first 12 characters of the container id.
+   * Runners alive in the class, counting a container that has not registered
+   * yet — created, or started but still booting — otherwise two clicks a second
+   * apart start two runners past the cap. A registered container's runner id
+   * is its hostname, which Docker sets to the first 12 characters of its id.
    */
   private async liveCount(c: ClassCapacity): Promise<number> {
-    const starting = await this.engine.listContainers([`${PROVISIONED_LABEL}=true`, `${CLASS_LABEL}=${c.name}`], false);
+    const clones = await this.engine.listContainers([`${PROVISIONED_LABEL}=true`, `${CLASS_LABEL}=${c.name}`], true);
     const ids = new Set(c.liveRunnerIds);
-    for (const container of starting) ids.add(container.Id.slice(0, 12));
+    for (const container of clones) {
+      if (!FINISHED_STATES.has(container.State)) ids.add(container.Id.slice(0, 12));
+    }
     return ids.size;
   }
 

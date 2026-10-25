@@ -146,6 +146,51 @@ describe('DockerProvisioner', () => {
     expect(engine.create).not.toHaveBeenCalled();
   });
 
+  it('counts a clone created but not started yet', async () => {
+    const { engine } = fakeEngine([
+      summary('tmpl000000000000', { [TEMPLATE_LABEL]: 'true' }),
+      summary('created000000000', { [PROVISIONED_LABEL]: 'true', [CLASS_LABEL]: 'large' }, 'created'),
+    ]);
+    const result = await new DockerProvisioner(engine).scaleUp(large({ liveRunnerIds: ['other-runner'] }));
+    expect(result.status).toBe('at_capacity');
+  });
+
+  it('starts one runner, not two, when two requests for the last slot arrive at once', async () => {
+    // A real engine: what `create` makes is listed from then on, as `created`
+    // until `start`. Every call yields, so the two requests truly interleave.
+    const containers = [summary('tmpl000000000000', { [TEMPLATE_LABEL]: 'true' })];
+    let next = 0;
+    const tick = () => new Promise((r) => setImmediate(r));
+    const engine: DockerEngine = {
+      listContainers: vi.fn(async (labels: readonly string[], all: boolean) => {
+        await tick();
+        return containers.filter(
+          (c) => (all || c.State === 'running') && labels.every((l) => { const [k, v] = l.split('='); return c.Labels[k!] === v; })
+        );
+      }),
+      inspect: vi.fn(async () => { await tick(); return TEMPLATE; }),
+      create: vi.fn(async (_name: string, body: Record<string, unknown>) => {
+        await tick();
+        const id = `clone${String(next++).padStart(11, '0')}`;
+        containers.push(summary(id, body.Labels as Record<string, string>, 'created'));
+        return { Id: id };
+      }),
+      start: vi.fn(async (id: string) => {
+        await tick();
+        const c = containers.find((x) => x.Id === id)!;
+        containers[containers.indexOf(c)] = { ...c, State: 'running' };
+      }),
+      remove: vi.fn(async () => {}),
+    };
+    const provisioner = new DockerProvisioner(engine);
+    const capacity = large({ liveRunnerIds: ['other-runner'] });
+
+    const results = await Promise.all([provisioner.scaleUp(capacity), provisioner.scaleUp(capacity)]);
+
+    expect(results.map((r) => r.status).sort()).toEqual(['at_capacity', 'started']);
+    expect(engine.create).toHaveBeenCalledTimes(1);
+  });
+
   it('does not count a registered clone twice', async () => {
     const { engine } = fakeEngine([
       summary('tmpl000000000000', { [TEMPLATE_LABEL]: 'true' }),
