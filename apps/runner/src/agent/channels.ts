@@ -23,9 +23,11 @@ export const PROBE_DONE_CHANNEL = 'movy_probe_done';
 export const RUNS_QUEUED_CHANNEL = 'movy_runs';
 
 /**
- * `{runId}` — a run was settled by something that emitted no event for it:
- * the sweeper, after its runner vanished. A watching client would otherwise
- * show it running forever, because only events reach a live socket.
+ * `{runId}` — a run was settled. Sent by the `runs_settled_notify` trigger
+ * (migration 0009) for EVERY settlement, never by application code: the ones
+ * that matter emit no event — the sweeper's, a fenced or crashed runner's, a
+ * spec that could not be read — and a watching client would otherwise show the
+ * run running forever, because only events reach a live socket.
  */
 export const RUN_SETTLED_CHANNEL = 'movy_run_settled';
 
