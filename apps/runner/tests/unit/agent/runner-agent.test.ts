@@ -447,6 +447,33 @@ describe('RunnerAgent stopping', () => {
     expect(q.states.at(-1)).toBe('offline');
   });
 
+  it('claims nothing once told to stop claiming, while its probes still finish', async () => {
+    // A shutdown waits on in-flight probes first; a run claimed meanwhile would
+    // be left behind by a drain that has already started.
+    const q = fakeQueue();
+    const c = fakeControl();
+    const agent = agentWith(q, c, 2);
+    await agent.start();
+    q.queued.push(run('late'));
+
+    await agent.stopClaiming();
+    await agent.wake();
+    await agent.beat();
+
+    expect(c.launched).toEqual([]);
+    expect(q.states).toEqual(['draining']);
+  });
+
+  it('drains normally after it stopped claiming, announcing draining once', async () => {
+    const q = fakeQueue();
+    const c = fakeControl();
+    const agent = agentWith(q, c);
+    await agent.start();
+    await agent.stopClaiming();
+    await agent.drain(0);
+    expect(q.states).toEqual(['draining', 'offline']);
+  });
+
   it('claims nothing after stop', async () => {
     const q = fakeQueue([run('a')]);
     const c = fakeControl();

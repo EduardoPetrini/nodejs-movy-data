@@ -216,16 +216,27 @@ export class RunnerAgent {
    * whatever outlives the grace period is settled by the sweeper.
    */
   async drain(timeoutMs: number): Promise<void> {
-    this.draining = true;
-    this.clearPoll();
-    await this.safely(() => this.options.queue.setState('draining'));
-    await this.claiming;
+    await this.stopClaiming();
 
     const deadline = Date.now() + timeoutMs;
     while (this.options.control.liveRunIds().length > 0 && Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, DRAIN_CHECK_MS));
     }
     await this.stop();
+  }
+
+  /**
+   * The first half of a drain: claim nothing more and say so, without waiting
+   * for anything. A shutdown calls it before waiting on its probes, which can
+   * take a minute — a run claimed in that minute would be left behind by a
+   * drain that had already begun. Calling it again is a no-op.
+   */
+  async stopClaiming(): Promise<void> {
+    if (this.draining) return;
+    this.draining = true;
+    this.clearPoll();
+    await this.safely(() => this.options.queue.setState('draining'));
+    await this.claiming;
   }
 
   /**

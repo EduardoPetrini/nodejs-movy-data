@@ -167,7 +167,10 @@ async function run(config: AgentConfig): Promise<void> {
     stopping = true;
     if (idleTimer) clearInterval(idleTimer);
     log('info', `${reason}: draining for up to ${Math.round(drainMs / 1000)}s.`);
-    // Probes first: seconds long, and their requests are waiting on an answer.
+    // Claiming stops first: the probes below can take a minute, and a run
+    // claimed meanwhile would be left behind by a drain already under way.
+    if (started) await agent.stopClaiming();
+    // Then probes: seconds long, and their requests are waiting on an answer.
     await probes.stop();
     if (started) await agent.drain(drainMs);
     await writer.close();
