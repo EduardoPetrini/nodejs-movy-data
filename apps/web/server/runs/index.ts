@@ -1,11 +1,9 @@
-import * as fs from 'node:fs';
 import * as os from 'node:os';
-import * as path from 'node:path';
-import { createRequire } from 'node:module';
 import { metaDatabaseUrl, useDb } from '../db/client';
 import { runEvents, runs } from '../db/schema';
 import { toPublicEvent } from '../serializers/run.serializer';
 import { RunEventFeed } from './run-event-feed';
+import { findSimulationFixture, journalPathFor, resolveRunnerEntry } from './host-paths';
 import { configuredPlatformAdmins, platformAdminIds } from '../utils/platform-admin';
 import { readEmbeddedRunnerConfig, type EmbeddedRunnerConfig } from './embedded-config';
 import { RunnerHub, type RunnersGrant } from '../runners/runner-hub';
@@ -25,12 +23,10 @@ import {
   SUPPORTED_SPEC_VERSIONS,
   applyProjection,
   finaliseRunIfUnsettled,
-  journalPathIn,
   markRunLaunched,
   parseEventPointer,
   parseStringField,
   reattachableRuns,
-  resolveSimulationFixture,
   sqlAgentQueue,
   sqlProbeQueue,
   type SqlClient,
@@ -41,6 +37,8 @@ import { TicketStore } from './subscription-ticket';
 import { memberships } from '../db/schema';
 import { memberKey } from './run-hub';
 import { and, asc, eq, gt, or } from 'drizzle-orm';
+
+export { findSimulationFixture, journalPathFor, resolveRunnerEntry } from './host-paths';
 
 let manager: RunManager | undefined;
 let writer: EventWriter | undefined;
@@ -331,20 +329,6 @@ export async function closeEventWriter(): Promise<void> {
   await writer?.close();
 }
 
-/** Where this run's journal goes on this host (`MOVY_JOURNAL_DIR`, else `.movy/runs`). */
-export function journalPathFor(runId: string): string {
-  return journalPathIn(process.env.MOVY_JOURNAL_DIR ?? path.resolve(process.cwd(), '.movy/runs'), runId);
-}
-
-/**
- * The recording the embedded agent replays — the runner package beside this
- * app, as the standalone agent finds it beside itself. Never from a request:
- * see `resolveSimulationFixture`.
- */
-export function findSimulationFixture(): string | undefined {
-  return resolveSimulationFixture(process.env.MOVY_SIMULATION_FIXTURE, path.resolve(process.cwd(), '../runner'));
-}
-
 /**
  * Refuses a simulation up front when this host's own agent has no recording,
  * rather than queuing a run that can only fail. An external agent resolves its
@@ -357,32 +341,4 @@ export function assertSimulationAvailable(): void {
       statusMessage: 'No simulation recording is available on this host.',
     });
   }
-}
-
-/**
- * Finds the runner binary.
- *
- * Prefers the built `dist/main.js` via package resolution. Falls back to the
- * TypeScript entry in the workspace, which `RunManager` loads through tsx — so
- * `pnpm dev:web` can start a run in a fresh clone without a build first, and
- * "click Run" never fails with a module-not-found nobody can act on.
- */
-export function resolveRunnerEntry(): string {
-  const override = process.env.MOVY_RUNNER_ENTRY;
-  if (override) return path.resolve(override);
-
-  try {
-    const require = createRequire(import.meta.url);
-    const resolved = require.resolve('@movy/runner');
-    if (fs.existsSync(resolved)) return resolved;
-  } catch {
-    // Not built, or resolution is unavailable in this bundle. Fall through.
-  }
-
-  const source = path.resolve(process.cwd(), '../runner/src/main.ts');
-  if (fs.existsSync(source)) return source;
-
-  throw new Error(
-    '@movy/runner could not be located. Run `pnpm build`, or set MOVY_RUNNER_ENTRY.'
-  );
 }
