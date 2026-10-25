@@ -185,6 +185,11 @@ export class RunHub {
     return this.byRun.has(runId);
   }
 
+  /** Every run some peer on this host watches — what a LISTEN reconnect must re-read. */
+  watchedRunIds(): string[] {
+    return [...this.byRun.keys()];
+  }
+
   /** Send one message to one peer, e.g. its opening snapshot. */
   sendTo(peer: HubPeer, message: unknown): void {
     const membership = this.byPeer.get(peer);

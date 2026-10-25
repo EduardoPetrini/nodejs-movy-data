@@ -34,10 +34,11 @@ import {
 } from '@movy/runner/agent';
 import { ProbeWaiters } from '../probes/probe-waiters';
 import { RunHub } from './run-hub';
+import { SettledStatusFeed } from './settled-status';
 import { TicketStore } from './subscription-ticket';
 import { memberships } from '../db/schema';
 import { memberKey } from './run-hub';
-import { and, asc, eq, gt, or } from 'drizzle-orm';
+import { and, asc, eq, gt, inArray, or } from 'drizzle-orm';
 
 export { findSimulationFixture, journalPathFor, resolveRunnerEntry } from './host-paths';
 
@@ -51,6 +52,7 @@ let runnerHub: RunnerHub | undefined;
 let runnersTickets: TicketStore<RunnersGrant> | undefined;
 let listener: PgListener | undefined;
 let hub: RunHub | undefined;
+let settledFeed: SettledStatusFeed | undefined;
 let tickets: TicketStore | undefined;
 
 /** The socket fan-out for run streams. The event feed publishes into it. */
@@ -128,37 +130,35 @@ export function useRunEventFeed(): RunEventFeed {
 }
 
 /**
- * The sweeper settled a run with no event, so the feed has nothing to read:
- * the row is re-read and its status pushed. A missed NOTIFY leaves a client
- * no worse than before — its next reconnect reads the snapshot.
+ * Statuses no event carries: `movy_run_settled`, and a re-read of every watched
+ * run when LISTEN reconnects, since a notification sent meanwhile is gone.
  */
-async function publishSettledStatus(runId: string): Promise<void> {
-  const hub = useRunHub();
-  if (!hub.isWatching(runId)) return;
-  try {
-    const [row] = await useDb()
-      .select({
-        id: runs.id,
-        status: runs.status,
-        errorName: runs.errorName,
-        errorMessage: runs.errorMessage,
-        startedAt: runs.startedAt,
-        finishedAt: runs.finishedAt,
-      })
-      .from(runs)
-      .where(eq(runs.id, runId))
-      .limit(1);
-    if (!row) return;
-    hub.publishStatus({
-      id: row.id,
-      status: row.status,
-      error: row.errorMessage ? { name: row.errorName ?? 'Error', message: row.errorMessage } : null,
-      startedAt: row.startedAt?.toISOString() ?? null,
-      finishedAt: row.finishedAt?.toISOString() ?? null,
-    });
-  } catch (err) {
-    console.error(`[runs] settled status for ${runId}:`, err instanceof Error ? err.message : err);
-  }
+export function useSettledStatusFeed(): SettledStatusFeed {
+  settledFeed ??= new SettledStatusFeed({
+    hub: useRunHub(),
+    loadStatuses: async (runIds) => {
+      const rows = await useDb()
+        .select({
+          id: runs.id,
+          status: runs.status,
+          errorName: runs.errorName,
+          errorMessage: runs.errorMessage,
+          startedAt: runs.startedAt,
+          finishedAt: runs.finishedAt,
+        })
+        .from(runs)
+        .where(inArray(runs.id, [...runIds]));
+      return rows.map((row) => ({
+        id: row.id,
+        status: row.status,
+        error: row.errorMessage ? { name: row.errorName ?? 'Error', message: row.errorMessage } : null,
+        startedAt: row.startedAt?.toISOString() ?? null,
+        finishedAt: row.finishedAt?.toISOString() ?? null,
+      }));
+    },
+    onError: (err, runId) => console.error(`[runs] settled status${runId ? ` for ${runId}` : ''}:`, err.message),
+  });
+  return settledFeed;
 }
 
 /** Runner availability for the org home and runs page. */
@@ -183,7 +183,8 @@ export function useRunnersTicketStore(): TicketStore<RunnersGrant> {
 
 /**
  * The LISTEN connection behind the feed. Started by the `run-bus` plugin.
- * On every reconnect the feed re-reads past its cursors: NOTIFY has no replay.
+ * On every reconnect both feeds re-read — events past their cursors, settled
+ * statuses of every watched run: NOTIFY has no replay.
  */
 export function useBusListener(): PgListener {
   if (!listener) {
@@ -216,7 +217,7 @@ export function useBusListener(): PgListener {
         }
         if (channel === RUN_SETTLED_CHANNEL) {
           const runId = parseStringField(payload, 'runId');
-          if (runId) void publishSettledStatus(runId);
+          if (runId) void useSettledStatusFeed().announce(runId);
           return;
         }
         if (channel === PROBE_DONE_CHANNEL) {
@@ -229,7 +230,10 @@ export function useBusListener(): PgListener {
         if (pointer) runFeed.notify(pointer.runId, pointer.lastSeq);
       },
       onConnected: () => {
+        // NOTIFY has no replay: re-read what either kind of notification may
+        // have carried while the connection was down.
         runFeed.resync();
+        void useSettledStatusFeed().resync();
         useProbeWaiters().notifyAll();
         void useProbeWorker()?.wake();
         void useRunnerHub().refresh();
