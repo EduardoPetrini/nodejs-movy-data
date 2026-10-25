@@ -39,14 +39,86 @@ export function sealProbe(orgId: string, probeId: string, request: ProbeRequest)
  * any of the request.
  */
 export function openProbe(orgId: string, probeId: string, ciphertext: Buffer): ProbeRequest {
-  const parsed = JSON.parse(decryptSecret(ciphertext, probeAad(orgId, probeId))) as { v?: unknown; request?: ProbeRequest };
-  if (parsed.v !== PROBE_VERSION || !parsed.request) {
+  const parsed = JSON.parse(decryptSecret(ciphertext, probeAad(orgId, probeId))) as { v?: unknown; request?: unknown };
+  if (parsed.v !== PROBE_VERSION || !isProbeRequest(parsed.request)) {
     throw new ProbeIncompatibleError(
       `This probe is version ${String(parsed.v)}; this runner understands ${PROBE_VERSION}. ` +
         'Deploy matching versions of the console and the runners.'
     );
   }
   return parsed.request;
+}
+
+/** Checked rather than cast: an unknown kind would otherwise run as a preview of undefined ends. */
+function isProbeRequest(value: unknown): value is ProbeRequest {
+  if (!isRecord(value)) return false;
+  if (value.kind === 'test') return isRecord(value.config);
+  if (value.kind === 'preview') return isRecord(value.source) && isRecord(value.target);
+  return false;
+}
+
+const FAILURE_KINDS: ReadonlySet<string> = new Set<ConnectionFailureKind>([
+  'auth', 'unreachable', 'permission', 'missing_database', 'tls', 'timeout', 'unknown',
+]);
+
+const MALFORMED =
+  'The runner answered in a shape this console does not understand. ' +
+  'Deploy matching versions of the console and the runners.';
+
+/**
+ * A runner's stored answer, as the console may serve it.
+ *
+ * Every runner writes through the one `movy_runner` role, whatever org it is
+ * answering, and the result goes to a browser: so it is rebuilt from the
+ * fields the console knows rather than cast, and anything else in its place
+ * becomes a failure saying so. The inspection inside a successful preview is
+ * checked for its parts, not walked.
+ */
+export function readProbeResult(kind: 'test', raw: unknown): ConnectionTestResult;
+export function readProbeResult(kind: 'preview', raw: unknown): PreviewProbeResult;
+export function readProbeResult(kind: ProbeRequest['kind'], raw: unknown): ProbeResult;
+export function readProbeResult(kind: ProbeRequest['kind'], raw: unknown): ProbeResult {
+  return kind === 'test' ? readTestResult(raw) : readPreviewResult(raw);
+}
+
+function readTestResult(raw: unknown): ConnectionTestResult {
+  const malformed: ConnectionTestResult = { ok: false, latencyMs: 0, error: MALFORMED, errorKind: 'unknown' };
+  if (!isRecord(raw) || typeof raw.ok !== 'boolean' || typeof raw.latencyMs !== 'number') return malformed;
+  if (raw.ok) return { ok: true, latencyMs: raw.latencyMs };
+  if (typeof raw.error !== 'string' || !isFailureKind(raw.errorKind)) return malformed;
+  return { ok: false, latencyMs: raw.latencyMs, error: raw.error, errorKind: raw.errorKind };
+}
+
+function readPreviewResult(raw: unknown): PreviewProbeResult {
+  const malformed: PreviewProbeResult = { ok: false, side: null, errorKind: 'unknown', message: MALFORMED };
+  if (!isRecord(raw)) return malformed;
+  if (raw.ok === true) return isInspection(raw.inspection) ? { ok: true, inspection: raw.inspection } : malformed;
+  if (raw.ok !== false) return malformed;
+  const side = raw.side;
+  if (side !== 'source' && side !== 'destination' && side !== null) return malformed;
+  if (!isFailureKind(raw.errorKind) || typeof raw.message !== 'string') return malformed;
+  return { ok: false, side, errorKind: raw.errorKind, message: raw.message };
+}
+
+function isInspection(value: unknown): value is PreviewInspection {
+  return (
+    isRecord(value) &&
+    typeof value.targetDatabaseExists === 'boolean' &&
+    isRecord(value.sourceSchema) &&
+    isRecord(value.targetSchema) &&
+    isRecord(value.diff) &&
+    isRecord(value.plan) &&
+    Array.isArray(value.rowEstimates) &&
+    Array.isArray(value.sizeEstimates)
+  );
+}
+
+function isFailureKind(value: unknown): value is ConnectionFailureKind {
+  return typeof value === 'string' && FAILURE_KINDS.has(value);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 /**

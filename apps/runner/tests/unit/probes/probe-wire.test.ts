@@ -12,7 +12,7 @@ vi.mock('../../../src/probes/inspect-for-preview', async (importOriginal) => {
 
 import { inspectForPreview, PreviewConnectionError } from '../../../src/probes/inspect-for-preview';
 import {
-  PROBE_VERSION, ProbeIncompatibleError, executeProbe, openProbe, sealProbe, type ProbeRequest,
+  PROBE_VERSION, ProbeIncompatibleError, executeProbe, openProbe, readProbeResult, sealProbe, type ProbeRequest,
 } from '../../../src/probes/probe-wire';
 import { encryptSecret, probeAad } from '@movy/db';
 
@@ -44,6 +44,53 @@ describe('sealProbe / openProbe', () => {
   it('refuses a version it does not understand, by name', () => {
     const sealed = encryptSecret(JSON.stringify({ v: PROBE_VERSION + 1, request: {} }), probeAad(ORG, PROBE));
     expect(() => openProbe(ORG, PROBE, sealed)).toThrow(ProbeIncompatibleError);
+  });
+
+  it('refuses a request of a kind it does not know, rather than running it as a preview', () => {
+    const sealed = encryptSecret(JSON.stringify({ v: PROBE_VERSION, request: { kind: 'drop' } }), probeAad(ORG, PROBE));
+    expect(() => openProbe(ORG, PROBE, sealed)).toThrow(ProbeIncompatibleError);
+  });
+
+  it('refuses a request missing the connection it names', () => {
+    const sealed = encryptSecret(
+      JSON.stringify({ v: PROBE_VERSION, request: { kind: 'preview', source: config('pw-1234') } }),
+      probeAad(ORG, PROBE)
+    );
+    expect(() => openProbe(ORG, PROBE, sealed)).toThrow(ProbeIncompatibleError);
+  });
+});
+
+describe('readProbeResult', () => {
+  // A runner's answer is stored by the shared `movy_runner` role and served
+  // to a browser: only the fields the console knows survive.
+  it('keeps a test result\'s own fields and nothing else', () => {
+    expect(readProbeResult('test', { ok: false, latencyMs: 9, error: 'Rejected.', errorKind: 'auth', extra: '<script>' }))
+      .toEqual({ ok: false, latencyMs: 9, error: 'Rejected.', errorKind: 'auth' });
+  });
+
+  it('turns a test result of the wrong shape into a failure that says so', () => {
+    const result = readProbeResult('test', { ok: 'yes', latencyMs: 'fast' });
+    expect(result).toMatchObject({ ok: false, errorKind: 'unknown' });
+    expect(result).not.toHaveProperty('extra');
+  });
+
+  it('refuses an error kind the console does not know', () => {
+    expect(readProbeResult('test', { ok: false, latencyMs: 1, error: 'x', errorKind: 'catastrophe' }))
+      .toMatchObject({ ok: false, errorKind: 'unknown' });
+  });
+
+  it('keeps a preview inspection and a preview failure', () => {
+    const inspection = {
+      targetDatabaseExists: true, sourceSchema: {}, targetSchema: {}, diff: {}, plan: {}, rowEstimates: [], sizeEstimates: [],
+    };
+    expect(readProbeResult('preview', { ok: true, inspection })).toEqual({ ok: true, inspection });
+    expect(readProbeResult('preview', { ok: false, side: 'source', errorKind: 'auth', message: 'Rejected.', extra: 1 }))
+      .toEqual({ ok: false, side: 'source', errorKind: 'auth', message: 'Rejected.' });
+  });
+
+  it('turns a preview of the wrong shape, or a test result answering a preview, into a failure', () => {
+    expect(readProbeResult('preview', { ok: true, latencyMs: 4 })).toMatchObject({ ok: false, side: null, errorKind: 'unknown' });
+    expect(readProbeResult('preview', null)).toMatchObject({ ok: false, side: null, errorKind: 'unknown' });
   });
 });
 

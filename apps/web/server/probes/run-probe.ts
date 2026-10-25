@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import {
   abandonProbe, enqueueProbe, probeRunnerAvailable, takeProbeResult, type ProbeKind, type SqlClient,
 } from '@movy/runner/agent';
-import { sealProbe, type ProbeRequest, type ProbeResult } from '@movy/runner/probes';
+import { readProbeResult, sealProbe, type ProbeRequest, type ProbeResult } from '@movy/runner/probes';
 import type { ProbeWaiters } from './probe-waiters';
 
 export type ProbeOutcome<R extends ProbeResult = ProbeResult> =
@@ -60,8 +60,10 @@ export async function runProbe<R extends ProbeResult>(
 
   const deadline = now() + input.timeoutMs;
   for (;;) {
-    const result = await takeProbeResult<R>(sql, id, input.orgId);
-    if (result) return { status: 'done', result };
+    const stored = await takeProbeResult<unknown>(sql, id, input.orgId);
+    // The caller's R follows from its own request's kind, which is what the
+    // answer is read as here.
+    if (stored) return { status: 'done', result: readProbeResult(input.request.kind, stored) as R };
     const remaining = deadline - now();
     if (remaining <= 0) break;
     await waiters.next(id, Math.min(RECHECK_MS, remaining));

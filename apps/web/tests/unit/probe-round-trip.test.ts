@@ -45,14 +45,16 @@ afterEach(async () => {
   worker = undefined;
 });
 
-function startWorker(): ProbeWorker {
+function startWorker(
+  answer: unknown = { ok: false, latencyMs: 9, error: 'The username or password was rejected.', errorKind: 'auth' }
+): ProbeWorker {
   worker = new ProbeWorker({
     queue: sqlProbeQueue(sql, 'agent-1', 'default'),
     slots: 1,
     pollIntervalMs: 0,
     execute: async (req) => {
       seen.push(req);
-      return { ok: false, latencyMs: 9, error: 'The username or password was rejected.', errorKind: 'auth' };
+      return answer as never;
     },
   });
   return worker;
@@ -77,6 +79,17 @@ describe('runProbe', () => {
     });
     expect(seen).toEqual([request]);
     expect(await probeRows()).toBe(0);
+  });
+
+  it('serves only the fields it knows from a runner\'s answer, whatever the runner stored', async () => {
+    const w = startWorker({ ok: true, latencyMs: 'fast', injected: '<img src=x onerror=alert(1)>' });
+    const outcome = await runProbe(
+      { sql, waiters: new ProbeWaiters(), wake: () => void w.wake() },
+      { orgId: ORG, runnerClass: 'default', request, timeoutMs: 5_000 }
+    );
+
+    expect(outcome).toMatchObject({ status: 'done', result: { ok: false, errorKind: 'unknown' } });
+    expect(JSON.stringify(outcome)).not.toContain('injected');
   });
 
   it('answers no_runner at once, queuing nothing, when no runner of the class is online', async () => {

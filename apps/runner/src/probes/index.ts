@@ -9,5 +9,5 @@ export { TEST_TIMEOUT_MS, testConnection } from './test-connection';
 export type { ConnectionTestResult } from './test-connection';
 export { PreviewConnectionError, inspectForPreview } from './inspect-for-preview';
 export type { PreviewInspection } from './inspect-for-preview';
-export { PROBE_VERSION, ProbeIncompatibleError, executeProbe, openProbe, sealProbe } from './probe-wire';
+export { PROBE_VERSION, ProbeIncompatibleError, executeProbe, openProbe, readProbeResult, sealProbe } from './probe-wire';
 export type { PreviewProbeResult, ProbeRequest, ProbeResult } from './probe-wire';
