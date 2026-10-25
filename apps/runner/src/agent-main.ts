@@ -52,7 +52,16 @@ function log(level: 'info' | 'warn' | 'error', message: string): void {
   console[level](`${LOG_PREFIX} ${message}`);
 }
 
-async function run(config: AgentConfig): Promise<void> {
+interface Services {
+  readonly pool: ReturnType<typeof createDb>['pool'];
+  readonly writer: EventWriter;
+  readonly manager: RunManager;
+  readonly agent: RunnerAgent;
+  readonly probes: ProbeWorker;
+}
+
+/** Everything the agent runs, wired to the metadata database. Starts nothing. */
+function buildServices(config: AgentConfig): Services {
   // Every statement the agent runs is short. A timeout turns a query lost in a
   // network partition into an error the agent recovers from; without one it
   // waits forever, and a claim that never returns stops the agent claiming at
@@ -113,8 +122,12 @@ async function run(config: AgentConfig): Promise<void> {
     onError: (err, probeId) => log('error', `probe ${probeId ?? 'worker'}: ${err.message}`),
   });
 
-  // The fast path for new work and cancels; the agent's own polls are the floor.
-  const listener = new PgListener({
+  return { pool, writer, manager, agent, probes };
+}
+
+/** The fast path for new work and cancels; the agent's own polls are the floor. */
+function busListener(config: AgentConfig, agent: RunnerAgent, probes: ProbeWorker): PgListener {
+  return new PgListener({
     connectionString: config.databaseUrl,
     channels: [RUNS_QUEUED_CHANNEL, RUN_CANCEL_CHANNEL, PROBES_CHANNEL],
     onNotification: (channel, payload) => {
@@ -135,6 +148,12 @@ async function run(config: AgentConfig): Promise<void> {
     },
     onError: (err) => log('warn', `LISTEN connection lost, reconnecting: ${err.message}`),
   });
+}
+
+/** Starts the agent, then keeps it until a signal — or, when provisioned, idleness — stops it. */
+async function run(config: AgentConfig): Promise<void> {
+  const { pool, writer, manager, agent, probes } = buildServices(config);
+  const listener = busListener(config, agent, probes);
 
   let stopping = false;
   let started = false;
