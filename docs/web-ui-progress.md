@@ -1710,8 +1710,8 @@ Against the plan's Verification list:
 ### Out of scope, found on the way
 
 - Launching checks `countActive()` and then enqueues without a lock, so two
-  simultaneous launches can pass `max_concurrent_runs`. On `main` before this branch;
-  worth its own issue (lock the org row inside the `enqueue` transaction).
+  simultaneous launches can pass `max_concurrent_runs`. On `main` before this branch:
+  #9 (lock the org row inside the `enqueue` transaction).
 - Two web replicas asked to start a runner within the same second can pass a class's
-  cap by one; documented in CLAUDE.md.
+  cap by one; documented in CLAUDE.md, tracked in #10.
 

@@ -503,7 +503,7 @@ at enqueue), `movy_run_cancel` (`{runId}`, sent by `requestCancel`) and `movy_pr
   …/runners/scale` needs a **platform operator**, never an org role (see below). The docker provisioner counts every clone not yet
   finished — created, booting or registered — by its container id (= the runner id, its
   hostname), and serialises scale-ups per class, so simultaneous clicks on one replica
-  cannot pass `max_replicas`. Two web replicas asked within the same second can, by one. **Auto mode**
+  cannot pass `max_replicas`. Two web replicas asked within the same second can, by one (#10). **Auto mode**
   (`MOVY_AUTOSCALE=true`) runs on the replica that won the sweep: a class with queued work
   not blocked on its destination, no free slot and room under its cap, once per 60 s.
 - **`StartRunner.vue`** is offered where `no_runner` is the reason: the queue notice and
