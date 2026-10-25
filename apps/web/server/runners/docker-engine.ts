@@ -80,7 +80,12 @@ export function socketDockerEngine(socketPath = '/var/run/docker.sock'): DockerE
               reject(new DockerEngineError(`Docker: ${message.trim() || `HTTP ${status}`}`, status));
               return;
             }
-            resolve((text ? JSON.parse(text) : undefined) as T);
+            // Inside this listener a throw is uncaught, and takes the console down.
+            try {
+              resolve((text ? JSON.parse(text) : undefined) as T);
+            } catch {
+              reject(new DockerEngineError(`Docker answered HTTP ${status} with a body that is not JSON.`, status));
+            }
           });
         }
       );
