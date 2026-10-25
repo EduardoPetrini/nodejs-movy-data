@@ -272,7 +272,19 @@ export class RunnerAgent {
     const { queue, control } = this.options;
     this.owned.add(claimed.id);
 
-    const sealed = await this.safely(() => queue.takeSpec(claimed.id));
+    let sealed: SealedSpec | null;
+    try {
+      sealed = await queue.takeSpec(claimed.id);
+    } catch (err) {
+      // Not "gone": the database did not answer, and saying otherwise sends
+      // someone looking for a deleted spec that was never touched.
+      this.onError(toError(err), claimed.id);
+      return this.fail(
+        claimed.id,
+        'RunSpecUnavailable',
+        "The runner could not read this run's specification from the metadata database. Launch it again."
+      );
+    }
     if (!sealed) {
       return this.fail(claimed.id, 'RunSpecMissing', 'The run was claimed but its specification was gone.');
     }

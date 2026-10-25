@@ -144,6 +144,18 @@ describe('RunnerAgent refusing a run it cannot start', () => {
     expect(q.settled).toEqual([{ runId: 'a', outcome: expect.objectContaining({ status: 'failed', errorName }) }]);
   });
 
+  it('says the database failed, not that the spec was gone, when reading it errors', async () => {
+    const q = fakeQueue([run('a')]);
+    (q.queue.takeSpec as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('connection reset'));
+    const c = fakeControl();
+    await agentWith(q, c).start();
+
+    expect(c.launched).toEqual([]);
+    expect(q.settled).toEqual([
+      { runId: 'a', outcome: expect.objectContaining({ status: 'failed', errorName: 'RunSpecUnavailable' }) },
+    ]);
+  });
+
   it('settles a simulation it has no recording for', async () => {
     const q = fakeQueue([run('a')], { a: { simulate: true } });
     const c = fakeControl();
