@@ -46,6 +46,7 @@ phase is indistinguishable from one that was never started.
 | R4 — destination lock and runner classes | **DONE** (2026-10-23) | one run per destination (`target_lock_key`, migration `0005`) and why a run is queued; classes from `MOVY_RUNNER_CLASSES_FILE`, a class per definition and a Runner selector (`0006`); source size in bytes on the preview and a class suggestion. Gate: `pnpm docker:e2e` 19/19. See *R4* below. Next: R5 (probes) |
 | R5 — probes: Test and Preview from a runner | **DONE** (2026-10-23) | migration `0007` (`runner_probes`, `runners.probe_slots`, `connections.last_test_via`); executors in `@movy/runner/probes` shared by the in-request path and the agent's `ProbeWorker`; `via: 'web' | <class>` on both Test routes and on preview; 503 `no_runner`, 504 on silence; "Test from" and "Inspect from" selectors. Gate: `pnpm docker:e2e` 23/23. See *R5* below. Next: R6 (runner services) |
 | R6 — runner services and provisioning in Compose | **DONE** (2026-10-25) | `movy-runner-agent` as `runner-default`/`runner-large` under the least-privilege `movy_runner` role (`docker/runner.env`); `web` no longer forks; NOTIFY wakes agents on launch and cancel; `manual` and opt-in `docker` provisioners, Start a runner (`runner:scale`), auto mode, idle exit. Found and fixed: an agent wedged after a network partition (query timeouts), clone swap limit. Gate: the plan's Verification list in Compose, `pnpm docker:e2e` 26/26. See *R6* below. Next: R7 (Kubernetes) or R8 (runner classes in the UI) |
+| — PR #8 review fixes | **DONE** (2026-10-25) | platform operators (`platform_admins`, migration `0008`, `MOVY_PLATFORM_ADMINS`) replace the org-admin `runner:scale`; heartbeat/claim race in fencing; live feed retries a failed read; embedded agent retries its start and refuses bad config; one class-name rule; runner answers rebuilt, not cast; provisioner cap under concurrency; drain stops claiming first. See *PR #8 review fixes* below. `pnpm docker:e2e` not re-run |
 
 ### Remaining work
 
@@ -1664,3 +1665,53 @@ Against the plan's Verification list:
   `at_capacity` and started nothing. ✔
 13. `pnpm docker:e2e` 26/26 (23 + 3 in `runner-services.spec.ts`); `pnpm test` 1528/1528;
     `pnpm test:coverage` above its floor (66.83 / 57.7 / 68.69 / 67.58).
+
+## PR #8 review fixes (2026-10-25)
+
+- **Why**: a multi-agent review of the runner-service PR, then a deeper pass over the
+  areas it covered lightly. Twenty-two commits on `feat/runner-service-phase-0`; each
+  fix landed with a test that failed first.
+- **Platform operators** (the one design change; ADR 0004, amendment 1). Orgs are
+  self-serve, so the org-admin `runner:scale` let any signed-in user start shared
+  runners and read every runner's hostname. Acting on shared infrastructure is now a
+  platform operator's: a `platform_admins` row (migration `0008`, granted with who and
+  when — the SaaS case) or an email in `MOVY_PLATFORM_ADMINS` (self-hosted, or a SaaS's
+  first operator). Read from the database on every check and every runner-hub refresh.
+  `/api/me` answers `platformAdmin`; `pnpm seed:dev` adds `ops@movy.local`, and
+  `admin@` stays a plain org admin the e2e specs show being refused.
+- **Reliability**:
+  - the heartbeat judged fencing by the live set read after its query, so a run claimed
+    during it was killed as swept, or never fenced at all;
+  - a failed cancel was an unhandled rejection that also blocked any retry;
+  - the embedded agent tried its start once; the live feed waited for a notification
+    that, after `run_finished`, never comes;
+  - `PgListener.stop()` during a reconnect leaked a LISTENing connection;
+  - a non-JSON 2xx from Docker threw out of a response listener and crashed the console;
+  - the provisioner missed created-but-unstarted clones and could pass `max_replicas`;
+  - a shutdown waited on probes before it stopped claiming.
+- **Consistency**: one class-name rule (`web` reserved, counts within `integer`); one
+  reading of `MOVY_RUNNER_SLOTS`, which the embedded agent used to default silently;
+  probe requests, runner answers and the run spec envelope checked, never cast; a failed
+  spec read reported as `RunSpecUnavailable`, not "spec gone".
+- **Cleanup**: `EventWriter.onFlushed` removed; NOTIFY payload parsing and the
+  simulation recording each resolved in one place; `agent-main`'s `run()` split;
+  `server/runs/host-paths.ts`. `run-manager.ts` was left alone: its `reattach()` is 20
+  lines, not the 100 the first review reported.
+- **New tests**: `PgListener` (first ever), the Docker socket client against a real
+  HTTP server, `sweepTick`, a probe answered with no NOTIFY, the heartbeat race, the
+  provisioner under concurrent requests, operator resolution against PGlite.
+
+### Verified
+
+- `pnpm test`, `pnpm typecheck` and `pnpm build` after every commit group.
+- **Not run**: `pnpm docker:e2e`. `runner-services.spec.ts` and
+  `runner-availability.spec.ts` changed (operator vs org admin), so run it before merge.
+
+### Out of scope, found on the way
+
+- Launching checks `countActive()` and then enqueues without a lock, so two
+  simultaneous launches can pass `max_concurrent_runs`. On `main` before this branch;
+  worth its own issue (lock the org row inside the `enqueue` transaction).
+- Two web replicas asked to start a runner within the same second can pass a class's
+  cap by one; documented in CLAUDE.md.
+

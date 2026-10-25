@@ -201,7 +201,7 @@ The runner and the web console are the subject of
 1. Implement `DatabaseAdapterSet` in `src/infrastructure/database/<engine>/`
 2. Add type-map(s) in `src/infrastructure/database/translation/type-maps/`
 3. Implement `ISchemaTranslator` subclass(es) extending `CrossDbSchemaTranslator`
-4. Register in `cli.ts`:
+4. Register in `buildRegistry()` (`packages/core/src/composition/build-registry.ts`):
    ```ts
    registry.register(DatabaseType.X, new XAdapterSet())
    registry.registerTranslator(DatabaseType.X, DatabaseType.POSTGRES, () => new XToPostgresTranslator())

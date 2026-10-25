@@ -126,7 +126,7 @@ registry.registerDataMigrator(MSSQL, MYSQL, () => new MssqlCrossDbDataMigrator()
 registry.registerDataMigrator(MYSQL, MSSQL, () => new MssqlCrossDbDataMigrator())
 ```
 
-To add a new database, implement `DatabaseAdapterSet` and register it plus any cross-DB translators/migrators in `cli.ts`. Adding engine `n + 1` costs `2n` new type maps and `2n` new translators — see `docs/adr/0001-direct-pair-type-translation.md`.
+To add a new database, implement `DatabaseAdapterSet` and register it plus any cross-DB translators/migrators in `buildRegistry()` (`packages/core/src/composition/build-registry.ts`), which every surface calls. Adding engine `n + 1` costs `2n` new type maps and `2n` new translators — see `docs/adr/0001-direct-pair-type-translation.md`.
 
 ### Application services
 
@@ -406,6 +406,15 @@ happens at the claim. No Redis, no BullMQ: Postgres was already there.
   sweeper has told the ledger its destination is free; a runner that kept writing would
   be the harm. Only runs the agent claimed in this process are fenced — never a run
   forked before migration 0004, which has no lease at all and is left to re-attach.
+  **A beat judges only the runs live BEFORE its query.** `wake()` claims on another pool
+  connection while the heartbeat is in flight, and the statement's snapshot cannot see a
+  claim committed after it began: judged by the live set read afterwards, such a run was
+  terminated as swept, and one still between claim and launch dropped out of `owned`
+  and was never fenced at all. Both now wait for the next beat.
+- **A cancel that fails to forward is unmarked**, so the next beat that sees
+  `cancelling` sends it again; the heartbeat does not await it, so it never rejects.
+- **A drain stops claiming before it waits for anything** (`stopClaiming()`): a shutdown
+  waits on its probes first, and a run claimed meanwhile would be left behind.
 - **A queued run is cancelled outright** — conditional on `status = 'queued'`, so it
   cannot race a claim: exactly one of the two statements matches the row. A running one
   goes `cancelling`; the embedded agent forwards it at once, and the owning agent's
@@ -419,7 +428,11 @@ happens at the claim. No Redis, no BullMQ: Postgres was already there.
 - **The embedded agent's id is `embedded-<hostname>`** (or `MOVY_RUNNER_ID`), stable
   across restarts of the same host, so it re-attaches to its own runs. On start it
   re-attaches and heartbeats **before** it claims, extending those leases ahead of any
-  sweep.
+  sweep. Its start is retried every 5 s until it succeeds (`startWithRetry`), as the
+  standalone agent's is: tried once, a meta-db still booting left a console that never
+  claimed a run. Its class and slots are read by the runner service's own rules
+  (`readEmbeddedRunnerConfig`); an invalid value leaves it OFF with the reason logged —
+  a runner service exits 64 on the same value — never on a default nobody chose.
 - **One run per destination, across orgs** (phase 4). `runs.target_lock_key` is
   sha256(engine, host, port, database), set at launch, null for a replay, never
   serialised. The claim skips a queued run whose key a `running`/`cancelling` run holds;
@@ -429,7 +442,10 @@ happens at the claim. No Redis, no BullMQ: Postgres was already there.
   (`server/runs/queue-state.ts`), never stored; another org's run is never named.
 - **Runner classes come from `MOVY_RUNNER_CLASSES_FILE`** (`docker/runner-classes.json`),
   parsed strictly by `parseRunnerClassesFile` (unknown keys rejected, one default) and
-  upserted at boot. A class the file drops is kept with `configured = false` — runs and
+  upserted at boot. **One name rule** (`isRunnerClassName`) for the file,
+  `MOVY_RUNNER_CLASS` and a saved definition, so a name one accepts another cannot refuse
+  later; `web` is reserved, because Test and Preview read `via: 'web'` as the console.
+  Counts are capped at the integer columns that store them. A class the file drops is kept with `configured = false` — runs and
   definitions reference it — and offered for nothing new. A run's class is the body's,
   else its definition's, else the default (`chooseRunnerClass`).
 - **The size suggestion reads bytes, not rows**: optional
@@ -446,6 +462,10 @@ happens at the claim. No Redis, no BullMQ: Postgres was already there.
   every second anyway, because a NOTIFY can be missed. No runner of the class online is an
   immediate 503 `no_runner`, never a wait; silence is a 504 and deletes the row. The test
   is recorded with `connections.last_test_via`. Compare stays in-request (decision 6).
+  **A runner's answer is rebuilt, never cast** (`readProbeResult`): every runner writes
+  through the one `movy_runner` role across orgs, and the result is served to a browser,
+  so only the known fields survive and any other shape becomes a failure that says so.
+  The run spec envelope and a probe request are checked the same way when opened.
 - **A queued run cancelled outright emits no event**, so the run page applies the cancel
   response with `applyRunRow`, which only moves a status forward.
 - **Events reach the browser through the database, whichever process ran the run** —
@@ -590,7 +610,11 @@ forward for a second peer would skip events for the first.
 **NOTIFY has no replay**, so when the LISTEN connection drops and comes back the
 feed re-reads past every cursor (`resync`). Reads for one run never overlap; a
 notification that arrives mid-read folds into one more read. Every web replica
-listens and fans out to its own sockets; nothing coordinates them.
+listens and fans out to its own sockets; nothing coordinates them. **A failed read
+retries on its own** (2 s, while anyone here watches the run): the read that fails may
+be the one holding `run_finished`, after which no notification for that run ever
+comes. The cursor moves only after the fan-out returns, so a throw there re-reads
+rather than skips.
 
 **Runner availability** (`/_ws/runners`, `POST /api/orgs/:slug/runners/ticket`) is a
 second hub with its own ticket store, so a run-stream ticket can never open it. It
