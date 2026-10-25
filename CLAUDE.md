@@ -404,8 +404,12 @@ happens at the claim. No Redis, no BullMQ: Postgres was already there.
   if a user had asked), and shows silent runners offline.
 - **Fencing: a run missing from the heartbeat's answer is stopped at once.** The
   sweeper has told the ledger its destination is free; a runner that kept writing would
-  be the harm. Only runs the agent claimed in this process are fenced — never a run
-  forked before migration 0004, which has no lease at all and is left to re-attach.
+  be the harm. **Fencing is SIGKILL** (`RunManager.terminate`), never SIGTERM: the runner
+  turns SIGTERM into the user's cancel, which is checked only between operations, so a
+  fenced run inside a COPY kept writing. It reaches a run the agent recovered after a
+  restart too, by its stored pid: `reattach()` names the followed runs that hold a lease
+  (`leased`), and the agent owns them. Only a run forked before migration 0004, which
+  has no lease at all, is exempt.
   **A beat judges only the runs live BEFORE its query.** `wake()` claims on another pool
   connection while the heartbeat is in flight, and the statement's snapshot cannot see a
   claim committed after it began: judged by the live set read afterwards, such a run was
@@ -491,9 +495,14 @@ at enqueue), `movy_run_cancel` (`{runId}`, sent by `requestCancel`) and `movy_pr
   partition step of the Compose gate: a query sent on a socket that died in a network
   partition never settles, `wake()` kept returning that `claiming` promise, and the agent
   heartbeated happily while never claiming again. Every agent statement is short.
-- **It fences itself.** No successful heartbeat for a whole lease (`leaseMs`) means the
-  sweeper may already have settled its runs, so it terminates them without waiting to
-  hear so from a database it cannot reach.
+- **It fences itself, on a deadline, not on an error.** Each owned run carries the time
+  the request that last renewed its lease (claim or heartbeat) was SENT; the database
+  stamped the lease no earlier, so the deadline can only be early. A 1 s timer
+  (`checkLeases`) stops any run within `fenceMarginMs` (5 s) of `leaseMs` — never only
+  after a heartbeat fails, because a query into a blackholed connection outlasts the
+  lease, and the embedded pool has no query timeout at all. A run fenced while its spec
+  was being read is never launched. A recovered run counts as due until a beat here
+  confirms it.
 - **Re-attach is scoped to its own runs** (`includeOwnerless: false`); ownerless pre-0004
   runs were forked by a web console and are the embedded agent's to adopt.
 - **Idle exit only when provisioned** (`MOVY_RUNNER_PROVISIONED_BY`): no run AND no probe

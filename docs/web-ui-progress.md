@@ -1732,6 +1732,32 @@ Everything below is outside PR #8 and has its own issue:
 | [#19](https://github.com/EduardoPetrini/nodejs-movy-data/issues/19) | automate the chaos steps 5–7 of the runner verification |
 | [#20](https://github.com/EduardoPetrini/nodejs-movy-data/issues/20) | a production Compose override (no seed or lab, SSO, TLS) |
 
+### Second review pass (2026-10-25)
+
+Eleven more findings, each fixed with a test that failed first:
+
+- **Fencing** (`runner-agent.ts`, `run-manager.ts`): a fenced run is SIGKILLed, not sent
+  the cooperative SIGTERM; a run recovered after a restart is owned and fenced like a
+  claimed one, by its stored pid; leases have a per-run deadline measured from the
+  renewal's send time and checked on a 1 s timer, 5 s before expiry, never only after a
+  heartbeat fails; a run that finished between beats leaves `owned`.
+- **Cancel before launch** (`ingestion.ts`): `run_started` no longer turns `cancelling`
+  back into `running`, which hid the cancel from every later heartbeat.
+- **Swept runs reach the page**: the sweep NOTIFYs `movy_run_settled`, and the console
+  pushes a cohort-neutral `run_status` frame, applied with `applyRunRow`.
+- **Runner hub**: one membership object in both indexes, so an operator promoted and
+  then revoked on a live socket leaves the operator room.
+- **Primary keys** (`constraint-key.ts`): matched by type AND ordered columns, so a key
+  over different columns is replaced rather than kept.
+- **Probes**: a per-kind execution deadline (15 s test, 60 s preview — the console's own
+  waits) aborts the probe, closes its connections and frees the slot.
+- **Runner classes**: a failed upsert is retried (5 s timer and the next caller) instead
+  of memoised; a broken file still is not.
+- **Docker provisioner**: a clone whose start fails is removed, and `cleanup` removes one
+  left `created` for over two minutes, so neither holds the class at capacity.
+
+`pnpm test` 1614/1614, `pnpm typecheck`, `pnpm build` green. Compose E2E not re-run.
+
 ### Out of scope, found on the way
 
 - Launching checks `countActive()` and then enqueues without a lock, so two
