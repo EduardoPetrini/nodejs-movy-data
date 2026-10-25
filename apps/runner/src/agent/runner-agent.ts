@@ -145,9 +145,15 @@ export class RunnerAgent {
   /** One heartbeat: extend leases, fence what was lost, forward cancels, then claim. */
   async beat(): Promise<void> {
     const { queue, control } = this.options;
+    // Judged against the runs live BEFORE the query: `wake()` may claim and
+    // launch while it is in flight, and the statement's snapshot cannot see a
+    // claim committed after it began — that run is missing from `held` without
+    // having been swept. It, and one still between claim and launch, waits for
+    // the next beat.
+    const liveBefore = new Set(control.liveRunIds());
     let result: HeartbeatResult;
     try {
-      result = await queue.heartbeat(control.liveRunIds().length);
+      result = await queue.heartbeat(liveBefore.size);
     } catch (err) {
       // A missed beat is not fatal: the lease has five more before it expires.
       this.onError(toError(err));
@@ -159,6 +165,7 @@ export class RunnerAgent {
     const live = new Set(control.liveRunIds());
     const held = new Set(result.held);
     for (const runId of [...this.owned]) {
+      if (!liveBefore.has(runId)) continue;
       if (!live.has(runId)) {
         this.owned.delete(runId);
         this.cancelSent.delete(runId);

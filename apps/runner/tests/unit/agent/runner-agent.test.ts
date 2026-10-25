@@ -42,6 +42,17 @@ function fakeControl() {
   return { control, launched, live, finish: (runId: string) => live.delete(runId) };
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => { resolve = r; });
+  return { promise, resolve };
+}
+
+/** Lets every already-settled promise continuation run. */
+function flush(): Promise<void> {
+  return new Promise((r) => setImmediate(r));
+}
+
 function run(id: string): ClaimedRun {
   return { id, orgId: ORG, simulated: false };
 }
@@ -217,6 +228,59 @@ describe('RunnerAgent leases', () => {
     expect(c.control.cancel).toHaveBeenCalledWith('a', null);
   });
 
+  it('does not fence a run claimed and launched while the heartbeat was in flight', async () => {
+    // The heartbeat's snapshot predates the claim, so `held` cannot name the
+    // run yet; that is not the sweeper settling it.
+    const q = fakeQueue();
+    const c = fakeControl();
+    const agent = agentWith(q, c);
+    await agent.start();
+    const beatAnswer = deferred<HeartbeatResult>();
+    (q.queue.heartbeat as ReturnType<typeof vi.fn>).mockImplementationOnce(() => beatAnswer.promise);
+
+    const beating = agent.beat();
+    q.queued.push(run('b'));
+    await agent.wake();
+    expect(c.live.has('b')).toBe(true);
+    beatAnswer.resolve({ held: [], cancelling: [] });
+    await beating;
+
+    expect(c.control.terminate).not.toHaveBeenCalled();
+  });
+
+  it('still fences a run whose launch straddled a heartbeat, once its lease is lost', async () => {
+    // Claimed before the beat answered, launched after it: the beat must not
+    // forget the run, or it is never fenced at all.
+    const q = fakeQueue();
+    const c = fakeControl();
+    const onFenced = vi.fn();
+    const agent = new RunnerAgent({
+      queue: q.queue, control: c.control, slots: 1,
+      journalPathFor: () => '/j', simulationFixture: () => undefined,
+      openSpec: (_o, _r, s) => JSON.parse(s.ciphertext.toString()),
+      pollIntervalMs: 0, heartbeatIntervalMs: 0, onFenced,
+    });
+    await agent.start();
+    const spec = deferred<SealedSpec | null>();
+    (q.queue.takeSpec as ReturnType<typeof vi.fn>).mockImplementationOnce(() => spec.promise);
+
+    q.queued.push(run('b'));
+    const claiming = agent.wake();
+    await flush();
+    q.setBeat({ held: ['b'], cancelling: [] });
+    const beating = agent.beat();
+    await flush();
+    spec.resolve({ specVersion: 1, ciphertext: Buffer.from(JSON.stringify({ simulate: false, spec: {} })) });
+    await Promise.all([claiming, beating]);
+    expect(c.live.has('b')).toBe(true);
+
+    q.setBeat({ held: [], cancelling: [] }); // the sweeper settled it
+    await agent.beat();
+
+    expect(c.control.terminate).toHaveBeenCalledWith('b');
+    expect(onFenced).toHaveBeenCalledWith('b');
+  });
+
   it('survives a failed heartbeat, since the lease outlasts several', async () => {
     const q = fakeQueue();
     const c = fakeControl();
@@ -327,6 +391,7 @@ describe('RunnerAgent.cancel', () => {
     expect(await agent.cancel('a')).toBe(true);
     expect(c.control.cancel).toHaveBeenCalledTimes(1);
   });
+
 });
 
 describe('RunnerAgent stopping', () => {
