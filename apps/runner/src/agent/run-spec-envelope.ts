@@ -18,10 +18,13 @@ export const SUPPORTED_SPEC_VERSIONS: readonly number[] = [RUN_SPEC_VERSION];
 
 /** The spec was sealed by a console newer or older than this runner understands. */
 export class RunSpecIncompatibleError extends Error {
-  constructor(readonly specVersion: number) {
+  /** `malformed`: a known version whose payload is not shaped as that version says. */
+  constructor(readonly specVersion: number, malformed = false) {
     super(
-      `This run's specification is version ${specVersion}; this runner understands ` +
-        `${SUPPORTED_SPEC_VERSIONS.join(', ')}. Deploy matching versions of the console and the runners.`
+      (malformed
+        ? `This run's specification is version ${specVersion} but not shaped as this runner reads it. `
+        : `This run's specification is version ${specVersion}; this runner understands ` +
+          `${SUPPORTED_SPEC_VERSIONS.join(', ')}. `) + 'Deploy matching versions of the console and the runners.'
     );
     this.name = 'RunnerIncompatible';
   }
@@ -43,5 +46,17 @@ export function openRunSpec(orgId: string, runId: string, sealed: SealedSpec): R
   if (!SUPPORTED_SPEC_VERSIONS.includes(sealed.specVersion)) {
     throw new RunSpecIncompatibleError(sealed.specVersion);
   }
-  return JSON.parse(decryptSecret(sealed.ciphertext, specAad(orgId, runId))) as RunSpecEnvelope;
+  const parsed: unknown = JSON.parse(decryptSecret(sealed.ciphertext, specAad(orgId, runId)));
+  // Checked rather than cast, as a probe's request is: a missing `simulate`
+  // would otherwise start a real run with no spec. Within a version this is a
+  // console and runner out of step, which is what the error tells the operator.
+  if (!isRunSpecEnvelope(parsed)) throw new RunSpecIncompatibleError(sealed.specVersion, true);
+  return parsed;
+}
+
+function isRunSpecEnvelope(value: unknown): value is RunSpecEnvelope {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const envelope = value as Record<string, unknown>;
+  if (envelope.simulate === true) return envelope.speed === undefined || typeof envelope.speed === 'number';
+  return envelope.simulate === false && typeof envelope.spec === 'object' && envelope.spec !== null;
 }

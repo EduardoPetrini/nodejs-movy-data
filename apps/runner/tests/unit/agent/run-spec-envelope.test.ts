@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { randomBytes } from 'node:crypto';
+import { encryptSecret, specAad } from '@movy/db';
 import {
   RUN_SPEC_VERSION,
   RunSpecIncompatibleError,
@@ -38,5 +39,17 @@ describe('run spec envelope', () => {
     const sealed = { ...sealRunSpec(ORG, RUN, { simulate: true }), specVersion: 99 };
     expect(() => openRunSpec(ORG, RUN, sealed)).toThrow(RunSpecIncompatibleError);
     expect(() => openRunSpec(ORG, RUN, sealed)).toThrow(/version 99; this runner understands 1/);
+  });
+
+  it('refuses a payload not shaped like an envelope, rather than run a migration of nothing', () => {
+    // A missing `simulate` used to read as a real run with an undefined spec.
+    const seal = (payload: unknown) => ({
+      specVersion: RUN_SPEC_VERSION,
+      ciphertext: encryptSecret(JSON.stringify(payload), specAad(ORG, RUN)),
+    });
+    for (const payload of [{}, { simulate: 'yes' }, { simulate: false }, { simulate: true, speed: 'fast' }, [], null]) {
+      expect(() => openRunSpec(ORG, RUN, seal(payload)), JSON.stringify(payload)).toThrow(RunSpecIncompatibleError);
+    }
+    expect(() => openRunSpec(ORG, RUN, seal({}))).toThrow(/version 1 but not shaped as this runner reads it/);
   });
 });
