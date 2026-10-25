@@ -392,6 +392,29 @@ describe('RunnerAgent.cancel', () => {
     expect(c.control.cancel).toHaveBeenCalledTimes(1);
   });
 
+  it('reports a cancel that failed to forward, and forwards it again on the next beat', async () => {
+    // Heartbeats call cancel without awaiting it: a rejection there is an
+    // unhandled one, and a run left marked as sent stays `cancelling` forever.
+    const q = fakeQueue([run('a')]);
+    const c = fakeControl();
+    const onError = vi.fn();
+    const agent = new RunnerAgent({
+      queue: q.queue, control: c.control, slots: 1,
+      journalPathFor: () => '/j', simulationFixture: () => undefined,
+      openSpec: (_o, _r, s) => JSON.parse(s.ciphertext.toString()),
+      pollIntervalMs: 0, heartbeatIntervalMs: 0, onError,
+    });
+    await agent.start();
+    (c.control.cancel as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('channel closed'));
+
+    await expect(agent.cancel('a')).resolves.toBe(false);
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: 'channel closed' }), 'a');
+
+    q.setBeat({ held: ['a'], cancelling: ['a'] });
+    await agent.beat();
+    await flush();
+    expect(c.control.cancel).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('RunnerAgent stopping', () => {

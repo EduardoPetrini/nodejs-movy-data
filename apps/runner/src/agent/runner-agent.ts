@@ -139,7 +139,15 @@ export class RunnerAgent {
     // A NOTIFY and the console's own fast path can both arrive; forward once.
     if (this.cancelSent.has(runId)) return true;
     this.cancelSent.add(runId);
-    return this.options.control.cancel(runId, pid);
+    try {
+      return await this.options.control.cancel(runId, pid);
+    } catch (err) {
+      // Heartbeats call this without awaiting it, so a rejection here would be
+      // an unhandled one. Unmarked, the next beat that sees `cancelling` retries.
+      this.cancelSent.delete(runId);
+      this.onError(toError(err), runId);
+      return false;
+    }
   }
 
   /** One heartbeat: extend leases, fence what was lost, forward cancels, then claim. */
