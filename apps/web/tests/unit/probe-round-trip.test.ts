@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
 import { randomBytes } from 'node:crypto';
 import type { PGlite } from '@electric-sql/pglite';
 import { freshMetaDb } from '../../../../packages/db/tests/helpers/meta-db';
@@ -90,6 +90,31 @@ describe('runProbe', () => {
 
     expect(outcome).toMatchObject({ status: 'done', result: { ok: false, errorKind: 'unknown' } });
     expect(JSON.stringify(outcome)).not.toContain('injected');
+  });
+
+  it('finds the answer by re-reading the row when no notification ever arrives', async () => {
+    // A NOTIFY can be missed (the LISTEN connection dropped) or land on another
+    // web replica. The waiter's own one-second re-read is what returns then.
+    const waiters = new ProbeWaiters();
+    const notify = vi.spyOn(waiters, 'notify');
+    const waits: number[] = [];
+    const w = startWorker();
+    const next = waiters.next.bind(waiters);
+    vi.spyOn(waiters, 'next').mockImplementation((id, ms) => {
+      waits.push(ms);
+      // The runner answers while the request waits — and nobody tells it so.
+      if (waits.length === 1) void w.wake();
+      return next(id, ms);
+    });
+
+    const outcome = await runProbe(
+      { sql, waiters },
+      { orgId: ORG, runnerClass: 'default', request, timeoutMs: 5_000 }
+    );
+
+    expect(outcome).toMatchObject({ status: 'done', result: { errorKind: 'auth' } });
+    expect(notify).not.toHaveBeenCalled();
+    expect(waits.every((ms) => ms <= 1_000)).toBe(true);
   });
 
   it('answers no_runner at once, queuing nothing, when no runner of the class is online', async () => {
