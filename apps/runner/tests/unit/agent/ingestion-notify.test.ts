@@ -52,6 +52,27 @@ describe('applyProjection announces what it stored', () => {
     expect(heard).toEqual([]);
   });
 
+  it('keeps a cancel accepted before launch: run_started does not turn cancelling back into running', async () => {
+    await pg.query(`UPDATE runs SET status = 'cancelling' WHERE id = $1`, [RUN]);
+    const started: MigrationEvent = {
+      type: 'run_started', runId: RUN, seq: 1, at: new Date().toISOString(),
+      source: { engine: 'postgres', database: 'a' }, target: { engine: 'postgres', database: 'b' },
+    } as MigrationEvent;
+    await applyProjection(db, RUN, projectEvents([started]));
+    const { rows } = await pg.query<{ status: string; started_at: Date | null }>(`SELECT status, started_at FROM runs WHERE id = $1`, [RUN]);
+    expect(rows[0]).toMatchObject({ status: 'cancelling' });
+    expect(rows[0]!.started_at).not.toBeNull();
+  });
+
+  it('still moves a queued run to running on run_started', async () => {
+    await pg.query(`UPDATE runs SET status = 'queued' WHERE id = $1`, [RUN]);
+    const started = { type: 'run_started', runId: RUN, seq: 1, at: new Date().toISOString(),
+      source: { engine: 'postgres', database: 'a' }, target: { engine: 'postgres', database: 'b' } } as MigrationEvent;
+    await applyProjection(db, RUN, projectEvents([started]));
+    const { rows } = await pg.query<{ status: string }>(`SELECT status FROM runs WHERE id = $1`, [RUN]);
+    expect(rows[0]!.status).toBe('running');
+  });
+
   it('notifies nothing for a batch with no events', async () => {
     await applyProjection(db, RUN, { events: [], run: { status: 'running' }, steps: [], tables: [] });
     await new Promise((r) => setTimeout(r, 20));

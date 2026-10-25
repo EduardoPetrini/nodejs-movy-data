@@ -89,6 +89,14 @@ export async function applyProjection(db: Db, runId: string, projection: Project
       .update(runs)
       .set({
         ...patch,
+        // `run_started` must not undo a cancel accepted between the claim and
+        // the launch: no child existed to signal then, and the heartbeat only
+        // forwards a cancel it can still SEE as `cancelling`.
+        ...(patch.status === 'running'
+          ? {
+              status: sql`case when ${runs.status} = 'cancelling' then ${runs.status} else 'running' end` as unknown as RunStatus,
+            }
+          : {}),
         // The cursor only ever climbs. A re-tail that delivers older events
         // must not rewind it, or the tailer loops on the same range forever.
         ...(patch.lastSeq === undefined
