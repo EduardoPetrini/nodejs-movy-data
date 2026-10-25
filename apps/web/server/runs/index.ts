@@ -30,6 +30,7 @@ import {
   parseEventPointer,
   parseStringField,
   reattachableRuns,
+  resolveSimulationFixture,
   sqlAgentQueue,
   sqlProbeQueue,
   type SqlClient,
@@ -336,17 +337,12 @@ export function journalPathFor(runId: string): string {
 }
 
 /**
- * The one recording a simulated run replays, on this host — or undefined.
- *
- * Resolved by whoever runs the run, never accepted from a request: this string
- * becomes `--simulate <path>` on a child process, and a path from a client is a
- * path the client chose.
+ * The recording the embedded agent replays — the runner package beside this
+ * app, as the standalone agent finds it beside itself. Never from a request:
+ * see `resolveSimulationFixture`.
  */
 export function findSimulationFixture(): string | undefined {
-  const override = process.env.MOVY_SIMULATION_FIXTURE;
-  if (override) return path.resolve(override);
-  const bundled = path.resolve(process.cwd(), '../runner/fixtures/pg-to-pg-315k.ndjson');
-  return fs.existsSync(bundled) ? bundled : undefined;
+  return resolveSimulationFixture(process.env.MOVY_SIMULATION_FIXTURE, path.resolve(process.cwd(), '../runner'));
 }
 
 /**

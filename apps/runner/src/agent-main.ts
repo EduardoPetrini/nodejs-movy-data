@@ -15,7 +15,6 @@
  *                     provisioner started leaves after MOVY_RUNNER_IDLE_EXIT_MS
  *                     with nothing to do. A baseline replica never does.
  */
-import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createDb } from '@movy/db';
 import {
@@ -36,6 +35,7 @@ import {
   markRunLaunched,
   parseStringField,
   readAgentConfig,
+  resolveSimulationFixture,
   reattachableRuns,
   sqlAgentQueue,
   sqlProbeQueue,
@@ -50,11 +50,6 @@ const LOG_PREFIX = '[runner-agent]';
 
 function log(level: 'info' | 'warn' | 'error', message: string): void {
   console[level](`${LOG_PREFIX} ${message}`);
-}
-
-function bundledFixture(): string | undefined {
-  const bundled = path.resolve(__dirname, '../fixtures/pg-to-pg-315k.ndjson');
-  return fs.existsSync(bundled) ? bundled : undefined;
 }
 
 async function run(config: AgentConfig): Promise<void> {
@@ -107,7 +102,7 @@ async function run(config: AgentConfig): Promise<void> {
     control: manager,
     slots: config.slots,
     journalPathFor: (runId) => journalPathIn(config.journalDir, runId),
-    simulationFixture: () => config.simulationFixture ?? bundledFixture(),
+    simulationFixture: () => resolveSimulationFixture(config.simulationFixture, path.resolve(__dirname, '..')),
     onError: (err, runId) => log('error', `${runId ? `(${runId}) ` : ''}${err.message}`),
     onFenced: (runId) => log('warn', `${runId} lost its lease and was stopped here.`),
   });
