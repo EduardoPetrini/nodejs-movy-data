@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import type { ClassCapacity, ProvisionResult, RunnerProvisioner } from './provisioner';
-import type { ContainerInspect, DockerEngine } from './docker-engine';
+import type { ContainerInspect, ContainerSummary, DockerEngine } from './docker-engine';
 
 /** On every runner service in docker-compose.yml: the containers a new runner is cloned from. */
 export const TEMPLATE_LABEL = 'movy.runner-template';
@@ -15,6 +15,14 @@ export class NoRunnerTemplateError extends Error {
 
 /** A container in any of these is gone or going; every other state counts against the cap. */
 const FINISHED_STATES: ReadonlySet<string> = new Set(['exited', 'dead', 'removing']);
+
+/**
+ * A clone still `created` after this long never started: its start failed, or
+ * this console died between create and start. Counted against the cap until
+ * `cleanup` removes it, so it must not wait forever. Far longer than the gap
+ * between two consecutive Docker calls.
+ */
+const STUCK_CREATED_MS = 2 * 60 * 1000;
 
 /** Variables the clone sets itself; the template's own values are dropped. */
 const OWN_ENV = ['MOVY_RUNNER_CLASS=', 'MOVY_RUNNER_PROVISIONED_BY=', 'MOVY_RUNNER_ID='];
@@ -40,7 +48,10 @@ export class DockerProvisioner implements RunnerProvisioner {
   /** The scale-up in flight per class, so the next one counts what it started. */
   private readonly scaling = new Map<string, Promise<ProvisionResult>>();
 
-  constructor(private readonly engine: DockerEngine) {}
+  constructor(
+    private readonly engine: DockerEngine,
+    private readonly now: () => number = Date.now
+  ) {}
 
   /**
    * One at a time per class, on this replica: two requests for the last slot
@@ -69,15 +80,28 @@ export class DockerProvisioner implements RunnerProvisioner {
     const template = await this.findTemplate(c.name);
     const name = `movy-runner-${c.name}-${randomBytes(3).toString('hex')}`;
     const { Id } = await this.engine.create(name, cloneBody(template, c));
-    await this.engine.start(Id);
+    try {
+      await this.engine.start(Id);
+    } catch (err) {
+      // A clone that never started still counts against the cap, so a failed
+      // start would leave the class "full" with no runner in it. If the remove
+      // fails too, `cleanup` takes it once it has sat `created` long enough.
+      await this.engine.remove(Id).catch(() => {});
+      throw err;
+    }
     return { status: 'started', runnerClass: c.name, container: name };
   }
 
   async cleanup(): Promise<number> {
-    const exited = await this.engine.listContainers([`${PROVISIONED_LABEL}=true`], true);
-    const done = exited.filter((c) => c.State === 'exited' || c.State === 'dead');
+    const clones = await this.engine.listContainers([`${PROVISIONED_LABEL}=true`], true);
+    const done = clones.filter((c) => c.State === 'exited' || c.State === 'dead' || this.neverStarted(c));
     for (const container of done) await this.engine.remove(container.Id);
     return done.length;
+  }
+
+  /** `Created` is in seconds. */
+  private neverStarted(c: ContainerSummary): boolean {
+    return c.State === 'created' && this.now() - c.Created * 1000 >= STUCK_CREATED_MS;
   }
 
   /**

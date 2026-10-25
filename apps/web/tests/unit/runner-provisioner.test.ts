@@ -215,4 +215,20 @@ describe('DockerProvisioner', () => {
     expect(engine.remove).toHaveBeenCalledTimes(1);
     expect(engine.remove).toHaveBeenCalledWith('gone000000000000');
   });
+
+  it('removes a clone whose start failed, so it does not hold the class at capacity', async () => {
+    const { engine } = fakeEngine([summary('tmpl000000000000', { [TEMPLATE_LABEL]: 'true', [CLASS_LABEL]: 'default' })]);
+    vi.mocked(engine.start).mockRejectedValueOnce(new Error('OCI runtime create failed'));
+    await expect(new DockerProvisioner(engine).scaleUp(large({ maxReplicas: 1 }))).rejects.toThrow('OCI runtime');
+    expect(engine.remove).toHaveBeenCalledWith('new0000000000000');
+  });
+
+  it('removes a clone left created long enough that it will never start, but not one still starting', async () => {
+    const nowMs = 1_000_000_000;
+    const stuck = { ...summary('stuck00000000000', { [PROVISIONED_LABEL]: 'true' }, 'created'), Created: nowMs / 1000 - 600 };
+    const fresh = { ...summary('fresh00000000000', { [PROVISIONED_LABEL]: 'true' }, 'created'), Created: nowMs / 1000 - 5 };
+    const { engine } = fakeEngine([stuck, fresh]);
+    expect(await new DockerProvisioner(engine, () => nowMs).cleanup()).toBe(1);
+    expect(engine.remove).toHaveBeenCalledWith('stuck00000000000');
+  });
 });
