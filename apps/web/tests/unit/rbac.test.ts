@@ -46,6 +46,12 @@ describe('role capabilities', () => {
     expect(ROLE_PERMISSIONS.admin).toContain('org:manage');
   });
 
+  it('lets only an admin start a runner, since runners are shared by every org', () => {
+    expect(ROLE_PERMISSIONS.admin).toContain('runner:scale');
+    expect(ROLE_PERMISSIONS.editor).not.toContain('runner:scale');
+    expect(ROLE_PERMISSIONS.viewer).not.toContain('runner:scale');
+  });
+
   it('is strictly nested: viewer < editor < admin', () => {
     for (const p of ROLE_PERMISSIONS.viewer) expect(ROLE_PERMISSIONS.editor).toContain(p);
   });

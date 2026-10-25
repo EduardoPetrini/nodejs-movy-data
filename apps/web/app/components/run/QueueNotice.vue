@@ -37,12 +37,20 @@ const tone = computed(() => (queue.value?.reason === 'no_runner' ? 'warn' : 'inf
 </script>
 
 <template>
-  <p v-if="queue" class="queue" :class="tone" role="status" data-testid="queue-reason" :data-reason="queue.reason">
-    <span>{{ queueSentence(queue) }}</span>
+  <div v-if="queue" class="queue" :class="tone" data-testid="queue-reason" :data-reason="queue.reason">
+    <span role="status">{{ queueSentence(queue) }}</span>
     <NuxtLink v-if="queue.blockingRunId" :to="`/o/${orgSlug}/runs/${queue.blockingRunId}`" class="link">
       See that run →
     </NuxtLink>
-  </p>
+    <!-- The one reason that never clears by itself. -->
+    <StartRunner
+      v-if="queue.reason === 'no_runner'"
+      class="offer"
+      :org-slug="orgSlug"
+      :runner-class="queue.runnerClass"
+      :class-label="queue.classLabel"
+    />
+  </div>
 </template>
 
 <style scoped>
@@ -55,4 +63,5 @@ const tone = computed(() => (queue.value?.reason === 'no_runner' ? 'warn' : 'inf
 }
 .queue.warn { border-color: var(--mv-warn); background: var(--mv-warn-dim); color: var(--mv-fg); }
 .link { font-weight: var(--mv-fw-semibold); }
+.offer { flex-basis: 100%; }
 </style>

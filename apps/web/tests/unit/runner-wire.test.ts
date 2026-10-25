@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { availabilityOf, classSentence, type RunnerClassSummary } from '#shared/runner-wire';
+import { availabilityOf, classSentence, scaleSentence, type RunnerClassSummary } from '#shared/runner-wire';
 
 function cls(over: Partial<RunnerClassSummary>): RunnerClassSummary {
   return { name: 'default', label: 'Default', description: null, isDefault: true, online: 1, draining: 0, totalSlots: 4, freeSlots: 3, queued: 0, ...over };
@@ -33,5 +33,24 @@ describe('runner availability wording', () => {
   it('uses the singular for one', () => {
     expect(classSentence(cls({ totalSlots: 1, freeSlots: 1 }))).toBe('1 of 1 slot free');
     expect(classSentence(cls({ freeSlots: 0, queued: 1, totalSlots: 1 }))).toBe('Its only slot is busy · 1 of your runs waiting');
+  });
+});
+
+describe('scaleSentence', () => {
+  it('says what started and when it will show', () => {
+    expect(scaleSentence({ status: 'started', runnerClass: 'large', container: 'movy-runner-large-ab12cd' }, 'Large')).toBe(
+      'Starting a Large runner (movy-runner-large-ab12cd). It is listed as online once it has registered, usually within a few seconds.'
+    );
+  });
+
+  it('introduces the command when this deployment starts runners by hand', () => {
+    expect(scaleSentence({ status: 'manual', runnerClass: 'large', command: 'x' }, 'Large')).toBe(
+      'This deployment starts runners by hand. Run this to start a Large runner:'
+    );
+  });
+
+  it('names the cap, singular and plural', () => {
+    expect(scaleSentence({ status: 'at_capacity', runnerClass: 'large', maxReplicas: 1 }, 'Large')).toContain('limit of 1 runner.');
+    expect(scaleSentence({ status: 'at_capacity', runnerClass: 'large', maxReplicas: 3 }, 'Large')).toContain('limit of 3 runners.');
   });
 });

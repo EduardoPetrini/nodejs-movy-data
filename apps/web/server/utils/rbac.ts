@@ -6,7 +6,7 @@ import type { OrgRole } from '../db/schema';
  *
  * viewer  — past executions and reports only. Never credentials, never a run.
  * editor  — connections and runs. Cannot touch users.
- * admin   — everything, plus members and promotion.
+ * admin   — everything, plus members, promotion and starting runners.
  */
 export type Permission =
   | 'run:read' | 'run:execute' | 'run:cancel' | 'run:log:read'
@@ -15,7 +15,8 @@ export type Permission =
   | 'validation:read' | 'validation:execute'
   | 'stats:read'
   | 'member:read' | 'member:manage'
-  | 'org:manage';
+  | 'org:manage'
+  | 'runner:scale';
 
 const VIEWER: Permission[] = ['run:read', 'definition:read', 'validation:read', 'stats:read'];
 
@@ -28,7 +29,8 @@ const EDITOR: Permission[] = [
   'validation:execute',
 ];
 
-const ADMIN: Permission[] = [...EDITOR, 'org:manage', 'member:manage'];
+// `runner:scale` starts infrastructure every org shares, so admins only.
+const ADMIN: Permission[] = [...EDITOR, 'org:manage', 'member:manage', 'runner:scale'];
 
 export const ROLE_PERMISSIONS: Record<OrgRole, readonly Permission[]> = {
   viewer: VIEWER,

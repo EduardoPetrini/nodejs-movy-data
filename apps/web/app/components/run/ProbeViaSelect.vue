@@ -37,6 +37,14 @@ const id = useId()
     <span v-if="selected" class="state" :data-availability="selected.online === 0 ? 'none' : 'some'">
       {{ classSentence(selected) }}
     </span>
+    <!-- Asking a class with nobody online is an immediate 503; this is the way out. -->
+    <StartRunner
+      v-if="selected && selected.online === 0"
+      class="offer"
+      :org-slug="orgSlug"
+      :runner-class="selected.name"
+      :class-label="selected.label"
+    />
   </div>
 </template>
 
@@ -51,4 +59,5 @@ select {
 select:focus-visible { outline: 2px solid var(--mv-focus); outline-offset: 1px; }
 .state { font-size: var(--mv-fs-micro); color: var(--mv-fg-subtle); }
 .state[data-availability='none'] { color: var(--mv-warn); }
+.offer { flex-basis: 100%; }
 </style>

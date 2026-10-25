@@ -77,3 +77,27 @@ export function classSentence(c: RunnerClassSummary): string {
       return `${c.freeSlots} of ${plural(c.totalSlots, 'slot', 'slots')} free${waiting}`;
   }
 }
+
+/**
+ * The answer to "Start a runner" (`POST …/runners/scale`). Which one depends
+ * on the deployment's provisioner, not on the request.
+ */
+export type ScaleResult =
+  /** A runner is starting; it shows up in the panel once it registers. */
+  | { status: 'started'; runnerClass: string; container: string }
+  /** This deployment starts runners by hand: here is the command. */
+  | { status: 'manual'; runnerClass: string; command: string }
+  /** Already at the class's `max_replicas`; nothing was started. */
+  | { status: 'at_capacity'; runnerClass: string; maxReplicas: number };
+
+/** One line for what "Start a runner" did. Pure, so the wording is unit-tested. */
+export function scaleSentence(result: ScaleResult, classLabel: string): string {
+  switch (result.status) {
+    case 'started':
+      return `Starting a ${classLabel} runner (${result.container}). It is listed as online once it has registered, usually within a few seconds.`;
+    case 'manual':
+      return `This deployment starts runners by hand. Run this to start a ${classLabel} runner:`;
+    case 'at_capacity':
+      return `The ${classLabel} class is already at its limit of ${result.maxReplicas} ${result.maxReplicas === 1 ? 'runner' : 'runners'}.`;
+  }
+}
