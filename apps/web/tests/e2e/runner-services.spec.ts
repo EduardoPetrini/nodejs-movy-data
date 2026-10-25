@@ -61,9 +61,14 @@ async function runners(page: Page): Promise<Snapshot> {
 
 test.describe('runner services', () => {
   test('a run is claimed by a runner service, and the console runs none itself', async ({ page }) => {
-    await signIn(page, ADMIN);
-    const online = (await runners(page)).runners?.filter((r) => r.state === 'online') ?? [];
-    expect(online.length, 'runner-default is up').toBeGreaterThan(0);
+    // Runner ids are hostnames and reach platform operators only, so an org admin
+    // would see the counts but no `runners` list to check the names in.
+    await signIn(page, OPERATOR);
+    const snapshot = await runners(page);
+    const defaultClass = snapshot.classes.find((c) => c.name === 'default');
+    expect(defaultClass?.online ?? 0, 'runner-default is up').toBeGreaterThan(0);
+    const online = snapshot.runners?.filter((r) => r.state === 'online') ?? [];
+    expect(online.length, 'an operator sees the runner ids').toBeGreaterThan(0);
     // The embedded agent names itself `embedded-<host>`; a container is named by its id.
     expect(online.filter((r) => r.id.startsWith('embedded-'))).toEqual([]);
 
