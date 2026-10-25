@@ -1,4 +1,4 @@
-import { claimProbe, completeProbe, type ClaimedProbe } from './probe-store';
+import { claimProbe, completeProbe, type ClaimedProbe, type ProbeKind } from './probe-store';
 import type { SqlClient } from './queue-store';
 import {
   ProbeIncompatibleError, executeProbe, openProbe, type ProbeRequest, type ProbeResult,
@@ -15,13 +15,22 @@ export interface ProbeWorkerOptions {
   /** Probes answered at once; separate from run slots. 0 answers none. */
   readonly slots: number;
   readonly open?: (orgId: string, probeId: string, ciphertext: Buffer) => ProbeRequest;
-  readonly execute?: (request: ProbeRequest) => Promise<ProbeResult>;
+  readonly execute?: (request: ProbeRequest, signal: AbortSignal) => Promise<ProbeResult>;
+  /** How long a probe may run here before it is abandoned, per kind. */
+  readonly deadlineMs?: Partial<Record<ProbeKind, number>>;
   /** Fallback poll; `wake()` on NOTIFY is the fast path. 0 disables the timer. */
   readonly pollIntervalMs?: number;
   readonly onError?: (err: Error, probeId?: string) => void;
 }
 
 const DEFAULT_POLL_MS = 1_000;
+
+/**
+ * The console's own wait for each kind (`TEST_PROBE_TIMEOUT_MS`,
+ * `PREVIEW_PROBE_TIMEOUT_MS`). Past it nobody reads the answer — the request
+ * has deleted its row — so working on only holds a slot every org shares.
+ */
+const DEFAULT_DEADLINE_MS: Record<ProbeKind, number> = { test: 15_000, preview: 60_000 };
 
 /**
  * Answers Test and Preview for the runner's class: claims a probe, runs the
@@ -111,7 +120,7 @@ export class ProbeWorker {
     let result: ProbeResult;
     try {
       const request = this.open(claimed.orgId, claimed.id, claimed.ciphertext);
-      result = await this.execute(request);
+      result = await this.executeWithin(request, claimed.kind);
     } catch (err) {
       // Only `open` can get here — `executeProbe` turns every failure into a
       // result. Its message is ours, never the request's.
@@ -130,6 +139,35 @@ export class ProbeWorker {
       this.onError(toError(err), claimed.id);
     }
   }
+
+  /**
+   * Runs one probe against its deadline. On expiry the probe is aborted —
+   * which closes its connections — and the slot is freed whether or not the
+   * driver honours that: a query blocked on a lock must not hold it forever.
+   */
+  private async executeWithin(request: ProbeRequest, kind: ProbeKind): Promise<ProbeResult> {
+    const deadlineMs = this.options.deadlineMs?.[kind] ?? DEFAULT_DEADLINE_MS[kind];
+    const controller = new AbortController();
+    let timer: NodeJS.Timeout | undefined;
+    const expired = new Promise<ProbeResult>((resolve) => {
+      timer = setTimeout(() => {
+        controller.abort();
+        resolve(timedOut(kind, deadlineMs));
+      }, deadlineMs);
+    });
+    try {
+      return await Promise.race([this.execute(request, controller.signal), expired]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+}
+
+function timedOut(kind: ProbeKind, deadlineMs: number): ProbeResult {
+  const message = `The runner gave up after ${Math.round(deadlineMs / 1000)}s without an answer from the database.`;
+  return kind === 'test'
+    ? { ok: false, latencyMs: deadlineMs, error: message, errorKind: 'timeout' }
+    : { ok: false, side: null, errorKind: 'timeout', message };
 }
 
 /** The SQL probe queue bound to one runner and its class. */

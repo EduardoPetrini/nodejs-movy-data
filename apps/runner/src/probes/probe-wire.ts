@@ -125,10 +125,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * Runs one probe. Never throws: whatever happens becomes a result, already
  * scrubbed, because it is stored and handed to a browser.
  */
-export async function executeProbe(request: ProbeRequest): Promise<ProbeResult> {
+export async function executeProbe(request: ProbeRequest, signal?: AbortSignal): Promise<ProbeResult> {
   if (request.kind === 'test') return testConnection(request.config);
   try {
-    return { ok: true, inspection: await inspectForPreview(request.source, request.target) };
+    return { ok: true, inspection: await inspectForPreview(request.source, request.target, signal) };
   } catch (err) {
     if (err instanceof PreviewConnectionError) {
       return { ok: false, side: err.side, errorKind: err.errorKind, message: err.text };

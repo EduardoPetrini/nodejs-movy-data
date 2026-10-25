@@ -69,6 +69,47 @@ describe('ProbeWorker', () => {
     expect(peak).toBe(2);
   });
 
+  it('abandons a probe past its deadline: aborts it, answers timeout, and frees the slot', async () => {
+    const { queue, completed } = fakeQueue([probe('stuck', 'preview'), probe('next')]);
+    let aborted = false;
+    const worker = new ProbeWorker({
+      queue,
+      slots: 1,
+      pollIntervalMs: 0,
+      deadlineMs: { preview: 20, test: 1_000 },
+      open: (_o, id) => (id === 'stuck' ? { kind: 'preview', source: {} as never, target: {} as never } : testRequest),
+      execute: (request, signal) => {
+        if (request.kind === 'test') return Promise.resolve({ ok: true, latencyMs: 1 });
+        // A catalogue query blocked on a lock: it never settles on its own.
+        signal.addEventListener('abort', () => { aborted = true; });
+        return new Promise<ProbeResult>(() => {});
+      },
+    });
+
+    await worker.wake();
+    await expect.poll(() => completed.length).toBe(2);
+    await worker.stop();
+
+    expect(aborted).toBe(true);
+    expect(completed[0]).toEqual(['stuck', expect.objectContaining({ ok: false, errorKind: 'timeout' })]);
+    expect(completed[1]).toEqual(['next', { ok: true, latencyMs: 1 }]);
+  });
+
+  it('stops promptly with a hung probe in flight, rather than waiting on it forever', async () => {
+    const { queue, completed } = fakeQueue([probe('stuck')]);
+    const worker = new ProbeWorker({
+      queue,
+      slots: 1,
+      pollIntervalMs: 0,
+      deadlineMs: { test: 20 },
+      open: () => testRequest,
+      execute: () => new Promise<ProbeResult>(() => {}),
+    });
+    await worker.wake();
+    await worker.stop();
+    expect(completed).toEqual([['stuck', expect.objectContaining({ ok: false, errorKind: 'timeout' })]]);
+  });
+
   it('answers with its own words when it cannot decrypt the request, never the request', async () => {
     const { queue, completed } = fakeQueue([probe('t', 'test'), probe('p', 'preview')]);
     const worker = new ProbeWorker({

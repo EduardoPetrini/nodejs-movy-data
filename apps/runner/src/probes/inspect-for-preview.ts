@@ -50,10 +50,15 @@ export class PreviewConnectionError extends Error {
  * Throws `PreviewConnectionError` when an end cannot be reached. Every
  * connection it opened is closed whatever happens — a preview leaking a client
  * per click would take its host down long before anyone migrated anything.
+ *
+ * `signal` aborts it: every connection is closed at once, which is what ends a
+ * catalogue query blocked on a lock or a dead socket — nobody is waiting for
+ * the answer any more, and the slot it holds is shared by every org.
  */
 export async function inspectForPreview(
   sourceConfig: ConnectionConfig,
-  destConfig: ConnectionConfig
+  destConfig: ConnectionConfig,
+  signal?: AbortSignal
 ): Promise<PreviewInspection> {
   const registry = buildRegistry();
   const sourceAdapters = registry.get(sourceConfig.type);
@@ -66,7 +71,14 @@ export async function inspectForPreview(
   const adminConnection = destAdapters.createConnection({ ...destConfig, database: destAdapters.adminDatabase });
 
   const open: IDatabaseConnection[] = [];
+  const closeAll = (): void => {
+    for (const connection of [sourceConnection, destConnection, adminConnection]) {
+      void connection.end().catch(() => {});
+    }
+  };
+  signal?.addEventListener('abort', closeAll, { once: true });
   try {
+    signal?.throwIfAborted();
     await connectOrFail(sourceConnection, 'source', sourceConfig);
     open.push(sourceConnection);
 
@@ -115,6 +127,7 @@ export async function inspectForPreview(
       sizeEstimates: [...sizeEstimates],
     };
   } finally {
+    signal?.removeEventListener('abort', closeAll);
     await Promise.all(open.map((connection) => connection.end().catch(() => {})));
   }
 }
