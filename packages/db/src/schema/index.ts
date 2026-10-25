@@ -5,3 +5,4 @@ export * from './definitions';
 export * from './runners';
 export * from './runs';
 export * from './validations';
+export * from './platform';

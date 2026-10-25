@@ -35,7 +35,7 @@ export interface RunnerDetail {
 
 export interface RunnersSnapshot {
   classes: RunnerClassSummary[];
-  /** Present for admins only. */
+  /** Present for platform operators only: runner ids are hostnames of shared infrastructure. */
   runners?: RunnerDetail[];
   at: string;
 }

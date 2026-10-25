@@ -57,6 +57,13 @@
       "when": 1792765490837,
       "tag": "0007_probes",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1792936987990,
+      "tag": "0008_platform_admins",
+      "breakpoints": true
     }
   ]
 }

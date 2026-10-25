@@ -7,7 +7,7 @@ import type { RunnerClassSummary, RunnerDetail, RunnersSnapshot } from '../../sh
  * Runners are platform-wide (decision 3), so capacity is counted across all of
  * them; the queue depth is this org's alone. Runner ids are hostnames — pod or
  * container names — which say something about the infrastructure, so they are
- * read only for an admin and are otherwise not in the answer at all.
+ * read only for a platform operator and are otherwise not in the answer at all.
  */
 export async function loadRunnersSnapshot(
   sql: SqlClient,

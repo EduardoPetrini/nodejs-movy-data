@@ -220,7 +220,7 @@ interface RunnerProvisioner {
 - **`kubernetes`** (Phase 7): KEDA owns scaling, so enqueuing is the scale-up. The UI shows "starting a runner (cluster autoscaler)".
 - **Auto mode** (`MOVY_AUTOSCALE=true`): the sweeper calls `scaleUp` when a class has queued runs, no free slots and fewer than `max_replicas` runners, with a 60 s cooldown per class.
 - **Scale-down:** agents with `provisioned_by` set exit after `MOVY_RUNNER_IDLE_EXIT_MS` (default 10 min) idle, and the provisioner removes exited `movy.provisioned` containers. Baseline replicas never self-exit.
-- **Permission:** a new `runner:scale` in `server/utils/rbac.ts`, granted to `admin` only.
+- **Permission:** platform operators only (`platform_admins`, or `MOVY_PLATFORM_ADMINS`). *Amended after review:* the first version granted a `runner:scale` org permission to `admin`, but orgs are self-serve, so any signed-in user could start shared runners. See ADR 0004, amendment 1.
 
 ### Test and Preview from a runner (decision 6)
 - The executors move into `@movy/runner/probes`. Web handlers and agents call the same functions:
@@ -457,7 +457,7 @@ Each phase leaves `pnpm test`, `pnpm typecheck` and the existing e2e green.
 6. **Runner services and provisioning in Compose.**
    - `web` loses `MOVY_RUNNER_ENTRY`, `MOVY_JOURNAL_DIR`, `init: true` and the journals volume.
    - Add `runner-default`/`runner-large` (stack above) and `docker-compose.provisioner.yml`.
-   - `manual` and `docker` provisioners, auto mode, idle exit, `runner:scale`.
+   - `manual` and `docker` provisioners, auto mode, idle exit, platform operators only.
    - New compose-only e2e specs (below).
    - *Gate:* the Verification list below.
    - *As built (2026-10-25), seven deviations.* (1) The role and its grants are applied by
@@ -488,7 +488,7 @@ Each phase leaves `pnpm test`, `pnpm typecheck` and the existing e2e green.
    - Subscription tickets move to the DB, or sticky sessions, because `TicketStore` is per process.
    - A Helm chart or kustomize.
 8. **Next phase: runner classes in the UI.**
-   - An admin screen to create and edit classes (label, description, resources, `max_replicas`, `suggest_above_bytes`, default).
+   - An operator screen (platform operators, not org admins) to create and edit classes (label, description, resources, `max_replicas`, `suggest_above_bytes`, default).
    - The boot-time file becomes a seed only: applied when the table is empty, never overwriting UI edits.
    - Resource changes on a class apply to **new** replicas. The screen says so, and in Compose it shows the command to recreate the service.
 

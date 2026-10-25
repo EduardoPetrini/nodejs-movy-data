@@ -6,6 +6,7 @@ import { metaDatabaseUrl, useDb } from '../db/client';
 import { runEvents, runs } from '../db/schema';
 import { toPublicEvent } from '../serializers/run.serializer';
 import { RunEventFeed } from './run-event-feed';
+import { configuredPlatformAdmins, platformAdminIds } from '../utils/platform-admin';
 import { readEmbeddedRunnerConfig, type EmbeddedRunnerConfig } from './embedded-config';
 import { RunnerHub, type RunnersGrant } from '../runners/runner-hub';
 import { loadRunnersSnapshot } from '../runners/runner-summary';
@@ -131,6 +132,7 @@ export function useRunnerHub(): RunnerHub {
     runnerHub = new RunnerHub({
       load: (orgId, includeRunners) => loadRunnersSnapshot(sql, orgId, { includeRunners }),
       resolveRole: resolveRoles,
+      resolveOperators: (userIds) => platformAdminIds(sql, userIds, configuredPlatformAdmins()),
       onError: (err) => console.error('[runners] hub:', err.message),
     });
   }

@@ -5,17 +5,15 @@ import { scaleSentence, type ScaleResult } from '#shared/runner-wire'
  * "Start a runner", where a missing runner is the reason something waits: a
  * queued run, or a Test or Preview asked of a class with nobody online.
  *
- * Admins only (`runner:scale`), and absent rather than disabled for anyone
- * else: runners are shared by every org, so this is not a choice an editor
+ * Platform operators only, and absent rather than disabled for anyone else:
+ * runners are shared by every org, so this is not a choice an org's own admin
  * can make. What it does depends on the deployment — under the manual
  * provisioner it starts nothing and shows the command that would.
  */
 const props = defineProps<{ orgSlug: string; runnerClass: string; classLabel: string }>()
 
 const { data: me } = useFetch('/api/me')
-const mayScale = computed(
-  () => me.value?.orgs.find((o) => o.slug === props.orgSlug)?.permissions.includes('runner:scale') ?? false
-)
+const mayScale = computed(() => me.value?.platformAdmin ?? false)
 
 const busy = ref(false)
 const result = ref<ScaleResult | null>(null)

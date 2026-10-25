@@ -3,7 +3,7 @@ import { test, expect, type Page } from '@playwright/test';
 /**
  * Runner services, end to end (docs/runner-service-plan.md, phase 6): the
  * console runs no migration itself; a `runner-default` container claims every
- * run, and an admin can ask for a runner where none is online.
+ * run, and a platform operator can ask for a runner where none is online.
  *
  * Compose only (`MOVY_E2E_COMPOSE`, set by `pnpm docker:e2e`): a host
  * `pnpm test:e2e` runs the embedded agent, which is exactly what these specs
@@ -11,6 +11,7 @@ import { test, expect, type Page } from '@playwright/test';
  */
 const ORG = 'acme';
 const ADMIN = { email: 'admin@movy.local', password: 'movy-dev' };
+const OPERATOR = { email: 'ops@movy.local', password: 'movy-dev' };
 const EDITOR = { email: 'editor@movy.local', password: 'movy-dev' };
 
 test.skip(!process.env.MOVY_E2E_COMPOSE, 'needs the Compose runner services (pnpm docker:e2e)');
@@ -71,8 +72,8 @@ test.describe('runner services', () => {
     await expect(page.locator('h1.status')).toHaveText(/succeeded/, { timeout: 90_000 });
   });
 
-  test('an admin can ask for a runner where a class has none, and is told how', async ({ page }) => {
-    await signIn(page, ADMIN);
+  test('a platform operator can ask for a runner where a class has none, and is told how', async ({ page }) => {
+    await signIn(page, OPERATOR);
     const large = (await runners(page)).classes.find((c) => c.name === 'large');
     test.skip(!large || large.online > 0, 'needs the large class at zero runners');
 
@@ -101,6 +102,23 @@ test.describe('runner services', () => {
 
   test('an editor is not offered a runner and cannot start one', async ({ page }) => {
     await signIn(page, EDITOR);
+    const large = (await runners(page)).classes.find((c) => c.name === 'large');
+    test.skip(!large || large.online > 0, 'needs the large class at zero runners');
+
+    const runId = await launch(page, 'large');
+    await page.goto(`/o/${ORG}/runs/${runId}`);
+    const reason = page.getByTestId('queue-reason');
+    await expect(reason).toHaveAttribute('data-reason', 'no_runner');
+    await expect(reason.getByTestId('start-runner')).toHaveCount(0);
+
+    const refused = await page.request.post(`/api/orgs/${ORG}/runners/scale`, { data: { runnerClass: 'large' } });
+    expect(refused.status()).toBe(403);
+
+    await page.request.post(`/api/orgs/${ORG}/runs/${runId}/cancel`);
+  });
+
+  test('an org admin who is no operator is not offered a runner and cannot start one', async ({ page }) => {
+    await signIn(page, ADMIN);
     const large = (await runners(page)).classes.find((c) => c.name === 'large');
     test.skip(!large || large.online > 0, 'needs the large class at zero runners');
 

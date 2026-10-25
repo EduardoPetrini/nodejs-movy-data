@@ -228,7 +228,7 @@ broadcast.
 
 ```bash
 pnpm dev:web       # Nuxt on :3000
-pnpm seed:dev      # admin@ / editor@ / viewer@movy.local, password movy-dev
+pnpm seed:dev      # admin@ / editor@ / viewer@ / ops@movy.local, password movy-dev
 ```
 
 See `docs/web-ui-progress.md` for what is built and what is not.
@@ -247,7 +247,8 @@ pnpm docker:scale 1  # one runner of the large class (0 by default)
 pnpm docker:down   # stop; add -v to `docker compose down` to reset all data
 ```
 
-Sign in as `admin@` / `editor@` / `viewer@movy.local` with password `movy-dev`. The
+Sign in as `admin@` / `editor@` / `viewer@movy.local` with password `movy-dev`;
+`ops@movy.local` is a platform operator, who can start runners and see them. The
 `acme` org already has **Lab PostgreSQL**, **Lab MySQL** and **Lab SQL Server**
 connections. Each lab database holds `movy_src`, a small shop (four tables, about 22k
 rows, a self-referencing FK), and an empty `movy_dst`.

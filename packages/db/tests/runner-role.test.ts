@@ -38,7 +38,7 @@ describe('the runner role', () => {
     );
     const granted = new Set(RUNNER_GRANTS.map((g) => g.table));
     const others = rows.map((r) => r.table_name).filter((t) => !granted.has(t));
-    expect(others).toEqual(expect.arrayContaining(['connections', 'users', 'organizations']));
+    expect(others).toEqual(expect.arrayContaining(['connections', 'users', 'organizations', 'platform_admins']));
     for (const table of others) {
       await expect(asRunner(() => db.query(`SELECT 1 FROM "${table}" LIMIT 1`)), table).rejects.toThrow(/permission denied/);
     }

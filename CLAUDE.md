@@ -27,7 +27,7 @@ pnpm typecheck               # per-workspace, includes tests
 # Tests
 pnpm test                    # vitest run (all tests, single pass)
 pnpm test:watch              # vitest watch mode
-pnpm seed:dev                # dev users: admin@/editor@/viewer@movy.local
+pnpm seed:dev                # dev users: admin@/editor@/viewer@movy.local; ops@ is a platform operator
 
 # Run a single test file
 pnpm exec vitest run packages/core/tests/unit/application/migration-orchestrator.service.test.ts
@@ -480,14 +480,21 @@ at enqueue), `movy_run_cancel` (`{runId}`, sent by `requestCancel`) and `movy_pr
   for `MOVY_RUNNER_IDLE_EXIT_MS` (10 min). A baseline replica never removes itself.
 - **Provisioning** (`server/runners/`): `RunnerProvisioner` is `manual` (answers the
   command) or `docker` (Engine API over the socket, no client library). `POST
-  …/runners/scale` needs `runner:scale` — admins only, since runners are shared by every
-  org. The docker provisioner counts a started-but-unregistered clone by its container id
+  …/runners/scale` needs a **platform operator**, never an org role (see below). The docker provisioner counts a started-but-unregistered clone by its container id
   (= the runner id, its hostname), so two clicks cannot pass `max_replicas`. **Auto mode**
   (`MOVY_AUTOSCALE=true`) runs on the replica that won the sweep: a class with queued work
   not blocked on its destination, no free slot and room under its cap, once per 60 s.
 - **`StartRunner.vue`** is offered where `no_runner` is the reason: the queue notice and
-  "Test from"/"Inspect from" on a class with nobody online. Absent, not disabled, without
-  the permission.
+  "Test from"/"Inspect from" on a class with nobody online. Absent, not disabled, for
+  anyone who is not an operator (`/api/me` answers `platformAdmin`).
+- **Platform operators are not org admins.** Orgs are self-serve, so an org admin is
+  whoever created the org; one must never start shared runners or read their hostnames.
+  An operator is a `platform_admins` row (granted at runtime, with who and when — the
+  SaaS case) or an email in `MOVY_PLATFORM_ADMINS` (a self-hosted deploy, or a SaaS's
+  first operator). `server/utils/platform-admin.ts` reads both from the database on every
+  check, never from the session, and the runner hub re-reads them every refresh, so a
+  revoked operator loses the runner ids within 5 s. The `movy_runner` role cannot read
+  the table.
 
 **`reattach()` is not a one-shot read.** IPC dies with the old host and cannot be
 re-established, so a run still in flight after a restart is *followed* — its
@@ -553,7 +560,7 @@ server. Handler: `server/routes/_ws/runs.ts`.
 | `server/runs/run-event-feed.ts` | **Pure.** NOTIFY pointer → read `run_events` past a per-run cursor → `hub.publish`. Every ordering rule below lives here. |
 | `server/runs/pg-listener.ts` | One dedicated, unpooled connection holding `LISTEN`; reconnects with backoff and reports it, so the feed can re-read. |
 | `server/runners/runner-hub.ts` | Runner availability rooms, one per org and audience; refreshed on `NOTIFY movy_runners` and every 5 s while watched. |
-| `server/runners/runner-summary.ts` | The panel's numbers: capacity across all runners, queue depth for this org only, runner ids for admins only. |
+| `server/runners/runner-summary.ts` | The panel's numbers: capacity across all runners, queue depth for this org only, runner ids for platform operators only. |
 
 **The socket performs no authorisation.** A client POSTs
 `/api/orgs/:slug/runs/:id/ticket` — an ordinary request that has been through
@@ -588,7 +595,8 @@ second hub with its own ticket store, so a run-stream ticket can never open it. 
 follows the same rules: a server-minted grant, a private `roomKey`, a handler that
 decides nothing, roles revalidated on every refresh. Capacity is counted across all
 runners (they are platform-wide); the queue depth is this org's only; runner ids are
-hostnames and go to the admin room only. A heartbeat does not NOTIFY — it happens
+hostnames and go to the operator room only — decided by operator status, never by org
+role. A heartbeat does not NOTIFY — it happens
 every 5 s per runner — so the hub refreshes on an interval while anyone watches and
 sends a frame only when it changed.
 

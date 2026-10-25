@@ -10,6 +10,7 @@ import { test, expect, type Page } from '@playwright/test';
  */
 const ORG = 'acme';
 const ADMIN = { email: 'admin@movy.local', password: 'movy-dev' };
+const OPERATOR = { email: 'ops@movy.local', password: 'movy-dev' };
 const VIEWER = { email: 'viewer@movy.local', password: 'movy-dev' };
 
 async function signIn(page: Page, who: { email: string; password: string }): Promise<void> {
@@ -33,14 +34,23 @@ test.describe('runner availability', () => {
     await expect(panel.locator('details')).toHaveCount(0);
   });
 
-  test('an admin can see the runners themselves', async ({ page }) => {
-    await signIn(page, ADMIN);
+  test('a platform operator can see the runners themselves', async ({ page }) => {
+    await signIn(page, OPERATOR);
     await page.goto(`/o/${ORG}`);
     const panel = page.getByRole('region', { name: 'Runners' });
     const detail = panel.locator('details');
     await expect(detail).toContainText(/\d+ runners?/);
     await detail.locator('summary').click();
     await expect(detail).toContainText('online');
+  });
+
+  test('an org admin who is no operator sees counts, never the runners', async ({ page }) => {
+    // Orgs are self-serve: an org admin is whoever created the org.
+    await signIn(page, ADMIN);
+    await page.goto(`/o/${ORG}`);
+    const panel = page.getByRole('region', { name: 'Runners' });
+    await expect(panel).toContainText('Default');
+    await expect(panel.locator('details')).toHaveCount(0);
   });
 
   test('the runs page shows the same strip under its header', async ({ page }) => {

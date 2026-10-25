@@ -2,12 +2,19 @@ import type { OrgRole } from '../db/schema';
 import type { RunnersSnapshot } from '../../shared/runner-wire';
 import { memberKey, type HubPeer, type RoleResolver } from '../runs/run-hub';
 
-/** Admins see runner ids; everyone else sees counts. */
-export type RunnersAudience = 'admin' | 'member';
+/**
+ * Platform operators see runner ids; everyone else sees counts. Never an org
+ * role: orgs are self-serve, and runner ids are hostnames of infrastructure
+ * every org shares (`server/utils/platform-admin.ts`).
+ */
+export type RunnersAudience = 'operator' | 'member';
 
-export function audienceFor(role: OrgRole): RunnersAudience {
-  return role === 'admin' ? 'admin' : 'member';
+export function audienceFor(isOperator: boolean): RunnersAudience {
+  return isOperator ? 'operator' : 'member';
 }
+
+/** Of these users, the platform operators. */
+export type OperatorResolver = (userIds: readonly string[]) => Promise<ReadonlySet<string>>;
 
 /**
  * A verified right to watch an org's runner availability. Minted only by
@@ -40,9 +47,12 @@ interface Membership {
 }
 
 export interface RunnerHubOptions {
-  /** The snapshot for one org; `includeRunners` only for the admin room. */
+  /** The snapshot for one org; `includeRunners` only for the operator room. */
   readonly load: (orgId: string, includeRunners: boolean) => Promise<RunnersSnapshot>;
+  /** Membership: someone who left the org is evicted. */
   readonly resolveRole?: RoleResolver;
+  /** Operator status, re-read on every refresh like the role. */
+  readonly resolveOperators?: OperatorResolver;
   /** How often to refresh while anyone watches: busy counts change without a NOTIFY. */
   readonly refreshIntervalMs?: number;
   readonly onError?: (err: Error) => void;
@@ -56,8 +66,9 @@ export interface RunnerHubOptions {
  * every claim and a heartbeat does not announce itself. One query per room,
  * not per subscriber, and only a changed frame is sent.
  *
- * Roles are re-checked on every refresh with the run hub's resolver, so a
- * demoted admin stops seeing runner ids within one interval.
+ * Membership and operator status are re-checked on every refresh, so someone
+ * who left the org is evicted, and a revoked operator stops seeing runner ids,
+ * within one interval.
  */
 export class RunnerHub {
   private readonly rooms = new Map<string, Room>();
@@ -82,7 +93,7 @@ export class RunnerHub {
     this.byPeer.set(peer, membership);
     this.arm();
 
-    const snapshot = await this.options.load(grant.orgId, grant.audience === 'admin');
+    const snapshot = await this.options.load(grant.orgId, grant.audience === 'operator');
     const frame = JSON.stringify({ k: 'runners', ...snapshot });
     const signature = signatureOf(snapshot);
     if (signature === room.last) {
@@ -138,7 +149,7 @@ export class RunnerHub {
       if (room.members.size === 0) continue;
       let snapshot: RunnersSnapshot;
       try {
-        snapshot = await this.options.load(room.orgId, room.audience === 'admin');
+        snapshot = await this.options.load(room.orgId, room.audience === 'operator');
       } catch (err) {
         this.onError(toError(err));
         continue;
@@ -152,42 +163,58 @@ export class RunnerHub {
   }
 
   private async revalidate(): Promise<void> {
-    if (!this.options.resolveRole) return;
     const memberships = [...this.byPeer.values()];
-    const pairs = new Map<string, { orgId: string; userId: string }>();
-    for (const { grant } of memberships) pairs.set(memberKey(grant.orgId, grant.userId), { orgId: grant.orgId, userId: grant.userId });
-
-    let roles: ReadonlyMap<string, OrgRole>;
-    try {
-      roles = await this.options.resolveRole([...pairs.values()]);
-    } catch (err) {
-      // A failed check must not evict legitimate subscribers.
-      this.onError(toError(err));
-      return;
-    }
+    const roles = await this.resolveRoles(memberships);
+    const operators = await this.resolveOperators(memberships);
 
     for (const membership of memberships) {
-      const role = roles.get(memberKey(membership.grant.orgId, membership.grant.userId));
-      if (!role) {
+      const { grant } = membership;
+      if (roles && !roles.get(memberKey(grant.orgId, grant.userId))) {
         this.deliver(membership, JSON.stringify({ k: 'revoked', reason: 'no-longer-a-member' }));
         this.unsubscribe(membership.peer);
         membership.peer.close?.();
         continue;
       }
-      const audience = audienceFor(role);
-      if (audience !== membership.grant.audience) {
-        // Moved, and sent the new room's view straight away by the loop that follows.
-        this.unsubscribe(membership.peer);
-        const grant = { ...membership.grant, audience };
-        const key = roomKey(grant);
-        const room = this.rooms.get(key) ?? { orgId: grant.orgId, audience, members: new Set(), last: null };
-        room.last = null;
-        room.members.add({ peer: membership.peer, grant, room: key });
-        this.rooms.set(key, room);
-        this.byPeer.set(membership.peer, { peer: membership.peer, grant, room: key });
-        this.arm();
-      }
+      const audience = operators ? audienceFor(operators.has(grant.userId)) : grant.audience;
+      if (audience !== grant.audience) this.move(membership, audience);
     }
+  }
+
+  /** Null when there is no resolver or it failed: a failed check must not evict legitimate subscribers. */
+  private async resolveRoles(memberships: readonly Membership[]): Promise<ReadonlyMap<string, OrgRole> | null> {
+    if (!this.options.resolveRole) return null;
+    const pairs = new Map<string, { orgId: string; userId: string }>();
+    for (const { grant } of memberships) pairs.set(memberKey(grant.orgId, grant.userId), { orgId: grant.orgId, userId: grant.userId });
+    try {
+      return await this.options.resolveRole([...pairs.values()]);
+    } catch (err) {
+      this.onError(toError(err));
+      return null;
+    }
+  }
+
+  /** Null when there is no resolver or it failed: every audience then stays as it was. */
+  private async resolveOperators(memberships: readonly Membership[]): Promise<ReadonlySet<string> | null> {
+    if (!this.options.resolveOperators) return null;
+    try {
+      return await this.options.resolveOperators([...new Set(memberships.map((m) => m.grant.userId))]);
+    } catch (err) {
+      this.onError(toError(err));
+      return null;
+    }
+  }
+
+  /** Into another audience's room; the refresh that follows sends that room's view straight away. */
+  private move(membership: Membership, audience: RunnersAudience): void {
+    this.unsubscribe(membership.peer);
+    const grant = { ...membership.grant, audience };
+    const key = roomKey(grant);
+    const room = this.rooms.get(key) ?? { orgId: grant.orgId, audience, members: new Set(), last: null };
+    room.last = null;
+    room.members.add({ peer: membership.peer, grant, room: key });
+    this.rooms.set(key, room);
+    this.byPeer.set(membership.peer, { peer: membership.peer, grant, room: key });
+    this.arm();
   }
 
   private deliver(membership: Membership, frame: string): void {

@@ -2,9 +2,11 @@ import { eq } from 'drizzle-orm';
 import { useDb } from '../db/client';
 import { memberships, organizations } from '../db/schema';
 import { ROLE_PERMISSIONS } from '../utils/rbac';
+import { isPlatformAdminRequest } from '../utils/require-platform-admin';
 
 /**
- * Session, org memberships and the permissions for each.
+ * Session, org memberships and the permissions for each, and whether the user
+ * operates the platform itself (starting runners, seeing them).
  *
  * The client hides what it cannot do using these, but that is cosmetic only —
  * the API is the authority and re-checks every request.
@@ -25,6 +27,7 @@ export default defineEventHandler(async (event) => {
 
   return {
     user,
+    platformAdmin: await isPlatformAdminRequest(event),
     orgs: rows.map((row) => ({ ...row, permissions: ROLE_PERMISSIONS[row.role] })),
   };
 });

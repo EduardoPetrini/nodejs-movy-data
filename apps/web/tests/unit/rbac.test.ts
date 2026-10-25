@@ -46,10 +46,11 @@ describe('role capabilities', () => {
     expect(ROLE_PERMISSIONS.admin).toContain('org:manage');
   });
 
-  it('lets only an admin start a runner, since runners are shared by every org', () => {
-    expect(ROLE_PERMISSIONS.admin).toContain('runner:scale');
-    expect(ROLE_PERMISSIONS.editor).not.toContain('runner:scale');
-    expect(ROLE_PERMISSIONS.viewer).not.toContain('runner:scale');
+  it('lets no org role start a runner: orgs are self-serve, and runners are every org\'s', () => {
+    // Starting runners is a platform operator's, in server/utils/platform-admin.ts.
+    for (const role of ['admin', 'editor', 'viewer'] as const) {
+      expect((ROLE_PERMISSIONS[role] as readonly string[]).some((p) => p.startsWith('runner:'))).toBe(false);
+    }
   });
 
   it('is strictly nested: viewer < editor < admin', () => {

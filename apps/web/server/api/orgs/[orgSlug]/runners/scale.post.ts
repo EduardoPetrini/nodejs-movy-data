@@ -1,4 +1,5 @@
 import { requirePermission } from '~~/server/utils/rbac';
+import { requirePlatformAdmin } from '~~/server/utils/require-platform-admin';
 import { useMetaSql } from '~~/server/runs';
 import { UnknownRunnerClassError, loadClassCapacity } from '~~/server/runners/provisioner';
 import { useProvisioner } from '~~/server/runners/use-provisioner';
@@ -9,12 +10,15 @@ import type { ScaleResult } from '#shared/runner-wire';
 /**
  * "Start a runner": one more runner of a class, up to its `max_replicas`.
  *
- * Admins only (`runner:scale`): runners are shared by every org, so this
- * starts infrastructure beyond the org it was asked from. Under the manual
- * provisioner nothing starts, and the answer is the command that would.
+ * Platform operators only: runners are shared by every org, so this starts
+ * infrastructure beyond the org it was asked from, and orgs are self-serve —
+ * an org admin is whoever created the org. The org check still comes first,
+ * so the route reveals nothing about an org the caller is not in. Under the
+ * manual provisioner nothing starts, and the answer is the command that would.
  */
 export default defineEventHandler(async (event): Promise<ScaleResult> => {
-  requirePermission(event, 'runner:scale');
+  requirePermission(event, 'run:read');
+  await requirePlatformAdmin(event);
   const body = await readBody<{ runnerClass?: unknown }>(event).catch(() => undefined);
   const runnerClass = body?.runnerClass;
   if (typeof runnerClass !== 'string' || runnerClass.length === 0 || runnerClass.length > 63) {

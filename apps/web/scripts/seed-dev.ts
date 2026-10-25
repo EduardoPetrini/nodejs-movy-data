@@ -1,8 +1,10 @@
 /**
- * Development seed: one admin, one editor, one viewer, in one org.
+ * Development seed: one admin, one editor, one viewer, in one org — and one
+ * platform operator, an editor there who also operates the runners.
  *
- * The three roles exist so isolation and permission behaviour can be checked by
- * signing in, not only by reading tests.
+ * The roles exist so isolation and permission behaviour can be checked by
+ * signing in, not only by reading tests. The operator is a separate person on
+ * purpose: `admin@` is an org admin and must NOT be able to start runners.
  *   npx tsx apps/web/scripts/seed-dev.ts
  */
 import { randomUUID } from 'node:crypto';
@@ -11,9 +13,10 @@ import { hashLocalPassword } from '../server/utils/crypto';
 
 const PASSWORD = 'movy-dev';
 const PEOPLE = [
-  { email: 'admin@movy.local', name: 'Ada Admin', role: 'admin' },
-  { email: 'editor@movy.local', name: 'Eve Editor', role: 'editor' },
-  { email: 'viewer@movy.local', name: 'Vic Viewer', role: 'viewer' },
+  { email: 'admin@movy.local', name: 'Ada Admin', role: 'admin', operator: false },
+  { email: 'editor@movy.local', name: 'Eve Editor', role: 'editor', operator: false },
+  { email: 'viewer@movy.local', name: 'Vic Viewer', role: 'viewer', operator: false },
+  { email: 'ops@movy.local', name: 'Oz Operator', role: 'editor', operator: true },
 ] as const;
 
 async function main() {
@@ -52,11 +55,14 @@ async function main() {
        ON CONFLICT (org_id, user_id) DO UPDATE SET role = EXCLUDED.role`,
       [org.id, user.id, person.role]
     );
-    console.log(`  ${person.role.padEnd(6)} ${person.email}`);
+    if (person.operator) {
+      await client.query(`INSERT INTO platform_admins (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING`, [user.id]);
+    }
+    console.log(`  ${person.role.padEnd(6)} ${person.email}${person.operator ? '  (platform operator)' : ''}`);
   }
 
-  console.log(`\norgs: acme (3 members), globex (empty — proves isolation)`);
-  console.log(`password for all three: ${PASSWORD}`);
+  console.log(`\norgs: acme (${PEOPLE.length} members), globex (empty — proves isolation)`);
+  console.log(`password for all: ${PASSWORD}`);
   await client.end();
 }
 

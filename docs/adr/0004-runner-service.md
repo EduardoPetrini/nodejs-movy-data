@@ -83,3 +83,21 @@ deploy-time configuration for now; editing them in the UI is a later phase.
   and an agent that does not understand one fails the run explicitly.
 - **Development stays one process.** `MOVY_EMBEDDED_RUNNER=true` runs the same agent
   inside Nitro.
+
+## Amendment 1 — platform operators (2026-10-25)
+
+Runners are platform-wide, but the first version guarded them with an org
+permission, `runner:scale`, granted to every org `admin`. Orgs are self-serve, so
+an org admin is whoever created the org: any signed-in user could start shared
+runners up to each class's cap and read every runner's hostname.
+
+**Decision:** acting on shared infrastructure belongs to a **platform operator**, a
+role outside every org. An operator is a `platform_admins` row (granted at runtime,
+recorded with who and when) or an email listed in `MOVY_PLATFORM_ADMINS`.
+
+- Self-hosted: the company's platform team, usually from the env list.
+- SaaS: the vendor's staff, granted in the table, never a customer.
+
+Starting runners, seeing runner ids, and later editing runner classes and per-org
+limits (Phase 8) are an operator's. Org roles keep everything inside the org.
+

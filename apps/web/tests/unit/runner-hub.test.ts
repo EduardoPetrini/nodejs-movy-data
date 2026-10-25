@@ -47,11 +47,11 @@ describe('RunnerHub', () => {
     expect(l.calls).toEqual([{ orgId: ORG_A, includeRunners: false }]);
   });
 
-  it('sends an admin the runners themselves', async () => {
+  it('sends a platform operator the runners themselves', async () => {
     const l = loader();
     const hub = new RunnerHub({ load: l.load });
     const p = fakePeer();
-    await hub.subscribe(p.peer, grant({ audience: 'admin' }));
+    await hub.subscribe(p.peer, grant({ audience: 'operator' }));
     expect(p.frames[0]).toHaveProperty('runners');
   });
 
@@ -93,17 +93,46 @@ describe('RunnerHub', () => {
     expect(l.calls).toEqual([{ orgId: ORG_A, includeRunners: false }]);
   });
 
-  it('moves a demoted admin to the member room, so runner ids stop', async () => {
+  it('moves a revoked operator to the member room, so runner ids stop', async () => {
     const l = loader();
-    const roles = new Map<string, OrgRole>([[memberKey(ORG_A, 'u1'), 'editor']]);
-    const hub = new RunnerHub({ load: l.load, resolveRole: async () => roles });
+    const roles = new Map<string, OrgRole>([[memberKey(ORG_A, 'u1'), 'admin']]);
+    const hub = new RunnerHub({ load: l.load, resolveRole: async () => roles, resolveOperators: async () => new Set() });
     const p = fakePeer();
-    await hub.subscribe(p.peer, grant({ audience: 'admin' }));
+    await hub.subscribe(p.peer, grant({ audience: 'operator' }));
     await hub.refresh();
 
     const last = p.frames.at(-1)!;
     expect(last).toMatchObject({ k: 'runners' });
     expect(last).not.toHaveProperty('runners');
+  });
+
+  it('moves a newly granted operator to the operator room', async () => {
+    const l = loader();
+    const hub = new RunnerHub({ load: l.load, resolveOperators: async () => new Set(['u1']) });
+    const p = fakePeer();
+    await hub.subscribe(p.peer, grant());
+    await hub.refresh();
+    expect(p.frames.at(-1)).toHaveProperty('runners');
+  });
+
+  it('keeps an org admin who is no operator in the member room: orgs are self-serve', async () => {
+    const l = loader();
+    const roles = new Map<string, OrgRole>([[memberKey(ORG_A, 'u1'), 'admin']]);
+    const hub = new RunnerHub({ load: l.load, resolveRole: async () => roles, resolveOperators: async () => new Set() });
+    const p = fakePeer();
+    await hub.subscribe(p.peer, grant());
+    await hub.refresh();
+    expect(p.frames.every((f) => !('runners' in f))).toBe(true);
+  });
+
+  it('keeps every audience when the operator check fails', async () => {
+    const l = loader();
+    const hub = new RunnerHub({ load: l.load, resolveOperators: async () => { throw new Error('down'); } });
+    const p = fakePeer();
+    await hub.subscribe(p.peer, grant({ audience: 'operator' }));
+    l.setFree(0);
+    await hub.refresh();
+    expect(p.frames.at(-1)).toHaveProperty('runners');
   });
 
   it('evicts and closes someone who left the org', async () => {
@@ -140,10 +169,9 @@ describe('RunnerHub', () => {
     expect(p.frames).toHaveLength(1);
   });
 
-  it('derives the audience from the role: only an admin sees runner ids', () => {
-    expect(audienceFor('admin')).toBe('admin');
-    expect(audienceFor('editor')).toBe('member');
-    expect(audienceFor('viewer')).toBe('member');
+  it('derives the audience from operator status alone, never from an org role', () => {
+    expect(audienceFor(true)).toBe('operator');
+    expect(audienceFor(false)).toBe('member');
   });
 
   it('exposes no way to join a room from a raw string', () => {
