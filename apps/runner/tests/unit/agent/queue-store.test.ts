@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import type { PGlite } from '@electric-sql/pglite';
 import { freshMetaDb } from '../../../../../packages/db/tests/helpers/meta-db';
-import { RUNNERS_CHANNEL } from '../../../src/agent/channels';
+import { RUNNERS_CHANNEL, RUN_SETTLED_CHANNEL } from '../../../src/agent/channels';
 import {
   cancelQueuedRun,
   claimNextRun,
@@ -230,6 +230,19 @@ describe('sweep', () => {
     expect([...result.settledRuns].sort()).toEqual([running, cancelling].sort());
     expect(await statusOf(running)).toMatchObject({ status: 'failed', error_name: 'RunnerVanished' });
     expect(await statusOf(cancelling)).toMatchObject({ status: 'cancelled', error_name: 'RunnerVanished' });
+  });
+
+  it('announces each run it settles, since no event will tell a watching console', async () => {
+    const run = await enqueue();
+    await claimNextRun(sql, 'agent-1', 'default');
+    await db.query(`UPDATE runs SET lease_expires_at = now() - interval '1 second'`);
+    const heard: unknown[] = [];
+    await db.listen(RUN_SETTLED_CHANNEL, (p) => heard.push(JSON.parse(p)));
+
+    await sweep(sql);
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(heard).toEqual([{ runId: run }]);
   });
 
   it('leaves a run with a live lease, a queued run, and a run forked before 0004 alone', async () => {

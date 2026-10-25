@@ -156,6 +156,22 @@ describe('log cohorts', () => {
     expect(redacted.events().map((e) => e.type)).toEqual(['overall_progress']);
   });
 
+  it('sends a settled status to both cohorts of that run, and to no other run', () => {
+    const hub = new RunHub();
+    const full = fakePeer();
+    const redacted = fakePeer();
+    const other = fakePeer();
+    hub.subscribe(full.peer, grant({ cohort: 'full' }));
+    hub.subscribe(redacted.peer, grant({ userId: 'u2', cohort: 'redacted' }));
+    hub.subscribe(other.peer, grant({ userId: 'u3', runId: RUN_B }));
+
+    hub.publishStatus({ id: RUN_A, status: 'failed', error: { name: 'RunnerVanished', message: 'm' }, startedAt: null, finishedAt: null });
+
+    expect(full.frames).toEqual([expect.objectContaining({ k: 'run_status', run: expect.objectContaining({ status: 'failed' }) })]);
+    expect(redacted.frames).toHaveLength(1);
+    expect(other.frames).toHaveLength(0);
+  });
+
   it('sends nothing at all to a redacted peer when the batch is only logs', () => {
     const hub = new RunHub();
     const redacted = fakePeer();

@@ -253,6 +253,17 @@ describe('a run row read over REST', () => {
     expect(applyRunRow(running, { ...RUN, status: 'cancelling' }).run?.status).toBe('cancelling')
   })
 
+  it('applies a run_status frame: a run the sweeper settled reaches a watching client', () => {
+    const running = applySnapshot(snapshot({ run: { ...RUN, status: 'running' } }))
+    const frame: ServerFrame = {
+      k: 'run_status',
+      run: { id: RUN.id, status: 'failed', error: { name: 'RunnerVanished', message: 'may be partially applied' }, startedAt: null, finishedAt: '2026-10-23T10:00:00.000Z' },
+    }
+    const state = applyFrame(running, frame)
+    expect(state.run).toMatchObject({ status: 'failed', error: { name: 'RunnerVanished' } })
+    expect(runIsOver(state)).toBe(true)
+  })
+
   it('ignores a row for another run', () => {
     const state = applySnapshot(snapshot())
     expect(applyRunRow(state, { ...RUN, id: 'run-2', status: 'cancelled' })).toBe(state)

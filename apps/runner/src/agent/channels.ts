@@ -22,6 +22,13 @@ export const PROBE_DONE_CHANNEL = 'movy_probe_done';
 /** `{runnerClass}` — a run of that class was queued; an agent of the class claims it. */
 export const RUNS_QUEUED_CHANNEL = 'movy_runs';
 
+/**
+ * `{runId}` — a run was settled by something that emitted no event for it:
+ * the sweeper, after its runner vanished. A watching client would otherwise
+ * show it running forever, because only events reach a live socket.
+ */
+export const RUN_SETTLED_CHANNEL = 'movy_run_settled';
+
 /** `{runId}` — a user asked to cancel a running run; only the agent holding it acts. */
 export const RUN_CANCEL_CHANNEL = 'movy_run_cancel';
 

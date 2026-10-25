@@ -1,5 +1,5 @@
 import type { OrgRole } from '../db/schema';
-import type { WireEvent } from '../../shared/run-wire';
+import type { WireEvent, WireRunStatus } from '../../shared/run-wire';
 import { mayReadLogs } from '../serializers/run.serializer';
 
 /**
@@ -163,6 +163,19 @@ export class RunHub {
       if (payload.length === 0) continue;
 
       const frame = JSON.stringify({ k: 'events', runId, events: payload });
+      for (const member of members) this.deliver(member, frame);
+    }
+  }
+
+  /**
+   * A status change no event carried, to every room of the run. The frame
+   * holds only fields every cohort may see, so it is not split.
+   */
+  publishStatus(run: WireRunStatus): void {
+    const rooms = this.byRun.get(run.id);
+    if (!rooms) return;
+    const frame = JSON.stringify({ k: 'run_status', run });
+    for (const members of rooms.values()) {
       for (const member of members) this.deliver(member, frame);
     }
   }

@@ -38,7 +38,7 @@ export {
 } from './runner-classes';
 export type { RunnerClassConfig } from './runner-classes';
 export {
-  PROBES_CHANNEL, PROBE_DONE_CHANNEL, RUNS_QUEUED_CHANNEL, RUN_CANCEL_CHANNEL, parseEventPointer, parseStringField,
+  PROBES_CHANNEL, PROBE_DONE_CHANNEL, RUNS_QUEUED_CHANNEL, RUN_CANCEL_CHANNEL, RUN_SETTLED_CHANNEL, parseEventPointer, parseStringField,
 } from './channels';
 export {
   abandonProbe, claimProbe, completeProbe, enqueueProbe, probeRunnerAvailable, takeProbeResult,

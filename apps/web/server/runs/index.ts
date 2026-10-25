@@ -17,6 +17,7 @@ import {
   PROBE_DONE_CHANNEL,
   RUNS_QUEUED_CHANNEL,
   RUN_CANCEL_CHANNEL,
+  RUN_SETTLED_CHANNEL,
   PgListener,
   ProbeWorker,
   RunnerAgent,
@@ -126,6 +127,40 @@ export function useRunEventFeed(): RunEventFeed {
   return feed;
 }
 
+/**
+ * The sweeper settled a run with no event, so the feed has nothing to read:
+ * the row is re-read and its status pushed. A missed NOTIFY leaves a client
+ * no worse than before — its next reconnect reads the snapshot.
+ */
+async function publishSettledStatus(runId: string): Promise<void> {
+  const hub = useRunHub();
+  if (!hub.isWatching(runId)) return;
+  try {
+    const [row] = await useDb()
+      .select({
+        id: runs.id,
+        status: runs.status,
+        errorName: runs.errorName,
+        errorMessage: runs.errorMessage,
+        startedAt: runs.startedAt,
+        finishedAt: runs.finishedAt,
+      })
+      .from(runs)
+      .where(eq(runs.id, runId))
+      .limit(1);
+    if (!row) return;
+    hub.publishStatus({
+      id: row.id,
+      status: row.status,
+      error: row.errorMessage ? { name: row.errorName ?? 'Error', message: row.errorMessage } : null,
+      startedAt: row.startedAt?.toISOString() ?? null,
+      finishedAt: row.finishedAt?.toISOString() ?? null,
+    });
+  } catch (err) {
+    console.error(`[runs] settled status for ${runId}:`, err instanceof Error ? err.message : err);
+  }
+}
+
 /** Runner availability for the org home and runs page. */
 export function useRunnerHub(): RunnerHub {
   if (!runnerHub) {
@@ -158,8 +193,8 @@ export function useBusListener(): PgListener {
       // The queued and cancel channels matter only to this host's embedded
       // agent, for a run launched or cancelled through another web replica.
       channels: embeddedConfig()
-        ? [RUN_EVENTS_CHANNEL, RUNNERS_CHANNEL, PROBES_CHANNEL, PROBE_DONE_CHANNEL, RUNS_QUEUED_CHANNEL, RUN_CANCEL_CHANNEL]
-        : [RUN_EVENTS_CHANNEL, RUNNERS_CHANNEL, PROBES_CHANNEL, PROBE_DONE_CHANNEL],
+        ? [RUN_EVENTS_CHANNEL, RUN_SETTLED_CHANNEL, RUNNERS_CHANNEL, PROBES_CHANNEL, PROBE_DONE_CHANNEL, RUNS_QUEUED_CHANNEL, RUN_CANCEL_CHANNEL]
+        : [RUN_EVENTS_CHANNEL, RUN_SETTLED_CHANNEL, RUNNERS_CHANNEL, PROBES_CHANNEL, PROBE_DONE_CHANNEL],
       onNotification: (channel, payload) => {
         if (channel === RUNNERS_CHANNEL) {
           void useRunnerHub().refresh();
@@ -177,6 +212,11 @@ export function useBusListener(): PgListener {
         if (channel === RUN_CANCEL_CHANNEL) {
           const runId = parseStringField(payload, 'runId');
           if (runId) void useRunnerAgent()?.cancel(runId);
+          return;
+        }
+        if (channel === RUN_SETTLED_CHANNEL) {
+          const runId = parseStringField(payload, 'runId');
+          if (runId) void publishSettledStatus(runId);
           return;
         }
         if (channel === PROBE_DONE_CHANNEL) {

@@ -6,6 +6,7 @@ import {
   type ServerFrame,
   type WireEvent,
   type WireRun,
+  type WireRunStatus,
   type WireStep,
   type WireTable,
 } from '#shared/run-wire'
@@ -249,6 +250,8 @@ export function applyFrame(state: RunState, frame: ServerFrame): RunState {
       return applySnapshot(frame)
     case 'events':
       return applyEvents(state, frame.events)
+    case 'run_status':
+      return applyRunRow(state, frame.run)
     case 'cohort_changed':
       // Say so rather than letting the log pane simply stop: an empty pane
       // that used to have content reads as a bug, not as a permission change.
@@ -269,7 +272,7 @@ const STATUS_RANK: Record<string, number> = {
  * response arriving after the socket has moved on must not un-finish a run —
  * and leaves steps, tables and logs to the events.
  */
-export function applyRunRow(state: RunState, row: WireRun): RunState {
+export function applyRunRow(state: RunState, row: WireRunStatus): RunState {
   const current = state.run
   if (!current || current.id !== row.id) return state
   if ((STATUS_RANK[row.status] ?? -1) <= (STATUS_RANK[current.status] ?? -1)) return state

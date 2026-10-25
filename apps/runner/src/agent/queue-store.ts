@@ -8,7 +8,7 @@
  * already satisfy it — so the tests run this exact SQL, not a mock of it.
  */
 
-import { RUNNERS_CHANNEL } from './channels';
+import { RUNNERS_CHANNEL, RUN_SETTLED_CHANNEL } from './channels';
 
 /** What both `pg.Pool` and PGlite provide. */
 export interface SqlClient {
@@ -308,6 +308,10 @@ export async function sweep(sql: SqlClient, offlineAfterMs = DEFAULT_OFFLINE_AFT
           AND lease_expires_at < now()
         RETURNING id
      ),
+     -- No event says so, so the consoles watching these runs are told here.
+     settled_announced AS (
+       SELECT pg_notify('${RUN_SETTLED_CHANNEL}', json_build_object('runId', id)::text) FROM settled
+     ),
      forgotten AS (
        DELETE FROM runners
         WHERE (SELECT ok FROM lock) AND state = 'offline'
@@ -324,6 +328,7 @@ export async function sweep(sql: SqlClient, offlineAfterMs = DEFAULT_OFFLINE_AFT
      )
      SELECT (SELECT ok FROM lock) AS swept,
             (SELECT count(*) FROM announced) AS announced,
+            (SELECT count(*) FROM settled_announced) AS settled_announced,
             (SELECT array_agg(id) FROM offline) AS offline,
             (SELECT array_agg(id) FROM settled) AS settled`,
     [interval(offlineAfterMs), RUNNER_VANISHED]
