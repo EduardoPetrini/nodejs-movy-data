@@ -1,6 +1,6 @@
 # Web UI — progress and handoff
 
-Working branch: **`feat/monorepo-restructure`**.
+Working branch: **`feat/runner-service-phase-0`** (runner service plan R0–R6).
 Plan: `~/.claude-personal/plans/let-s-a-web-ui-vectorized-codd.md` — **no longer
 on disk** (checked 2026-10-22). Every phase it described is closed; this file is
 now the only record of them.
@@ -25,7 +25,7 @@ phase is indistinguishable from one that was never started.
 
 ## Status board
 
-*Last reviewed: 2026-10-23. 1472 unit tests (113 files) green; Compose E2E green at 23/23 (R5).*
+*Last reviewed: 2026-10-25. 1528 unit tests (121 files) green; Compose E2E green at 26/26 (R6).*
 
 | Phase | State | Notes |
 |-------|-------|-------|
@@ -45,6 +45,7 @@ phase is indistinguishable from one that was never started.
 | R3 — NOTIFY bus and runner availability | **DONE** (2026-10-22) | events reach the hub through `LISTEN movy_run_events` (the in-process `onFlushed` path is gone); runners socket, ticket and panel on the org home and runs page. See *R3* below. Next: R4 (destination lock and classes) |
 | R4 — destination lock and runner classes | **DONE** (2026-10-23) | one run per destination (`target_lock_key`, migration `0005`) and why a run is queued; classes from `MOVY_RUNNER_CLASSES_FILE`, a class per definition and a Runner selector (`0006`); source size in bytes on the preview and a class suggestion. Gate: `pnpm docker:e2e` 19/19. See *R4* below. Next: R5 (probes) |
 | R5 — probes: Test and Preview from a runner | **DONE** (2026-10-23) | migration `0007` (`runner_probes`, `runners.probe_slots`, `connections.last_test_via`); executors in `@movy/runner/probes` shared by the in-request path and the agent's `ProbeWorker`; `via: 'web' | <class>` on both Test routes and on preview; 503 `no_runner`, 504 on silence; "Test from" and "Inspect from" selectors. Gate: `pnpm docker:e2e` 23/23. See *R5* below. Next: R6 (runner services) |
+| R6 — runner services and provisioning in Compose | **DONE** (2026-10-25) | `movy-runner-agent` as `runner-default`/`runner-large` under the least-privilege `movy_runner` role (`docker/runner.env`); `web` no longer forks; NOTIFY wakes agents on launch and cancel; `manual` and opt-in `docker` provisioners, Start a runner (`runner:scale`), auto mode, idle exit. Found and fixed: an agent wedged after a network partition (query timeouts), clone swap limit. Gate: the plan's Verification list in Compose, `pnpm docker:e2e` 26/26. See *R6* below. Next: R7 (Kubernetes) or R8 (runner classes in the UI) |
 
 ### Remaining work
 
@@ -1559,3 +1560,107 @@ re-run treats `decimal` and `numeric` as one type.
   text then includes every option. The spec matches `getByRole('combobox', { name })`,
   which uses the computed accessible name. Both selectors checked at 1280 and 375: no
   page overflow; the connections table scrolls inside its own container, as before.
+
+## R6 — runner services and provisioning in Compose (2026-10-25)
+
+- **Why**: until now every run still executed inside the web container (the embedded
+  agent). A console restart, an OOM in a big migration, or a runner that needs a
+  different network all took the console with them.
+- **`movy-runner-agent`** (`apps/runner/src/agent-main.ts`): the same `RunnerAgent`,
+  `RunManager`, `EventWriter` and `ProbeWorker` the console embeds, wired from the
+  environment by `readAgentConfig` (pure; a bad value is refused at boot with exit 64,
+  never defaulted). No port. It LISTENs on two new channels, `movy_runs {runnerClass}`
+  (sent in the enqueue transaction) and `movy_run_cancel {runId}` (sent by
+  `requestCancel`), plus `movy_probes`; the web listener forwards the same two to an
+  embedded agent, for a run launched through another replica. `PgListener` moved into
+  `@movy/runner/agent`. `agent.cancel` is now idempotent per run, since a NOTIFY and the
+  console's fast path can both deliver one.
+- **Least privilege**: `movy_runner` is created — or its password reset — by the `migrate`
+  service after the migrations (`ensureRunnerRole`, `RUNNER_GRANTS` in `@movy/db`).
+  `REVOKE ALL` then the list, so a dropped grant is dropped from a live deployment too.
+  Tighter than the plan: no INSERT on `runs` or `runner_probes`. Runners read
+  `docker/runner.env` only (role URL + encryption key), never `movy.env`.
+- **Compose**: `web` lost `init`, `MOVY_RUNNER_ENTRY`, `MOVY_JOURNAL_DIR` and the journals
+  volume and sets `MOVY_EMBEDDED_RUNNER=false`. `runner-default` (1 replica, 2 slots) and
+  `runner-large` (0) with `init`, `stop_grace_period: 2m`, replica-local journals and the
+  `movy.runner-template` label. `docker-compose.provisioner.yml` mounts the socket into
+  `web` as root, with `MOVY_PROVISIONER=docker` and `MOVY_AUTOSCALE=true`. Scripts:
+  `docker:scale N`, `docker:up:provisioner`; `docker:down` removes provisioned runners
+  first (Compose does not know them, and they hold the network).
+- **Provisioning** (`server/runners/`): `ManualProvisioner` answers
+  `docker compose up -d --scale runner-<class>=<n+1>` (`MOVY_PROVISIONER_COMMAND`
+  overrides it); `DockerProvisioner` clones a template container through the Engine API
+  (`docker-engine.ts`, five calls, no library) with the class's limits, no restart
+  policy, no Compose labels, `movy.provisioned` and `MOVY_RUNNER_PROVISIONED_BY=docker`.
+  `POST …/runners/scale` needs the new `runner:scale` (admin only). The sweeper replica
+  removes exited clones and, in auto mode, scales a class with queued work that is not
+  blocked on its destination, no free slot and room under `max_replicas`, once per 60 s.
+- **UI**: `StartRunner.vue` under a `no_runner` queue notice and beside "Test from" /
+  "Inspect from" on a class with nobody online; absent without `runner:scale`. The
+  manual answer is a read-only command with Copy.
+- **Tests**: config (7), idle watch (2), self-fencing (3), idempotent cancel, re-attach
+  scoping, the busy reset; the role against PGlite *as the role* — every table outside
+  the grant list refused, structurally, so a new table is covered — and every agent
+  statement run as `movy_runner` (5); provisioners (15, incl. the clone body), auto mode
+  (4), capacity and demand SQL (4), `scaleSentence`, `runner:scale`; the agent binary's
+  boot refusals as a process (2). E2E `runner-services.spec.ts` (Compose only): a run is
+  claimed by a container, never `embedded-*`; an admin offered a runner gets the command
+  (or, under the override, a started runner); an editor is not offered one and gets 403.
+
+### The bugs this work found
+
+- **A network partition left the agent heartbeating but never claiming again.** A query
+  sent on a socket that died in the partition never settles — `pg` has no client-side
+  timeout by default — and `wake()` kept returning that pending `claiming` promise.
+  Heartbeats took fresh connections, so the runner looked healthy in the panel while the
+  next run sat `starting` forever. Fixed with a 30 s `query_timeout` and
+  `connectionTimeoutMillis` on the agent's pool (`createDb` options) and TCP keepalive
+  on the pool and the LISTEN connection; the stuck queries now fail as
+  "Query read timeout" and the next wake claims. Found only by
+  `docker network disconnect` — no unit test models a socket that never answers.
+- **The docker provisioner could not start a large runner.** The clone copied the
+  template's `MemorySwap` (sized for the 1 GB default runner) and raised `Memory` to 8 GB;
+  Docker refuses swap below memory. The clone's swap is now its own memory.
+- **An offline runner kept its last `busy` count**, so the admin list showed a stopped
+  runner as busy. `setRunnerState('offline')` zeroes it.
+- **Not a bug, a gap closed**: an agent cut off from the database kept its runs going
+  until it could hear the sweeper had settled them. It now stops them itself once a full
+  lease passes without a successful heartbeat — before, or as, the sweeper settles them.
+
+### Verified (Compose, 2026-10-25)
+
+Against the plan's Verification list:
+
+1. `pnpm docker:up`: every service healthy or exited 0; `migrate` logged
+   `movy_runner is up to date`; the runner registered as the role. ✔
+2. `docker compose stop runner-default` with nothing running: offline at once (it says
+   so itself on the way out, rather than waiting 20 s for the sweeper). ✔
+3. Large run with no large runner: `queued: no runner`, Start a runner → the command
+   (manual); under the override → a container, which claimed the run. ✔
+4. Two orgs, one `movy_dst`, real PG→PG runs: the second showed `destination_busy` with
+   no run named (another org's), then ran a second after the first settled; both
+   succeeded. ✔
+5. `docker compose restart web` mid-run: the run finished `succeeded`, events 1…118, no
+   gap, no duplicate, read back through the API. The browser reload is
+   `run-lifecycle.spec.ts`. ✔
+6. `docker compose kill runner-default` mid-run: `failed` / `RunnerVanished` with the
+   partially-applied message ~32 s after the kill (lease 30 s + one sweep); not retried. ✔
+7. `docker network disconnect` for 45 s mid-run, then reconnect: the agent logged the
+   fence, no runner process survived, no events after the settle, and — after the fix
+   above — the next run was claimed within 4 s. Simulated, so "no writes to `movy_dst`"
+   is shown by the fence rather than by row counts. ✔
+8. `docker compose stop runner-default` mid-run: drained 14 s, the run `succeeded`. ✔
+9. Size suggestion: R4. A large run launched with zero large runners was claimed by the
+   runner auto mode started ~10 s later. ✔
+10. Test from `large` with none: 503 in 3 ms → Start a runner → registered in 1 s with
+    8 GB / 4 CPUs / no restart → retry `ok`, connection shows `via: large`. Editor: 403. ✔
+11. Viewer counts without ids: `runner-availability.spec.ts`. ✔
+12. `pnpm docker:down && pnpm docker:up`: users, orgs, connections, definitions, runs and
+    run events identical before and after. `down -v` not run against a working meta-db;
+    it is Compose's own volume removal. ✔
+- **Idle exit**: the clone auto mode started exited 0 ten minutes after its last run
+  (12:03:44 → 12:13:44), the sweeper removed it within 10 s, and its row went offline
+  with `busy = 0`. Class cap: a second Start while at `max_replicas` answered
+  `at_capacity` and started nothing. ✔
+13. `pnpm docker:e2e` 26/26 (23 + 3 in `runner-services.spec.ts`); `pnpm test` 1528/1528;
+    `pnpm test:coverage` above its floor (66.83 / 57.7 / 68.69 / 67.58).

@@ -37,22 +37,35 @@ pnpm docker:init             # once: docker/*.env with fresh secrets; never over
 pnpm docker:up               # build + start + wait healthy → http://localhost:3000
 pnpm docker:e2e              # Playwright in a container, incl. a live PG→PG run
 pnpm docker:cli              # interactive CLI inside movy-net
+pnpm docker:scale 1          # runner-large replicas (0 by default)
+pnpm docker:up:provisioner   # + docker-compose.provisioner.yml: the console starts runners itself
+pnpm docker:down             # removes provisioned runners first, then `compose down`
 ```
 
 **Compose rules** (`docker-compose.yml`, `docker/`):
-- One image (`docker/Dockerfile`, target `runtime`) serves web, runner and CLI. `migrate`
-  and `seed` use the `build` target because drizzle-kit and tsx are devDependencies.
+- One image (`docker/Dockerfile`, target `runtime`) serves web, the runner agents and the
+  CLI. `migrate` and `seed` use the `build` target because drizzle-kit and tsx are
+  devDependencies.
 - **Inside the stack, databases are service names** (`pg-lab:5432`). `localhost` in a
   connection means the web container itself.
 - The `e2e` service uses `network_mode: service:web`. The session cookie is `Secure`,
   and a browser sends it over plain HTTP only to `localhost`, so at `http://web:3000`
   sign-in would silently not stick. Do not "fix" this by weakening the cookie.
 - Compose never reads the root `.env`, which belongs to the CLI. Its env files are
-  `docker/{movy,meta-db,lab,cli}.env`, and regenerating `NUXT_ENCRYPTION_KEY` makes every
-  saved connection undecryptable, which is why `docker:init` refuses to overwrite.
-- Until phase 6 of `docs/runner-service-plan.md`, `web` runs the **embedded** runner agent,
-  which forks the runner, so it carries `init: true` (a zombie runner would pass the
-  liveness check) and the journal volume.
+  `docker/{movy,meta-db,lab,cli,runner}.env`, and regenerating `NUXT_ENCRYPTION_KEY` makes
+  every saved connection undecryptable, which is why `docker:init` refuses to overwrite.
+  It creates only the files that are missing, so re-running it after a pull is safe.
+- **`web` runs no migration** (`MOVY_EMBEDDED_RUNNER=false`). `runner-default` (one
+  replica) and `runner-large` (zero) run `apps/runner/dist/agent-main.js` with
+  `init: true` (a zombie runner would pass the liveness check) and a 2-minute
+  `stop_grace_period` (= drain). **A runner gets `docker/runner.env` only** — the
+  `movy_runner` role and the encryption key, never `movy.env` with the owner's password
+  and the session secret. `migrate` creates that role and its grants after the migrations
+  (`packages/db/scripts/runner-role.ts`, `RUNNER_GRANTS`).
+- `docker-compose.provisioner.yml` mounts the Docker socket into `web` (root on the host:
+  opt-in only) and turns on `MOVY_PROVISIONER=docker` and auto mode. A clone is copied from
+  a container labelled `movy.runner-template`, takes its class's limits, carries no Compose
+  labels (so Compose never counts it) and exits after 10 idle minutes; the sweeper removes it.
 
 ## Architecture
 
@@ -326,8 +339,8 @@ and `runs`, plus `run_events` and the two projections `run_steps` /
 | `server/runs/index.ts` | Wires the agent modules above to `useDb()` and the hub. Imports `@movy/runner/agent`. |
 
 **Run control lives in `apps/runner/src/agent/`, not in the web app** (phase 1 of
-`docs/runner-service-plan.md`). The web console still forks every run through it; the
-runner agent of phase 2 will run the same modules. The schema, migrations, `createDb()`
+`docs/runner-service-plan.md`). The embedded agent in the web console and the standalone
+`movy-runner-agent` (`src/agent-main.ts`, phase 6) run the same modules. The schema, migrations, `createDb()`
 and the connection-secret crypto are `@movy/db`, which both share.
 `server/db/schema/index.ts`, `server/db/client.ts` and `server/utils/crypto.ts` re-export
 it, so the web app's imports did not move. `pnpm db:migrate` / `db:generate` run in
@@ -445,6 +458,36 @@ The queue SQL is tested against **PGlite with the real migrations**
 racing; `SKIP LOCKED` under true concurrency belongs to the Compose meta-db. PGlite is a
 **root** devDependency on purpose: added to `@movy/db`, it split `drizzle-orm` into two
 installed variants and broke type identity between packages.
+
+### Runner services (phase 6)
+
+`apps/runner/src/agent-main.ts` (bin `movy-runner-agent`) is the agent as its own
+process: the same `RunnerAgent`, `RunManager`, `EventWriter` and `ProbeWorker`, wired from
+the environment (`readAgentConfig`, which refuses a bad value at boot, exit 64, rather
+than default it). It listens on no port; it LISTENs on `movy_runs` (`{runnerClass}`, sent
+at enqueue), `movy_run_cancel` (`{runId}`, sent by `requestCancel`) and `movy_probes`.
+
+- **Its pool has a 30 s client-side query timeout and TCP keepalive.** Found by the
+  partition step of the Compose gate: a query sent on a socket that died in a network
+  partition never settles, `wake()` kept returning that `claiming` promise, and the agent
+  heartbeated happily while never claiming again. Every agent statement is short.
+- **It fences itself.** No successful heartbeat for a whole lease (`leaseMs`) means the
+  sweeper may already have settled its runs, so it terminates them without waiting to
+  hear so from a database it cannot reach.
+- **Re-attach is scoped to its own runs** (`includeOwnerless: false`); ownerless pre-0004
+  runs were forked by a web console and are the embedded agent's to adopt.
+- **Idle exit only when provisioned** (`MOVY_RUNNER_PROVISIONED_BY`): no run AND no probe
+  for `MOVY_RUNNER_IDLE_EXIT_MS` (10 min). A baseline replica never removes itself.
+- **Provisioning** (`server/runners/`): `RunnerProvisioner` is `manual` (answers the
+  command) or `docker` (Engine API over the socket, no client library). `POST
+  …/runners/scale` needs `runner:scale` — admins only, since runners are shared by every
+  org. The docker provisioner counts a started-but-unregistered clone by its container id
+  (= the runner id, its hostname), so two clicks cannot pass `max_replicas`. **Auto mode**
+  (`MOVY_AUTOSCALE=true`) runs on the replica that won the sweep: a class with queued work
+  not blocked on its destination, no free slot and room under its cap, once per 60 s.
+- **`StartRunner.vue`** is offered where `no_runner` is the reason: the queue notice and
+  "Test from"/"Inspect from" on a class with nobody online. Absent, not disabled, without
+  the permission.
 
 **`reattach()` is not a one-shot read.** IPC dies with the old host and cannot be
 re-established, so a run still in flight after a restart is *followed* — its

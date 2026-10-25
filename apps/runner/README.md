@@ -79,9 +79,29 @@ interrupted from Node without per-driver support.
 The code that forks this process, reads its IPC and journal, and folds the events
 into the metadata database lives here too, exported as `@movy/runner/agent`:
 `RunManager`, `EventWriter`, `projectEvents`, the journal tailer and the ingestion
-helpers. The web console uses it today and still forks every run itself; the runner
-agent in `docs/runner-service-plan.md` (phase 2) will run the same modules, which is
-why they sit beside the contract they implement rather than in the web app.
+helpers, and `RunnerAgent`, which claims queued runs from the metadata database. The
+web console can run an agent in-process (embedded); `src/agent-main.ts` is the same
+agent as its own process — `movy-runner-agent`, what the Compose runner services run.
+That is why the modules sit beside the contract they implement rather than in the web app.
+
+```bash
+MOVY_DATABASE_URL=postgres://movy_runner:…@meta-db:5432/movy_data \
+MOVY_ENCRYPTION_KEY=… MOVY_RUNNER_CLASS=default node dist/agent-main.js
+```
+
+| Variable | Default | |
+|---|---|---|
+| `MOVY_DATABASE_URL` (or `NUXT_DATABASE_URL`) | — | The meta-db, as the `movy_runner` role. Required. |
+| `MOVY_ENCRYPTION_KEY` (or `NUXT_ENCRYPTION_KEY`) | — | The console's key; every run spec is sealed with it. Required. |
+| `MOVY_RUNNER_CLASS` | `default` | The class it claims runs and probes for. |
+| `MOVY_RUNNER_ID` | hostname | Stable across restarts, so it re-attaches to its own runs. |
+| `MOVY_RUNNER_SLOTS` / `MOVY_RUNNER_PROBE_SLOTS` | 1 / 2 | Runs and probes at once. |
+| `MOVY_JOURNAL_DIR` | `$TMPDIR/movy-journals` | Replica-local journals. |
+| `MOVY_RUNNER_DRAIN_MS` | 110000 | How long SIGTERM waits for live runs. Never cancels one. |
+| `MOVY_RUNNER_PROVISIONED_BY` | unset | Set by a provisioner; only then does it exit when idle… |
+| `MOVY_RUNNER_IDLE_EXIT_MS` | 600000 | …after this long with no run and no probe. |
+
+A bad value is refused at boot with exit 64, naming the variable.
 
 ## Tests
 

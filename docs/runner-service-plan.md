@@ -1,7 +1,7 @@
 # Plan: Runners as an independent, scalable service (with Docker Compose)
 
-> **Status (2026-10-23): phases 0–5 built**; 6–8 to go. Progress and what each phase
-> found: `docs/web-ui-progress.md` (R0–R4). Decisions are recorded in
+> **Status (2026-10-25): phases 0–6 built**; 7–8 to go. Progress and what each phase
+> found: `docs/web-ui-progress.md` (R0–R6). Decisions are recorded in
 > [ADR 0004](adr/0004-runner-service.md). This plan absorbs the earlier
 > Docker plan: Compose foundations are Phase 0, runner services are Phase 6.
 
@@ -460,6 +460,26 @@ Each phase leaves `pnpm test`, `pnpm typecheck` and the existing e2e green.
    - `manual` and `docker` provisioners, auto mode, idle exit, `runner:scale`.
    - New compose-only e2e specs (below).
    - *Gate:* the Verification list below.
+   - *As built (2026-10-25), seven deviations.* (1) The role and its grants are applied by
+     the `migrate` service (`packages/db/scripts/runner-role.ts` after the migrations), not
+     by migration 0004 plus a `docker/meta-db` init script: a migration cannot know the
+     password, an init script runs only on a fresh volume, and this way a changed password
+     or grant reaches an existing deployment. The grants are tighter than *Least
+     privilege* below — no INSERT on `runs` or `runner_probes`, which only the console
+     writes. (2) Runners get their own `docker/runner.env` (role URL + encryption key),
+     never `movy.env`. (3) The docker provisioner clones from any container labelled
+     `movy.runner-template`, preferring the class's own service: `runner-large` runs zero
+     replicas, so `com.docker.compose.service=runner-large` usually finds nothing. Limits
+     come from the class row; Compose labels are dropped so Compose never counts a clone.
+     (4) The cancel NOTIFY is `movy_run_cancel {runId}` — every agent checks it holds the
+     run, so it needs no runner id — and enqueue sends `movy_runs {runnerClass}`. (5) An
+     agent fences ITSELF after a lease with no successful heartbeat, and its pool has a
+     30 s query timeout: the partition step found an agent that recovered its heartbeat
+     but never claimed again (see `docs/web-ui-progress.md`, R6). (6) Auto mode does not
+     count a run waiting only on its destination. (7) One Compose-only spec,
+     `runner-services.spec.ts`, instead of three: restarting `web`, killing a runner and
+     partitioning one need the Docker API from inside the test, which the e2e container
+     does not have, so steps 5–7 were run by hand and recorded.
 7. **Kubernetes** (later):
    - A Deployment per class with requests/limits, from the same image.
    - KEDA `ScaledObject` per class, PostgreSQL trigger `SELECT count(*) FROM runs WHERE runner_class='large' AND status IN ('queued','running')`, `minReplicaCount: 0` for `large`.

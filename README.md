@@ -243,6 +243,7 @@ pnpm docker:init   # once: writes docker/*.env with fresh secrets (never overwri
 pnpm docker:up     # build, start, wait until healthy → http://localhost:3000
 pnpm docker:cli    # the interactive CLI, pre-filled for lab MySQL → lab PostgreSQL
 pnpm docker:e2e    # Playwright against the running stack, incl. a real migration
+pnpm docker:scale 1  # one runner of the large class (0 by default)
 pnpm docker:down   # stop; add -v to `docker compose down` to reset all data
 ```
 
@@ -268,6 +269,16 @@ internal ports, so nothing else changes.
 container, so a connection saved in the console is `pg-lab:5432`, never
 `localhost:5433`, which is the web container itself. A database running on your machine
 outside Docker is `host.docker.internal`.
+
+**Runs execute on runner services, not in the console.** `runner-default` (one replica)
+claims every run of the default class; `runner-large` runs none until scaled
+(`pnpm docker:scale 1`). Where a run waits because no runner of its class is online, an
+admin is offered **Start a runner**, which shows the command to run. To let the console
+start runners itself (and start one automatically for queued work), use
+`pnpm docker:up:provisioner` — it mounts the Docker socket into the console, which is root
+on the host, so keep it to a machine of your own. Runners started that way leave after ten
+idle minutes. `docker compose stop runner-default` lets a live run finish first (up to
+two minutes); it never cancels one.
 
 Only `meta-db` keeps its data across `down`/`up`. The lab databases are re-seeded
 whenever their volumes are recreated. SQL Server has no arm64 image: on Apple Silicon it
