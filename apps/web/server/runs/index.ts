@@ -6,6 +6,7 @@ import { metaDatabaseUrl, useDb } from '../db/client';
 import { runEvents, runs } from '../db/schema';
 import { toPublicEvent } from '../serializers/run.serializer';
 import { RunEventFeed } from './run-event-feed';
+import { readEmbeddedRunnerConfig, type EmbeddedRunnerConfig } from './embedded-config';
 import { RunnerHub, type RunnersGrant } from '../runners/runner-hub';
 import { loadRunnersSnapshot } from '../runners/runner-summary';
 import {
@@ -153,7 +154,7 @@ export function useBusListener(): PgListener {
       connectionString: metaDatabaseUrl(),
       // The queued and cancel channels matter only to this host's embedded
       // agent, for a run launched or cancelled through another web replica.
-      channels: isEmbeddedRunner()
+      channels: embeddedConfig()
         ? [RUN_EVENTS_CHANNEL, RUNNERS_CHANNEL, PROBES_CHANNEL, PROBE_DONE_CHANNEL, RUNS_QUEUED_CHANNEL, RUN_CANCEL_CHANNEL]
         : [RUN_EVENTS_CHANNEL, RUNNERS_CHANNEL, PROBES_CHANNEL, PROBE_DONE_CHANNEL],
       onNotification: (channel, payload) => {
@@ -230,10 +231,11 @@ export function useProbeWaiters(): ProbeWaiters {
  * host's class. Undefined when this host runs no agent.
  */
 export function useProbeWorker(): ProbeWorker | undefined {
-  if (!isEmbeddedRunner()) return undefined;
+  const config = embeddedConfig();
+  if (!config) return undefined;
   probeWorker ??= new ProbeWorker({
-    queue: sqlProbeQueue(useMetaSql(), embeddedRunnerId(), embeddedRunnerClass()),
-    slots: probeSlots(),
+    queue: sqlProbeQueue(useMetaSql(), embeddedRunnerId(), config.runnerClass),
+    slots: config.probeSlots,
     onError: (err, probeId) => console.error(`[probes] ${probeId ?? 'worker'}:`, err.message),
   });
   return probeWorker;
@@ -251,8 +253,20 @@ export function isEmbeddedRunner(): boolean {
   return process.env.MOVY_EMBEDDED_RUNNER !== 'false';
 }
 
-export function embeddedRunnerClass(): string {
-  return process.env.MOVY_RUNNER_CLASS || 'default';
+let embedded: EmbeddedRunnerConfig | undefined;
+
+/**
+ * The embedded agent's class and slots, or null when it runs none: switched
+ * off, or misconfigured — refused by the runner service's own rules, logged
+ * once, and then off, rather than run on a default nobody chose.
+ */
+export function embeddedConfig(): (EmbeddedRunnerConfig & { ok: true }) | null {
+  if (!isEmbeddedRunner()) return null;
+  if (!embedded) {
+    embedded = readEmbeddedRunnerConfig(process.env);
+    if (!embedded.ok) console.error(`[runs] embedded runner off: ${embedded.message}`);
+  }
+  return embedded.ok ? embedded : null;
 }
 
 /** Stable across restarts of this host, so it re-attaches to its own runs. */
@@ -272,7 +286,8 @@ export function useMetaSql(): SqlClient {
  * live child processes, which outlive any one request by definition.
  */
 export function useRunnerAgent(): RunnerAgent | undefined {
-  if (!isEmbeddedRunner()) return undefined;
+  const config = embeddedConfig();
+  if (!config) return undefined;
   if (!agent) {
     const db = useDb();
     const sql = useMetaSql();
@@ -312,13 +327,13 @@ export function useRunnerAgent(): RunnerAgent | undefined {
     agent = new RunnerAgent({
       queue: sqlAgentQueue(sql, {
         id: runnerId,
-        runnerClass: embeddedRunnerClass(),
+        runnerClass: config.runnerClass,
         version: `spec-v${SUPPORTED_SPEC_VERSIONS.join(',')}`,
-        slots: runnerSlots(),
-        probeSlots: probeSlots(),
+        slots: config.slots,
+        probeSlots: config.probeSlots,
       }),
       control: manager,
-      slots: runnerSlots(),
+      slots: config.slots,
       journalPathFor,
       simulationFixture: findSimulationFixture,
       onError: (err, runId) => console.error(`[runs] agent${runId ? ` (${runId})` : ''}:`, err.message),
@@ -332,24 +347,6 @@ export function useRunnerAgent(): RunnerAgent | undefined {
 /** Closes the writer the embedded agent feeds, after the agent has stopped. */
 export async function closeEventWriter(): Promise<void> {
   await writer?.close();
-}
-
-/**
- * Runs the embedded agent executes at once (`MOVY_RUNNER_SLOTS`, default 4).
- * The org's `max_concurrent_runs` is still the gate at launch; this is the
- * host's own limit, so one busy org cannot occupy every process on it.
- */
-function runnerSlots(): number {
-  const n = Number(process.env.MOVY_RUNNER_SLOTS);
-  return Number.isInteger(n) && n > 0 ? n : 4;
-}
-
-/** Probes answered at once (`MOVY_RUNNER_PROBE_SLOTS`, default 2; 0 answers none). */
-function probeSlots(): number {
-  const raw = process.env.MOVY_RUNNER_PROBE_SLOTS;
-  const n = Number(raw);
-  // `Number('')` is 0, which would silently turn probes off.
-  return raw && Number.isInteger(n) && n >= 0 ? n : 2;
 }
 
 /** Where this run's journal goes on this host (`MOVY_JOURNAL_DIR`, else `.movy/runs`). */
@@ -377,7 +374,7 @@ export function findSimulationFixture(): string | undefined {
  * own fixture, so without an embedded one there is nothing to check here.
  */
 export function assertSimulationAvailable(): void {
-  if (isEmbeddedRunner() && !findSimulationFixture()) {
+  if (embeddedConfig() && !findSimulationFixture()) {
     throw createError({
       statusCode: 503,
       statusMessage: 'No simulation recording is available on this host.',

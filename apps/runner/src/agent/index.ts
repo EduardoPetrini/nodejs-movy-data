@@ -47,6 +47,6 @@ export type { ProbeQueue, ProbeWorkerOptions } from './probe-worker';
 export { PgListener } from './pg-listener';
 export type { PgListenerOptions } from './pg-listener';
 export { journalPathIn } from './journal-path';
-export { AgentConfigError, readAgentConfig } from './agent-config';
-export type { AgentConfig } from './agent-config';
+export { AgentConfigError, readAgentConfig, readRunnerClass, readSlots } from './agent-config';
+export type { AgentConfig, SlotConfig } from './agent-config';
 export { IdleWatch } from './idle-watch';

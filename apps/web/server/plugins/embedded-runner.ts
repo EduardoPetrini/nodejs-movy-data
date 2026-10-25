@@ -1,4 +1,4 @@
-import { closeEventWriter, useMetaSql, useProbeWorker, useRunHub, useRunnerAgent } from '~~/server/runs';
+import { closeEventWriter, isEmbeddedRunner, useMetaSql, useProbeWorker, useRunHub, useRunnerAgent } from '~~/server/runs';
 import { ensureRunnerClasses } from '~~/server/runners/runner-classes';
 import { startWithRetry } from '~~/server/runs/start-with-retry';
 
@@ -25,7 +25,10 @@ export default defineNitroPlugin((nitro) => {
   let closing = false;
   const agent = useRunnerAgent();
   if (!agent) {
-    console.info('[runs] embedded runner off (MOVY_EMBEDDED_RUNNER=false): runs wait for an external runner.');
+    // A misconfigured one has already logged why it is off.
+    if (!isEmbeddedRunner()) {
+      console.info('[runs] embedded runner off (MOVY_EMBEDDED_RUNNER=false): runs wait for an external runner.');
+    }
   } else {
     // Its class may be one the class file defines, which must exist before it registers.
     void startWithRetry(

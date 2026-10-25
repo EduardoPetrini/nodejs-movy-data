@@ -38,6 +38,24 @@ export const DEFAULT_IDLE_EXIT_MS = 10 * 60_000;
 
 type Env = Readonly<Record<string, string | undefined>>;
 
+export interface SlotConfig {
+  readonly slots: number;
+  readonly probeSlots: number;
+}
+
+/**
+ * Both slot counts, by one rule for every agent: unset or empty is the
+ * caller's default, anything else a valid count or an `AgentConfigError`.
+ * The defaults differ by host — a runner service is sized per class, the
+ * console's embedded agent shares a bigger box — the reading never does.
+ */
+export function readSlots(env: Env, defaults: SlotConfig): SlotConfig {
+  return {
+    slots: integer(env, 'MOVY_RUNNER_SLOTS', defaults.slots, 1),
+    probeSlots: integer(env, 'MOVY_RUNNER_PROBE_SLOTS', defaults.probeSlots, 0),
+  };
+}
+
 /** `MOVY_RUNNER_CLASS`, or `default`; refused when the class file could never define it. */
 export function readRunnerClass(env: Env): string {
   const runnerClass = env.MOVY_RUNNER_CLASS || 'default';
@@ -64,8 +82,7 @@ export function readAgentConfig(env: Env, hostname: string = os.hostname()): Age
     databaseUrl,
     runnerId: env.MOVY_RUNNER_ID || hostname,
     runnerClass,
-    slots: integer(env, 'MOVY_RUNNER_SLOTS', 1, 1),
-    probeSlots: integer(env, 'MOVY_RUNNER_PROBE_SLOTS', 2, 0),
+    ...readSlots(env, { slots: 1, probeSlots: 2 }),
     journalDir: path.resolve(env.MOVY_JOURNAL_DIR || path.join(os.tmpdir(), 'movy-journals')),
     simulationFixture: fixture ? path.resolve(fixture) : undefined,
     drainMs: integer(env, 'MOVY_RUNNER_DRAIN_MS', DEFAULT_DRAIN_MS, 0),
