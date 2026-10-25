@@ -105,7 +105,9 @@ export async function setRunnerState(
   state: 'online' | 'draining' | 'offline'
 ): Promise<void> {
   await sql.query(
-    `WITH changed AS (UPDATE runners SET state = $2 WHERE id = $1 RETURNING class)
+    // Offline means nothing running here: a drained agent's last heartbeat may still count a run.
+    `WITH changed AS (UPDATE runners SET state = $2, busy = CASE WHEN $2 = 'offline' THEN 0 ELSE busy END
+                        WHERE id = $1 RETURNING class)
      SELECT pg_notify('${RUNNERS_CHANNEL}', json_build_object('runnerClass', class)::text) FROM changed`,
     [runnerId, state]
   );

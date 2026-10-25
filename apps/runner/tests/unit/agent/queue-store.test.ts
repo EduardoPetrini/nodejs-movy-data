@@ -303,6 +303,16 @@ describe('runner state announcements', () => {
   });
 });
 
+describe('setRunnerState', () => {
+  it('counts nothing busy on a runner that went offline, whatever its last heartbeat said', async () => {
+    await heartbeat(sql, 'agent-1', 1);
+    await setRunnerState(sql, 'agent-1', 'draining');
+    expect((await db.query(`SELECT busy FROM runners WHERE id = 'agent-1'`)).rows[0]).toEqual({ busy: 1 });
+    await setRunnerState(sql, 'agent-1', 'offline');
+    expect((await db.query(`SELECT state, busy FROM runners WHERE id = 'agent-1'`)).rows[0]).toEqual({ state: 'offline', busy: 0 });
+  });
+});
+
 describe('reattachableRuns', () => {
   it('lists its own unsettled runs and ownerless ones from before 0004, never a queued run', async () => {
     const mine = await enqueue();
