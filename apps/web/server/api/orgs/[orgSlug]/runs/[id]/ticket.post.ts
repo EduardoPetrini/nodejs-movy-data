@@ -23,7 +23,7 @@ export default defineEventHandler(async (event) => {
   const run = await createRepos(event).runs.findById(id);
   if (!run) throw createError({ statusCode: 404, statusMessage: 'Not Found' });
 
-  const { ticket, expiresInMs } = useTicketStore().mint({
+  const { ticket, expiresInMs } = await useTicketStore().mint({
     userId: org.userId,
     orgId: org.orgId,
     runId: run.id,

@@ -3,9 +3,11 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { applySnapshot, applyEvents } from '../../app/utils/run-reducer';
 import type { ServerFrame, WireEvent } from '../../shared/run-wire';
-import { RunHub, cohortFor } from '../../server/runs/run-hub';
+import { RunHub, cohortFor, readSubscriptionGrant } from '../../server/runs/run-hub';
 import type { HubPeer, SubscriptionGrant } from '../../server/runs/run-hub';
 import { TicketStore } from '../../server/runs/subscription-ticket';
+import type { SqlClient } from '@movy/runner/agent';
+import { freshMetaDb } from '../../../../packages/db/tests/helpers/meta-db';
 
 /** A socket that records what it was sent. */
 function fakePeer() {
@@ -125,14 +127,17 @@ describe('cross-org isolation', () => {
     expect(source).toMatch(/redeem\(/);
   });
 
-  it('routes a ticket grant straight into the room, with no client value in between', () => {
-    const tickets = new TicketStore();
+  it('routes a ticket grant straight into the room, with no client value in between', async () => {
+    const sql = (await freshMetaDb()) as unknown as SqlClient;
+    const tickets = new TicketStore({ sql, kind: 'runs', parse: readSubscriptionGrant });
     const hub = new RunHub();
     const a = fakePeer();
 
-    const { ticket } = tickets.mint(grant());
-    const redeemed = tickets.redeem(ticket);
-    expect(redeemed).toEqual(grant());
+    // A stored grant is rebuilt on redeem, and a real user id is a uuid.
+    const minted = grant({ userId: '99999999-0000-0000-0000-000000000009' });
+    const { ticket } = await tickets.mint(minted);
+    const redeemed = await tickets.redeem(ticket);
+    expect(redeemed).toEqual(minted);
 
     hub.subscribe(a.peer, redeemed!);
     hub.publish(RUN_A, [progress()]);

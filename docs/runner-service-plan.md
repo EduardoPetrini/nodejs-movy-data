@@ -486,7 +486,7 @@ Each phase leaves `pnpm test`, `pnpm typecheck` and the existing e2e green.
    - KEDA `ScaledObject` per class, PostgreSQL trigger `SELECT count(*) FROM runs WHERE runner_class='large' AND status IN ('queued','running')`, `minReplicaCount: 0` for `large`.
    - `terminationGracePeriodSeconds` = drain.
    - Agents set the `controller.kubernetes.io/pod-deletion-cost` annotation high while busy, so a scale-down evicts idle pods first. The alternative is KEDA `ScaledJob` for `large`.
-   - Subscription tickets move to the DB, or sticky sessions, because `TicketStore` is per process.
+   - ~~Subscription tickets move to the DB, or sticky sessions, because `TicketStore` is per process.~~ **Done early (2026-10-27):** `stream_tickets`, migration `0010`; see *Stream tickets in the meta-db* in `docs/web-ui-progress.md`.
    - A Helm chart or kustomize.
 8. **Next phase: runner classes in the UI.**
    - An operator screen (platform operators, not org admins) to create and edit classes (label, description, resources, `max_replicas`, `suggest_above_bytes`, default).
@@ -523,7 +523,7 @@ Each phase leaves `pnpm test`, `pnpm typecheck` and the existing e2e green.
 ### Plan Verification
 - **Depth:** checks done inline, without sub-agents. Read directly: `server/runs/*`, `runs/index.post.ts`, `cancel.post.ts`, `runs/preview.post.ts`, `connections/test.post.ts`, `runs-reattach.ts`, `runs.ts` schema, `runs.repo.ts`, `rbac.ts`, `crypto.ts`, `safe-error.ts`, `definition-wire.ts`, `pg-schema-inspector.adapter.ts`, `playwright.config.ts`, `nuxt.config.ts`, `seed-dev.ts`.
 - **Completeness:** gaps found and fixed:
-  - queued-run cancel; fencing; dead-runner offline notification; the 8 KB `NOTIFY` cap; `Map` serialisation; simulated fixture path resolved on the agent; the cross-replica sweep race; spec version skew; `TicketStore` under several web replicas;
+  - queued-run cancel; fencing; dead-runner offline notification; the 8 KB `NOTIFY` cap; `Map` serialisation; simulated fixture path resolved on the agent; the cross-replica sweep race; spec version skew; `TicketStore` under several web replicas (resolved 2026-10-27, `stream_tickets`);
   - **crypto must move** (agents decrypt specs);
   - graceful drain on SIGTERM;
   - MSSQL size query needs `VIEW DATABASE STATE` (degrades to "unknown");

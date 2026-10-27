@@ -13,7 +13,7 @@ import { isPlatformAdminRequest } from '~~/server/utils/require-platform-admin';
  */
 export default defineEventHandler(async (event) => {
   const org = requirePermission(event, 'run:read');
-  const { ticket, expiresInMs } = useRunnersTicketStore().mint({
+  const { ticket, expiresInMs } = await useRunnersTicketStore().mint({
     userId: org.userId,
     orgId: org.orgId,
     audience: audienceFor(await isPlatformAdminRequest(event)),

@@ -596,7 +596,7 @@ server. Handler: `server/routes/_ws/runs.ts`.
 | Module | Purpose |
 |--------|---------|
 | `server/runs/run-hub.ts` | Rooms, fan-out, cohort split, role revalidation. Membership is a plain data structure so isolation is unit-testable. |
-| `server/runs/subscription-ticket.ts` | Single-use, 30s, CSPRNG tickets. Constant-time lookup. |
+| `server/runs/subscription-ticket.ts` | Single-use, 30s, CSPRNG tickets, stored hashed in `stream_tickets` (migration `0010`) and redeemed by one `DELETE … RETURNING` on any web replica. Expiry is the database's `now()`; a stored grant is rebuilt (`readSubscriptionGrant`), never cast. |
 | `server/runs/snapshot.ts` | A subscriber's opening state, read with the grant's org id in the WHERE clause. |
 | `server/runs/run-event-feed.ts` | **Pure.** NOTIFY pointer → read `run_events` past a per-run cursor → `hub.publish`. Every ordering rule below lives here. |
 | `server/runs/pg-listener.ts` | One dedicated, unpooled connection holding `LISTEN`; reconnects with backoff and reports it, so the feed can re-read. |
@@ -636,7 +636,7 @@ comes. The cursor moves only after the fan-out returns, so a throw there re-read
 rather than skips.
 
 **Runner availability** (`/_ws/runners`, `POST /api/orgs/:slug/runners/ticket`) is a
-second hub with its own ticket store, so a run-stream ticket can never open it. It
+second hub with its own ticket `kind`, so a run-stream ticket can never open it, nor spend itself trying. It
 follows the same rules: a server-minted grant, a private `roomKey`, a handler that
 decides nothing, roles revalidated on every refresh. Capacity is counted across all
 runners (they are platform-wide); the queue depth is this org's only; runner ids are
