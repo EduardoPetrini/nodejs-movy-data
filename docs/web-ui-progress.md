@@ -25,7 +25,7 @@ phase is indistinguishable from one that was never started.
 
 ## Status board
 
-*Last reviewed: 2026-10-25. 1589 unit tests (129 files) green; Compose E2E green at 28/28 and host E2E 12/12 after the PR #8 review fixes. Work after this release is tracked in GitHub issues #9–#20.*
+*Last reviewed: 2026-10-27. 1637 unit tests green; Compose E2E green at 28/28 after all three PR #8 review passes (re-run 2026-10-27, migration `0009` applied); host E2E 12/12 as of the first pass. Work after this release is tracked in GitHub issues #9–#21.*
 
 | Phase | State | Notes |
 |-------|-------|-------|
@@ -1731,6 +1731,7 @@ Everything below is outside PR #8 and has its own issue:
 | [#18](https://github.com/EduardoPetrini/nodejs-movy-data/issues/18) | axe checks, screen-reader and `prefers-contrast` pass |
 | [#19](https://github.com/EduardoPetrini/nodejs-movy-data/issues/19) | automate the chaos steps 5–7 of the runner verification |
 | [#20](https://github.com/EduardoPetrini/nodejs-movy-data/issues/20) | a production Compose override (no seed or lab, SSO, TLS) |
+| [#21](https://github.com/EduardoPetrini/nodejs-movy-data/issues/21) | the new organisation form has no Cancel button |
 
 ### Second review pass (2026-10-25)
 
@@ -1783,7 +1784,9 @@ Five findings, each fixed with a test that failed first:
   reconnect the console re-reads every watched run and pushes the settled ones, as the
   event feed re-reads events. NOTIFY has no replay.
 
-`pnpm test` 1637/1637, `pnpm typecheck`, `pnpm build` green. Compose E2E not re-run.
+`pnpm test` 1637/1637, `pnpm typecheck`, `pnpm build` green. `pnpm docker:e2e`
+**28/28** on a rebuilt stack (2026-10-27), covering the second and third passes and
+migration `0009`.
 
 ### Out of scope, found on the way
 
