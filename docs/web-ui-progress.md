@@ -25,7 +25,7 @@ phase is indistinguishable from one that was never started.
 
 ## Status board
 
-*Last reviewed: 2026-10-27. 1637 unit tests green; Compose E2E green at 28/28 after all three PR #8 review passes (re-run 2026-10-27, migration `0009` applied); host E2E 12/12 as of the first pass. Work after this release is tracked in GitHub issues #9–#21.*
+*Last reviewed: 2026-10-27. 1637 unit tests green; Compose E2E green at 28/28 after all three PR #8 review passes (re-run 2026-10-27, migration `0009` applied); host `pnpm test:e2e` (embedded agent) 14/14, same date. Work after this release is tracked in GitHub issues #9–#21.*
 
 | Phase | State | Notes |
 |-------|-------|-------|
@@ -46,7 +46,7 @@ phase is indistinguishable from one that was never started.
 | R4 — destination lock and runner classes | **DONE** (2026-10-23) | one run per destination (`target_lock_key`, migration `0005`) and why a run is queued; classes from `MOVY_RUNNER_CLASSES_FILE`, a class per definition and a Runner selector (`0006`); source size in bytes on the preview and a class suggestion. Gate: `pnpm docker:e2e` 19/19. See *R4* below. Next: R5 (probes) |
 | R5 — probes: Test and Preview from a runner | **DONE** (2026-10-23) | migration `0007` (`runner_probes`, `runners.probe_slots`, `connections.last_test_via`); executors in `@movy/runner/probes` shared by the in-request path and the agent's `ProbeWorker`; `via: 'web' | <class>` on both Test routes and on preview; 503 `no_runner`, 504 on silence; "Test from" and "Inspect from" selectors. Gate: `pnpm docker:e2e` 23/23. See *R5* below. Next: R6 (runner services) |
 | R6 — runner services and provisioning in Compose | **DONE** (2026-10-25) | `movy-runner-agent` as `runner-default`/`runner-large` under the least-privilege `movy_runner` role (`docker/runner.env`); `web` no longer forks; NOTIFY wakes agents on launch and cancel; `manual` and opt-in `docker` provisioners, Start a runner (`runner:scale`), auto mode, idle exit. Found and fixed: an agent wedged after a network partition (query timeouts), clone swap limit. Gate: the plan's Verification list in Compose, `pnpm docker:e2e` 26/26. See *R6* below. Next: R7 (Kubernetes) or R8 (runner classes in the UI) |
-| — PR #8 review fixes | **DONE** (2026-10-25) | platform operators (`platform_admins`, migration `0008`, `MOVY_PLATFORM_ADMINS`) replace the org-admin `runner:scale`; heartbeat/claim race in fencing; live feed retries a failed read; embedded agent retries its start and refuses bad config; one class-name rule; runner answers rebuilt, not cast; provisioner cap under concurrency; drain stops claiming first. See *PR #8 review fixes* below. Gate re-run: `pnpm docker:e2e` 28/28, host `pnpm test:e2e` 12/12 |
+| — PR #8 review fixes | **DONE** (2026-10-25) | platform operators (`platform_admins`, migration `0008`, `MOVY_PLATFORM_ADMINS`) replace the org-admin `runner:scale`; heartbeat/claim race in fencing; live feed retries a failed read; embedded agent retries its start and refuses bad config; one class-name rule; runner answers rebuilt, not cast; provisioner cap under concurrency; drain stops claiming first. See *PR #8 review fixes* below. Gate re-run after all three passes (2026-10-27): `pnpm docker:e2e` 28/28, host `pnpm test:e2e` 14/14 |
 
 ### Remaining work
 
@@ -1786,7 +1786,10 @@ Five findings, each fixed with a test that failed first:
 
 `pnpm test` 1637/1637, `pnpm typecheck`, `pnpm build` green. `pnpm docker:e2e`
 **28/28** on a rebuilt stack (2026-10-27), covering the second and third passes and
-migration `0009`.
+migration `0009`. Host `pnpm test:e2e` (embedded agent) **14/14** the same day; the 14
+skips are the Compose-only specs (`live-migration`, `probes`, `runner-services`).
+`runner-classes` now runs on the host too, whenever the host meta-db has a `large`
+class with no runner online.
 
 ### Out of scope, found on the way
 
