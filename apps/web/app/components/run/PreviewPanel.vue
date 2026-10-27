@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { RunPreview } from '#shared/definition-wire'
+import { formatBytes } from '#shared/runner-suggestion'
 
 /**
  * What this run would do, read in the order that matters.
@@ -29,6 +30,9 @@ const subjectLine = (subjects: string[]): string => {
   return rest > 0 ? `${shown} and ${rest} more` : shown
 }
 
+const bytesFor = (name: string): number | null =>
+  props.preview.tables.find((t) => t.tableName === name)?.bytesEstimated ?? null
+
 const rowsFor = (name: string): number =>
   props.preview.tables.find((t) => t.tableName === name)?.rowsEstimated ?? 0
 
@@ -47,7 +51,12 @@ const takenAt = computed(() => new Date(props.preview.takenAt).toLocaleTimeStrin
     <!-- The one hero-size element on this screen. -->
     <div class="headline">
       <span class="figure mv-num">{{ num.format(preview.totalRowsEstimated) }}</span>
-      <span class="unit">rows, estimated, across {{ toCreate.length + toLoad.length }} tables</span>
+      <span class="unit">
+        rows, estimated, across {{ toCreate.length + toLoad.length }} tables ·
+        <span data-testid="preview-size">{{
+          preview.totalBytesEstimated === null ? 'size unknown' : `${formatBytes(preview.totalBytesEstimated)} on disk`
+        }}</span>
+      </span>
     </div>
 
     <ul v-if="warned.length" class="notes">
@@ -84,7 +93,9 @@ const takenAt = computed(() => new Date(props.preview.takenAt).toLocaleTimeStrin
         <li v-for="(name, i) in preview.loadOrder" :key="name">
           <span class="idx mv-num">{{ i + 1 }}</span>
           <span class="mv-mono">{{ name }}</span>
-          <span class="rows mv-num">{{ num.format(rowsFor(name)) }}</span>
+          <span class="rows mv-num">
+            {{ num.format(rowsFor(name)) }}<template v-if="bytesFor(name) !== null"> · {{ formatBytes(bytesFor(name)!) }}</template>
+          </span>
         </li>
       </ol>
     </details>

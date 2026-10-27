@@ -17,6 +17,10 @@ export class TableMigrationPlanner {
       for (const constraint of table.constraints) {
         if (constraint.type !== 'FOREIGN KEY' || !constraint.referencedTable) continue;
         if (!tableNames.has(constraint.referencedTable)) continue;
+        // A self-reference (customers.referred_by -> customers) orders the table
+        // against nothing else. Counted, its in-degree never reached zero, so it
+        // and everything downstream of it fell into the unordered cyclic level.
+        if (constraint.referencedTable === table.name) continue;
 
         parents.add(constraint.referencedTable);
         childrenByTable.get(constraint.referencedTable)!.add(table.name);

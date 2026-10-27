@@ -1,5 +1,5 @@
 import type { Peer } from 'crossws';
-import { useRunHub, useTicketStore } from '~~/server/runs';
+import { useRunEventFeed, useRunHub, useTicketStore } from '~~/server/runs';
 import { loadRunSnapshot } from '~~/server/runs/snapshot';
 
 /**
@@ -42,6 +42,9 @@ export default defineWebSocketHandler({
     hub.subscribe(peer, grant);
 
     try {
+      // The feed's cursor is fixed before the snapshot is read, for the same
+      // reason: whatever is stored after this point arrives live.
+      await useRunEventFeed().track(grant.runId);
       const snapshot = await loadRunSnapshot(grant);
       peer.send(JSON.stringify({ k: 'snapshot', ...snapshot }));
     } catch (err) {

@@ -24,6 +24,7 @@ A database-agnostic CLI migration tool. Migrates schema and data between Postgre
 
 - Node.js 18+
 - Access to source and destination databases
+- Or only Docker: see [Running with Docker](#running-with-docker)
 
 ## Installation
 
@@ -168,8 +169,10 @@ packages/core/   @movy/core    the hexagon; no I/O entry points
 ├── src/infrastructure/   # Concrete adapters (pg, mysql, mssql, translators, migrators)
 └── src/composition/      # buildRegistry() — the composition root
 
+packages/db/     @movy/db      the metadata database: schema, migrations, client, secret crypto
 apps/cli/        @movy/cli     the interactive command line
-apps/runner/     @movy/runner  one forked process per run: argv, stdin, signals, journal
+apps/runner/     @movy/runner  one forked process per run: argv, stdin, signals, journal;
+                               src/agent/ is the host side that forks and follows it
 apps/web/        @movy/web     Nuxt 4 console: orgs, connections, runs, history
 ```
 
@@ -198,7 +201,7 @@ The runner and the web console are the subject of
 1. Implement `DatabaseAdapterSet` in `src/infrastructure/database/<engine>/`
 2. Add type-map(s) in `src/infrastructure/database/translation/type-maps/`
 3. Implement `ISchemaTranslator` subclass(es) extending `CrossDbSchemaTranslator`
-4. Register in `cli.ts`:
+4. Register in `buildRegistry()` (`packages/core/src/composition/build-registry.ts`):
    ```ts
    registry.register(DatabaseType.X, new XAdapterSet())
    registry.registerTranslator(DatabaseType.X, DatabaseType.POSTGRES, () => new XToPostgresTranslator())
@@ -225,10 +228,69 @@ broadcast.
 
 ```bash
 pnpm dev:web       # Nuxt on :3000
-pnpm seed:dev      # admin@ / editor@ / viewer@movy.local, password movy-dev
+pnpm seed:dev      # admin@ / editor@ / viewer@ / ops@movy.local, password movy-dev
 ```
 
 See `docs/web-ui-progress.md` for what is built and what is not.
+
+## Running with Docker
+
+One Compose file brings up the console, its metadata database, and three seeded lab
+databases to migrate between. You need Docker only, no Node.
+
+```bash
+pnpm docker:init   # once: writes docker/*.env with fresh secrets (never overwrites)
+pnpm docker:up     # build, start, wait until healthy → http://localhost:3000
+pnpm docker:cli    # the interactive CLI, pre-filled for lab MySQL → lab PostgreSQL
+pnpm docker:e2e    # Playwright against the running stack, incl. a real migration
+pnpm docker:scale 1  # one runner of the large class (0 by default)
+pnpm docker:down   # stop; add -v to `docker compose down` to reset all data
+```
+
+Sign in as `admin@` / `editor@` / `viewer@movy.local` with password `movy-dev`;
+`ops@movy.local` is a platform operator, who can start runners and see them. The
+`acme` org already has **Lab PostgreSQL**, **Lab MySQL** and **Lab SQL Server**
+connections. Each lab database holds `movy_src`, a small shop (four tables, about 22k
+rows, a self-referencing FK), and an empty `movy_dst`.
+
+| Service | Reach it from the host | Inside the stack |
+|---|---|---|
+| Console | `http://localhost:3000` | `web:3000` |
+| Metadata DB (persistent) | `localhost:5442`, user `movy` | `meta-db:5432` |
+| Lab PostgreSQL | `localhost:5433`, user `postgres` | `pg-lab:5432` |
+| Lab MySQL | `localhost:3307`, user `root` | `mysql-lab:3306` |
+| Lab SQL Server | `localhost:1434`, user `sa` | `mssql-lab:1433` |
+
+The passwords are in `docker/lab.env` and `docker/meta-db.env`. Ports are bound to
+127.0.0.1 only. If 3000 or 5442 is taken, publish elsewhere:
+`MOVY_WEB_PORT=3010 MOVY_META_PORT=5443 pnpm docker:up`. Containers keep their
+internal ports, so nothing else changes.
+
+**Name databases the way the stack sees them.** Tests and runs execute inside a
+container, so a connection saved in the console is `pg-lab:5432`, never
+`localhost:5433`, which is the web container itself. A database running on your machine
+outside Docker is `host.docker.internal`.
+
+**Runs execute on runner services, not in the console.** `runner-default` (one replica)
+claims every run of the default class; `runner-large` runs none until scaled
+(`pnpm docker:scale 1`). Where a run waits because no runner of its class is online, an
+admin is offered **Start a runner**, which shows the command to run. To let the console
+start runners itself (and start one automatically for queued work), use
+`pnpm docker:up:provisioner` — it mounts the Docker socket into the console, which is root
+on the host, so keep it to a machine of your own. Runners started that way leave after ten
+idle minutes. `docker compose stop runner-default` lets a live run finish first (up to
+two minutes); it never cancels one.
+
+Only `meta-db` keeps its data across `down`/`up`. The lab databases are re-seeded
+whenever their volumes are recreated. SQL Server has no arm64 image: on Apple Silicon it
+runs under Rosetta (enable it in Docker Desktop) and wants about 2 GB of memory.
+
+The run is forked inside the `web` container for now, so **restarting `web` mid-run
+kills the run**. It is settled `failed` / `RunnerVanished`. Moving runs to separately
+scalable runner services is the plan in `docs/runner-service-plan.md`.
+
+This is a local stack, not a production deployment: password sign-in is on and the
+seeded passwords are public.
 
 ## Logs
 
@@ -253,6 +315,7 @@ Two suites do need one, and are therefore not part of `pnpm test`:
 
 ```bash
 pnpm test:e2e           # Playwright, needs a migrated database + `pnpm seed:dev`
+pnpm docker:e2e         # the same suite inside Compose, plus a live PG → PG migration
 ```
 
 `packages/core/tests/integration/` needs real source and destination databases and is not

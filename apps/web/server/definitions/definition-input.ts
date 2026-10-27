@@ -1,3 +1,4 @@
+import { isRunnerClassName } from '@movy/runner/agent';
 import type { RunMode } from '../../shared/pair-capability';
 
 /**
@@ -27,6 +28,8 @@ export interface DefinitionInput {
   mode: RunMode;
   querySql: string | null;
   targetTableName: string | null;
+  /** Null means "whichever class is the default when it runs". */
+  runnerClass: string | null;
 }
 
 export interface InputError {
@@ -95,6 +98,12 @@ export function parseDefinitionInput(body: unknown): ParseResult {
     );
   }
 
+  const runnerClass = trimmed(raw.runnerClass);
+  // The class file's own rule. Whether the class is configured is `prepareDefinition`'s question.
+  if (runnerClass && !isRunnerClassName(runnerClass)) {
+    return fail('runnerClass', 'That is not a runner class name.');
+  }
+
   const modeRaw = raw.mode === undefined ? 'full' : raw.mode;
   if (modeRaw !== 'full' && modeRaw !== 'query') {
     return fail('mode', 'Mode must be "full" or "query".');
@@ -121,7 +130,7 @@ export function parseDefinitionInput(body: unknown): ParseResult {
       ok: true,
       value: {
         name, description, sourceConnectionId, targetConnectionId,
-        sourceDatabase, targetDatabase, mode, querySql, targetTableName,
+        sourceDatabase, targetDatabase, mode, querySql, targetTableName, runnerClass,
       },
     };
   }
@@ -134,7 +143,7 @@ export function parseDefinitionInput(body: unknown): ParseResult {
     ok: true,
     value: {
       name, description, sourceConnectionId, targetConnectionId,
-      sourceDatabase, targetDatabase, mode, querySql: null, targetTableName: null,
+      sourceDatabase, targetDatabase, mode, querySql: null, targetTableName: null, runnerClass,
     },
   };
 }

@@ -264,4 +264,23 @@ describe('MysqlSchemaInspector', () => {
       expect(estimates.get('small_table')).toBe(42);
     });
   });
+
+  describe('getTableSizeEstimates()', () => {
+    it('adds data and index length per table in the connection\'s database', async () => {
+      mockQuerySequence(connection, [
+        [{ db: 'testdb' }],
+        [{ table_name: 'users', bytes: '16384' }, { table_name: 'orders', bytes: 49152 }],
+      ]);
+      const sizes = await inspector.getTableSizeEstimates(connection);
+      expect(sizes).toEqual(new Map([['users', 16384], ['orders', 49152]]));
+      const [sql, params] = (connection.query as ReturnType<typeof import('vitest').vi.fn>).mock.calls[1];
+      expect(sql).toContain('DATA_LENGTH + INDEX_LENGTH');
+      expect(params).toEqual(['testdb']);
+    });
+
+    it('answers an empty map when information_schema cannot be read', async () => {
+      (connection.query as ReturnType<typeof import('vitest').vi.fn>).mockRejectedValue(new Error('denied'));
+      expect(await inspector.getTableSizeEstimates(connection)).toEqual(new Map());
+    });
+  });
 });

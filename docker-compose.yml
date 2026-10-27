@@ -1,0 +1,231 @@
+# Movy — the whole stack on one machine.
+#
+#   pnpm docker:init     once: writes docker/*.env with fresh secrets
+#   pnpm docker:up       build + start; UI on http://localhost:3000
+#   pnpm docker:cli      the interactive CLI, inside the network
+#   pnpm docker:e2e      Playwright against the running stack
+#   pnpm docker:scale N  N runners of the large class (0 by default)
+#
+# Sign in as admin@ / editor@ / viewer@movy.local, password `movy-dev`.
+#
+# Runs execute on runner services, never in `web` (docs/runner-service-plan.md,
+# phase 6): `runner-default` (one replica) and `runner-large` (none until
+# scaled). The console queues a run in the meta-db; a runner of its class
+# claims it, forks the runner process, and writes events back. To let the
+# console start runners itself, add docker-compose.provisioner.yml.
+#
+# Networking:
+#   container -> container  service names on movy-net. In the UI a lab
+#                           connection is pg-lab:5432, never localhost:5433.
+#   host -> container       ports bound to 127.0.0.1 only, never the LAN.
+#   container -> host       host.docker.internal, for databases outside Docker.
+
+name: movy
+
+x-app: &app
+  image: movy:local
+  build: { context: ., dockerfile: docker/Dockerfile, target: runtime }
+  networks: [movy]
+
+# A runner agent. Reaches nothing but the meta-db and the databases it
+# migrates; listens on no port.
+x-runner: &runner
+  <<: *app
+  # The least-privilege movy_runner role and the encryption key — never
+  # movy.env, which holds the meta-db owner's password and the session secret.
+  env_file: [docker/runner.env]
+  working_dir: /app
+  command: node apps/runner/dist/agent-main.js
+  # Reaps the runner processes the agent forks. A zombie keeps its pid, so it
+  # would pass the liveness check that settles vanished runs.
+  init: true
+  # = MOVY_RUNNER_DRAIN_MS plus a margin: `docker compose stop` lets live runs
+  # finish this long. Draining never cancels a run.
+  stop_grace_period: 2m
+  extra_hosts: ["host.docker.internal:host-gateway"]
+  depends_on: { migrate: { condition: service_completed_successfully } }
+  restart: unless-stopped
+
+x-runner-env: &runner-env
+  # Replica-local: the database is the record across hosts. Lost with the
+  # container, which is why a runner that dies is settled, never resumed.
+  MOVY_JOURNAL_DIR: /tmp/movy-journals
+  MOVY_RUNNER_DRAIN_MS: "110000"
+  MOVY_SIMULATION_FIXTURE: /app/apps/runner/fixtures/pg-to-pg-315k.ndjson
+
+# migrate and seed need drizzle-kit and tsx, which are devDependencies.
+x-tools: &tools
+  image: movy:build
+  build: { context: ., dockerfile: docker/Dockerfile, target: build }
+  env_file: [docker/movy.env]
+  networks: [movy]
+  restart: "no"
+
+services:
+  # ── Movy's own metadata: the only database whose data must survive ──────────
+  meta-db:
+    image: postgres:17-alpine
+    env_file: [docker/meta-db.env]
+    environment: { POSTGRES_USER: movy, POSTGRES_DB: movy_data }
+    volumes: [movy-meta:/var/lib/postgresql/data]
+    # 5442, not 5432: a developer's own Postgres usually holds the default.
+    ports: ["127.0.0.1:${MOVY_META_PORT:-5442}:5432"]
+    # -h 127.0.0.1: during initdb the server listens on its socket only, so a
+    # TCP probe cannot report ready before initialisation has finished.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U movy -d movy_data"]
+      interval: 3s
+      retries: 30
+    networks: [movy]
+    restart: unless-stopped
+
+  # The migrations, then the movy_runner role and its grants (idempotent; it
+  # also resets the role's password from docker/runner.env).
+  migrate:
+    <<: *tools
+    env_file: [docker/movy.env, docker/runner.env]
+    command: sh -c "pnpm --filter @movy/db db:migrate && pnpm --filter @movy/db exec tsx scripts/runner-role.ts"
+    depends_on: { meta-db: { condition: service_healthy } }
+
+  # Idempotent: dev users and orgs, then the lab connections in `acme`.
+  seed:
+    <<: *tools
+    env_file: [docker/movy.env, docker/lab.env]
+    working_dir: /app/apps/web
+    command: sh -c "pnpm exec tsx scripts/seed-dev.ts && pnpm exec tsx scripts/seed-lab.ts"
+    depends_on: { migrate: { condition: service_completed_successfully } }
+
+  # ── The console ──────────────────────────────────────────────────────────────
+  web:
+    <<: *app
+    env_file: [docker/movy.env]
+    working_dir: /app/apps/web
+    command: node .output/server/index.mjs
+    environment:
+      HOST: 0.0.0.0
+      PORT: "3000"
+      # The runner services run every run; the console only queues them.
+      MOVY_EMBEDDED_RUNNER: "false"
+      # "Start a runner" shows the command. The provisioner override switches
+      # this to `docker`, which starts the container itself.
+      MOVY_PROVISIONER: manual
+      # Upserted into runner_classes at boot; a class dropped from it stays as history.
+      MOVY_RUNNER_CLASSES_FILE: /etc/movy/runner-classes.json
+    volumes:
+      - ./docker/runner-classes.json:/etc/movy/runner-classes.json:ro
+    ports: ["127.0.0.1:${MOVY_WEB_PORT:-3000}:3000"]
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/login').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 3s
+      retries: 40
+    depends_on: { migrate: { condition: service_completed_successfully } }
+    restart: unless-stopped
+
+  # ── Runners ──────────────────────────────────────────────────────────────────
+  # Both carry the template label: the docker provisioner clones a runner from
+  # one of them (runner-large has no container until scaled, so usually from
+  # runner-default, with the class and limits taken from the class row).
+  runner-default:
+    <<: *runner
+    environment: { <<: *runner-env, MOVY_RUNNER_CLASS: default, MOVY_RUNNER_SLOTS: "2" }
+    labels: { movy.runner-template: "true", movy.runner-class: default }
+    deploy: { replicas: 1, resources: { limits: { cpus: "1", memory: 1g } } }
+
+  # None until asked for: `pnpm docker:scale 1`, "Start a runner", or auto mode.
+  runner-large:
+    <<: *runner
+    environment: { <<: *runner-env, MOVY_RUNNER_CLASS: large, MOVY_RUNNER_SLOTS: "1" }
+    labels: { movy.runner-template: "true", movy.runner-class: large }
+    deploy: { replicas: 0, resources: { limits: { cpus: "4", memory: 8g } } }
+
+  # ── Lab databases: disposable, seeded, ready to migrate ─────────────────────
+  # Each holds movy_src (the shop fixture) and an empty movy_dst.
+  pg-lab:
+    image: postgres:17
+    env_file: [docker/lab.env]
+    volumes: [./docker/fixtures/postgres:/docker-entrypoint-initdb.d:ro]
+    ports: ["127.0.0.1:5433:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "psql -h 127.0.0.1 -U postgres -d movy_src -tAc 'SELECT 1 FROM order_items LIMIT 1' | grep -q 1"]
+      interval: 3s
+      retries: 40
+    networks: [movy]
+
+  mysql-lab:
+    image: mysql:8.4
+    env_file: [docker/lab.env]
+    volumes: [./docker/fixtures/mysql:/docker-entrypoint-initdb.d:ro]
+    ports: ["127.0.0.1:3307:3306"]
+    # Over TCP, which the image keeps off while init scripts run.
+    healthcheck:
+      test: ["CMD-SHELL", "mysql -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" -NBe 'SELECT 1 FROM movy_src.order_items LIMIT 1' | grep -q 1"]
+      interval: 3s
+      retries: 60
+    networks: [movy]
+
+  mssql-lab:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    # No arm64 build exists; Docker Desktop runs it under Rosetta.
+    platform: linux/amd64
+    env_file: [docker/lab.env]
+    environment: { ACCEPT_EULA: "Y", MSSQL_PID: Developer }
+    ports: ["127.0.0.1:1434:1433"]
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -C -S 127.0.0.1 -U sa -P \"$$MSSQL_SA_PASSWORD\" -Q 'SELECT 1' -b -o /dev/null"]
+      interval: 5s
+      retries: 40
+      start_period: 20s
+    networks: [movy]
+
+  # SQL Server has no init directory; this loads the fixture once it is up.
+  mssql-init:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    platform: linux/amd64
+    env_file: [docker/lab.env]
+    entrypoint: ["/fixtures/init.sh"]
+    volumes: [./docker/fixtures/mssql:/fixtures:ro]
+    depends_on: { mssql-lab: { condition: service_healthy } }
+    networks: [movy]
+    restart: "no"
+
+  # ── On demand ────────────────────────────────────────────────────────────────
+  cli:
+    <<: *app
+    profiles: [cli]
+    env_file: [docker/cli.env]
+    working_dir: /app
+    command: node apps/cli/dist/main.js
+    stdin_open: true
+    tty: true
+    volumes: [./logs:/app/logs]
+
+  e2e:
+    image: movy:e2e
+    build: { context: ., dockerfile: docker/Dockerfile, target: e2e }
+    profiles: [e2e]
+    # Shares web's network namespace, so the app is http://localhost:3000. The
+    # session cookie is Secure, and browsers only send one over plain HTTP to
+    # localhost — at http://web:3000 sign-in would silently not stick.
+    network_mode: service:web
+    environment:
+      MOVY_E2E_EXTERNAL_SERVER: "1"
+      MOVY_E2E_LIVE: "1"
+      # The specs that need runner services rather than an embedded agent.
+      MOVY_E2E_COMPOSE: "1"
+    working_dir: /app/apps/web
+    command: pnpm exec playwright test
+    volumes: [./apps/web/test-results:/app/apps/web/test-results]
+    depends_on:
+      web: { condition: service_healthy }
+      runner-default: { condition: service_started }
+      seed: { condition: service_completed_successfully }
+      pg-lab: { condition: service_healthy }
+      mysql-lab: { condition: service_healthy }
+      mssql-init: { condition: service_completed_successfully }
+
+networks:
+  movy: { name: movy-net }
+
+volumes:
+  movy-meta: {}

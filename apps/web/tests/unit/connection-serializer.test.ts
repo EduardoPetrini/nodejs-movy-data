@@ -19,6 +19,7 @@ const row: ConnectionRow = {
   lastTestOk: true,
   lastTestError: null,
   lastTestLatencyMs: 12,
+  lastTestVia: 'large',
   createdByUserId: 'user-1',
   createdAt: new Date('2026-01-01T00:00:00Z'),
   updatedAt: new Date('2026-01-01T00:00:00Z'),
@@ -68,8 +69,12 @@ describe('toPublicConnection', () => {
 
   it('serialises the last test result as ISO strings', () => {
     expect(toPublicConnection(row, 'admin').lastTest).toEqual({
-      at: '2026-01-02T03:04:05.000Z', ok: true, latencyMs: 12, error: null,
+      at: '2026-01-02T03:04:05.000Z', ok: true, latencyMs: 12, error: null, via: 'large',
     });
+  });
+
+  it('shows where the last test ran to every role, viewers included — a class name, never a host', () => {
+    expect(toPublicConnection(row, 'viewer').lastTest?.via).toBe('large');
   });
 
   it('reports no last test when the connection has never been tested', () => {

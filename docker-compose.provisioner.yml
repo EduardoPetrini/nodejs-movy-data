@@ -1,0 +1,25 @@
+# Opt-in: lets the console start runner containers itself.
+#
+#   pnpm docker:up:provisioner
+#   (= docker compose -f docker-compose.yml -f docker-compose.provisioner.yml up -d)
+#
+# "Start a runner" then creates a container instead of showing a command, and
+# auto mode starts one whenever a class has queued work and no free slot (up to
+# the class's maxReplicas in docker/runner-classes.json). A runner started this
+# way exits after 10 idle minutes, and the console removes it.
+#
+# The cost: the Docker socket is mounted into `web`, and the socket is root on
+# the host. Anyone who can make the console run code can run any container.
+# Fine on a developer's machine; never on a shared host.
+
+services:
+  web:
+    # The socket is owned by root on Docker's side; the image's `node` user
+    # cannot open it. Root inside the container is no more than the socket
+    # already grants.
+    user: root
+    environment:
+      MOVY_PROVISIONER: docker
+      MOVY_AUTOSCALE: "true"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock

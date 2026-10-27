@@ -28,6 +28,7 @@ export function toPublicRun(row: RunRow, role: OrgRole, definitionName: string |
     status: row.status,
     mode: row.mode,
     simulated: row.simulated,
+    runnerClass: row.runnerClass,
     source: { engine: row.sourceEngine, database: row.sourceDatabase },
     target: { engine: row.targetEngine, database: row.targetDatabase },
     progress: {

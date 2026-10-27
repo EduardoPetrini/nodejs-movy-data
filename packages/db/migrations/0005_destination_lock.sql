@@ -1,0 +1,2 @@
+ALTER TABLE "runs" ADD COLUMN "target_lock_key" text;--> statement-breakpoint
+CREATE UNIQUE INDEX "runs_target_busy_uq" ON "runs" USING btree ("target_lock_key") WHERE status IN ('running', 'cancelling');

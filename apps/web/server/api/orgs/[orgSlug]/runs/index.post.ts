@@ -3,8 +3,11 @@ import { createRepos } from '~~/server/repositories';
 import { requirePermission } from '~~/server/utils/rbac';
 import { toConnectionConfig } from '~~/server/utils/connection-config';
 import { toPublicRun } from '~~/server/serializers/run.serializer';
-import { journalPathFor, simulationFixture, useRunManager } from '~~/server/runs';
+import { sealRunSpec } from '@movy/runner/agent';
+import { assertSimulationAvailable, useMetaSql, useRunnerAgent } from '~~/server/runs';
+import { chooseRunnerClass, listConfiguredClasses } from '~~/server/runners/runner-classes';
 import { resolveRunTarget, type RunTargetBody } from '~~/server/runs/resolve-target';
+import { targetLockKey } from '~~/server/runs/target-lock';
 
 interface Body extends RunTargetBody {
   /**
@@ -17,6 +20,11 @@ interface Body extends RunTargetBody {
    */
   simulate?: boolean;
   speed?: number;
+  /**
+   * The runner class to queue for. Unlike the rest of a definition, the review
+   * screen may override it: a bigger runner does not change WHAT runs.
+   */
+  runnerClass?: string;
 }
 
 /** Recorded pace is 1; below this the replay outlives any reason to watch it. */
@@ -46,44 +54,73 @@ export default defineEventHandler(async (event) => {
     });
   }
 
+  if (body?.simulate) assertSimulationAvailable();
+
+  const choice = chooseRunnerClass(
+    await listConfiguredClasses(useMetaSql()),
+    body?.runnerClass,
+    target.definition?.runnerClass ?? null
+  );
+  if (!choice.ok) throw createError({ statusCode: choice.statusCode, statusMessage: choice.message });
+
   const runId = randomUUID();
-  const journalPath = journalPathFor(runId);
 
-  const run = await repos.runs.create({
-    id: runId,
-    definitionId: target.definition?.id ?? null,
-    sourceConnectionId: target.source.id,
-    targetConnectionId: target.target.id,
-    // Snapshotted so history stays true after a connection is edited or deleted.
-    sourceEngine: target.source.engine,
-    sourceDatabase: target.sourceDatabase,
-    targetEngine: target.target.engine,
-    targetDatabase: target.targetDatabase,
-    mode: target.mode,
-    status: 'queued',
-    simulated: Boolean(body?.simulate),
-    journalPath,
-    requestedByUserId: org.userId,
-  });
-
-  // The two decryptions happen here and the result goes straight onto the
-  // child's stdin. It is never logged, never stored, and never in argv.
-  useRunManager().launch({
+  // The two decryptions happen here, and the spec is sealed again at once for
+  // this org and this run: the runner that claims it decrypts it, deletes it,
+  // and hands it straight to the child's stdin. It is never logged and never
+  // in argv. Sealed at enqueue so the run that starts is the run that was
+  // reviewed, whenever and wherever it is claimed.
+  const sealed = sealRunSpec(
+    org.orgId,
     runId,
-    journalPath,
-    spec: {
-      runId,
-      // `resolveRunTarget` has already refused every mode the runner cannot
-      // drive, so this asserts a decision rather than making one.
-      mode: 'full',
-      source: toConnectionConfig(target.source, target.sourceDatabase),
-      target: toConnectionConfig(target.target, target.targetDatabase),
+    body?.simulate
+      ? // Clamped: the runner rejects a non-positive speed, but a 1e-9 would
+        // schedule a replay measured in centuries and hold a process open.
+        { simulate: true, speed: clampSpeed(body?.speed) }
+      : {
+          simulate: false,
+          spec: {
+            runId,
+            // `resolveRunTarget` has already refused every mode the runner
+            // cannot drive, so this asserts a decision rather than making one.
+            mode: 'full',
+            source: toConnectionConfig(target.source, target.sourceDatabase),
+            target: toConnectionConfig(target.target, target.targetDatabase),
+          },
+        }
+  );
+
+  const run = await repos.runs.enqueue(
+    {
+      id: runId,
+      definitionId: target.definition?.id ?? null,
+      sourceConnectionId: target.source.id,
+      targetConnectionId: target.target.id,
+      // Snapshotted so history stays true after a connection is edited or deleted.
+      sourceEngine: target.source.engine,
+      sourceDatabase: target.sourceDatabase,
+      targetEngine: target.target.engine,
+      targetDatabase: target.targetDatabase,
+      mode: target.mode,
+      simulated: Boolean(body?.simulate),
+      runnerClass: choice.runnerClass,
+      // One run per destination, across orgs: the claim waits while another
+      // run holds it. A replay writes nowhere, so it locks nothing.
+      targetLockKey: body?.simulate
+        ? null
+        : targetLockKey({
+            engine: target.target.engine,
+            host: target.target.host,
+            port: target.target.port,
+            database: target.targetDatabase,
+          }),
+      requestedByUserId: org.userId,
     },
-    simulateFixture: body?.simulate ? simulationFixture() : undefined,
-    // Clamped: the runner rejects a non-positive speed, but a 1e-9 would
-    // schedule a replay measured in centuries and hold a process open.
-    speed: clampSpeed(body?.speed),
-  });
+    sealed
+  );
+
+  // The fast path. Without an embedded agent, a runner's poll finds it.
+  void useRunnerAgent()?.wake();
 
   setResponseStatus(event, 201);
   return { run: toPublicRun(run, org.role) };

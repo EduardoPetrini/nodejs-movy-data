@@ -34,10 +34,16 @@ export default defineConfig({
   },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
   // Reuse a dev server the developer already has open; start one in CI.
-  webServer: {
-    command: 'pnpm nuxt dev',
-    url: process.env.MOVY_E2E_BASE_URL ?? 'http://localhost:3000',
-    reuseExistingServer: !process.env.CI,
-    timeout: 120_000,
-  },
+  //
+  // None at all when the server is somebody else's job — the Compose `e2e`
+  // service runs against the `web` container, where `pnpm nuxt dev` would
+  // fight it for the port (CI is set there, so it would not reuse it).
+  webServer: process.env.MOVY_E2E_EXTERNAL_SERVER
+    ? undefined
+    : {
+        command: 'pnpm nuxt dev',
+        url: process.env.MOVY_E2E_BASE_URL ?? 'http://localhost:3000',
+        reuseExistingServer: !process.env.CI,
+        timeout: 120_000,
+      },
 });

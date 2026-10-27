@@ -65,7 +65,7 @@ export class ConnectionsRepository {
 
   async recordTest(
     id: string,
-    result: { ok: boolean; latencyMs?: number; error?: string }
+    result: { ok: boolean; latencyMs?: number; error?: string; via: string }
   ): Promise<void> {
     await this.db
       .update(connections)
@@ -74,6 +74,7 @@ export class ConnectionsRepository {
         lastTestOk: result.ok,
         lastTestLatencyMs: result.latencyMs ?? null,
         lastTestError: result.error ?? null,
+        lastTestVia: result.via,
       })
       .where(and(eq(connections.id, id), eq(connections.orgId, this.orgId)));
   }

@@ -1,0 +1,22 @@
+{
+  "classes": [
+    {
+      "name": "default",
+      "label": "Default",
+      "description": "For most migrations.",
+      "cpuMillis": 1000,
+      "memoryMb": 1024,
+      "maxReplicas": 2,
+      "isDefault": true
+    },
+    {
+      "name": "large",
+      "label": "Large",
+      "description": "More memory and CPU, for sources of tens of gigabytes.",
+      "cpuMillis": 4000,
+      "memoryMb": 8192,
+      "maxReplicas": 1,
+      "suggestAboveBytes": 20000000000
+    }
+  ]
+}

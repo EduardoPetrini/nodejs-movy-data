@@ -28,9 +28,16 @@ let journalPath: string;
 let linesAtHostDeath = 0;
 let reachedEnd = false;
 
-/** A host that forks a detached runner exactly as RunManager does, then dies. */
-function hostScript(journalPath: string, dieAfterMs: number): string {
+/**
+ * A host that forks a detached runner exactly as RunManager does, then dies —
+ * once the journal has its first few lines, not after a fixed delay. Under a
+ * loaded machine tsx can take longer than any fixed delay to start the
+ * runner, and a host that died before the first line proved nothing (and
+ * failed the "mid-run" check below).
+ */
+function hostScript(journalPath: string, dieAtLines: number): string {
   return `
+    const fs = require('fs');
     const { fork } = require('child_process');
     const child = fork(${JSON.stringify(ENTRY)}, [
       '--journal', ${JSON.stringify(journalPath)},
@@ -40,7 +47,12 @@ function hostScript(journalPath: string, dieAfterMs: number): string {
     ], { detached: true, execArgv: ['--import', 'tsx'], stdio: ['pipe', 'ignore', 'ignore', 'ipc'] });
     child.stdin.end();
     child.unref();
-    setTimeout(() => process.exit(0), ${dieAfterMs});
+    const lines = () => fs.existsSync(${JSON.stringify(journalPath)})
+      ? fs.readFileSync(${JSON.stringify(journalPath)}, 'utf8').split('\\n').filter((l) => l.trim()).length
+      : 0;
+    setInterval(() => { if (lines() >= ${dieAtLines}) process.exit(0); }, 20);
+    // A runner that never starts must fail the test, not hang it.
+    setTimeout(() => process.exit(1), 30000);
   `;
 }
 
@@ -67,13 +79,13 @@ beforeAll(async () => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'movy-host-death-'));
   journalPath = path.join(dir, 'run.ndjson');
 
-  const host = spawn(process.execPath, ['-e', hostScript(journalPath, 1200)], { stdio: 'ignore' });
+  const host = spawn(process.execPath, ['-e', hostScript(journalPath, 3)], { stdio: 'ignore' });
   await new Promise<void>((resolve) => host.on('exit', () => resolve()));
 
   // The host is gone. Everything from here on is the orphan's own doing.
   linesAtHostDeath = lineCount(journalPath);
-  reachedEnd = await waitFor(() => lineCount(journalPath) === FIXTURE_LINES, 25_000);
-}, 40_000);
+  reachedEnd = await waitFor(() => lineCount(journalPath) === FIXTURE_LINES, 60_000);
+}, 90_000);
 
 afterAll(() => {
   fs.rmSync(dir, { recursive: true, force: true });

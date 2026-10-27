@@ -1,10 +1,21 @@
 import { defineConfig } from 'vitest/config';
 import * as path from 'path';
 
-const coreEntry = path.resolve(__dirname, 'packages/core/src/index.ts');
+const src = (p: string) => path.resolve(__dirname, p);
 
-/** Every workspace resolves @movy/core to source, so tests need no build step. */
-const alias = { '@movy/core': coreEntry };
+/**
+ * Every workspace resolves the internal packages to source, so tests need no
+ * build step. Anchored patterns, because a plain '@movy/db' key would also
+ * prefix-match '@movy/db/crypto' and rewrite it into a path that does not exist.
+ */
+const alias = [
+  { find: /^@movy\/core$/, replacement: src('packages/core/src/index.ts') },
+  { find: /^@movy\/db$/, replacement: src('packages/db/src/index.ts') },
+  { find: /^@movy\/db\/schema$/, replacement: src('packages/db/src/schema/index.ts') },
+  { find: /^@movy\/db\/crypto$/, replacement: src('packages/db/src/crypto.ts') },
+  { find: /^@movy\/runner\/agent$/, replacement: src('apps/runner/src/agent/index.ts') },
+  { find: /^@movy\/runner\/probes$/, replacement: src('apps/runner/src/probes/index.ts') },
+];
 
 export default defineConfig({
   test: {
@@ -24,11 +35,22 @@ export default defineConfig({
         // `#shared` is Nuxt's alias for apps/web/shared/, where the run wire
         // contract lives. Tests import the reducer directly, so they need it.
         resolve: {
-          alias: { ...alias, '#shared': path.resolve(__dirname, 'apps/web/shared') },
+          alias: [...alias, { find: /^#shared/, replacement: src('apps/web/shared') }],
         },
         test: {
           name: 'web',
           root: path.resolve(__dirname, 'apps/web'),
+          globals: true,
+          environment: 'node',
+          include: ['tests/**/*.test.ts'],
+          pool: 'forks',
+        },
+      },
+      {
+        resolve: { alias },
+        test: {
+          name: 'db',
+          root: path.resolve(__dirname, 'packages/db'),
           globals: true,
           environment: 'node',
           include: ['tests/**/*.test.ts'],

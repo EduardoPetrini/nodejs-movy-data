@@ -59,6 +59,8 @@ export interface WireRun {
   status: string;
   mode: string;
   simulated: boolean;
+  /** Which kind of runner it was queued for. */
+  runnerClass: string;
   source: WireEndpoint;
   target: WireEndpoint;
   progress: { rowsDone: number; rowsTotal: number; tablesDone: number; tablesTotal: number; pct: number };
@@ -105,6 +107,9 @@ export interface WireTable {
   finishedAt: string | null;
 }
 
+/** The part of a run row that moves without an event. */
+export type WireRunStatus = Pick<WireRun, 'id' | 'status' | 'error' | 'startedAt' | 'finishedAt'>;
+
 /** One row of the event log, as stored. `payload` is the full MigrationEvent. */
 export interface WireEvent {
   seq: number;
@@ -134,6 +139,12 @@ export type ServerFrame =
       cohort: 'full' | 'redacted';
     }
   | { k: 'events'; runId: string; events: WireEvent[] }
+  /**
+   * A status change no event announced — the sweeper settled the run after its
+   * runner vanished. Only the fields every cohort may see, so one frame serves
+   * every room.
+   */
+  | { k: 'run_status'; run: WireRunStatus }
   | { k: 'cohort_changed'; cohort: 'full' | 'redacted' }
   | { k: 'revoked'; reason: string }
   | { k: 'error'; message: string };

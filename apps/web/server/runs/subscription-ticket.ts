@@ -27,16 +27,20 @@ export interface TicketStoreOptions {
   readonly now?: () => number;
 }
 
-interface Issued {
-  readonly grant: SubscriptionGrant;
+interface Issued<G> {
+  readonly grant: G;
   readonly expiresAt: number;
 }
 
 /** Long enough to open a socket, far too short to be worth stealing. */
 const DEFAULT_TTL_MS = 30_000;
 
-export class TicketStore {
-  private readonly issued = new Map<string, Issued>();
+/**
+ * Generic over the grant it carries: run streams and the runners panel each
+ * have their own store, so a ticket for one can never be redeemed on the other.
+ */
+export class TicketStore<G = SubscriptionGrant> {
+  private readonly issued = new Map<string, Issued<G>>();
   private readonly ttlMs: number;
   private readonly now: () => number;
 
@@ -45,7 +49,7 @@ export class TicketStore {
     this.now = options.now ?? Date.now;
   }
 
-  mint(grant: SubscriptionGrant): { ticket: string; expiresInMs: number } {
+  mint(grant: G): { ticket: string; expiresInMs: number } {
     this.sweep();
     // 32 bytes of CSPRNG. The ticket is a bearer credential for one run's
     // event stream, so it is generated the way a session id would be.
@@ -60,7 +64,7 @@ export class TicketStore {
    * Deleting on redemption means a ticket that leaks — a log line, a proxy
    * access log, a screenshot — is already spent by the time anyone finds it.
    */
-  redeem(ticket: unknown): SubscriptionGrant | null {
+  redeem(ticket: unknown): G | null {
     if (typeof ticket !== 'string' || ticket.length === 0) return null;
     this.sweep();
 
@@ -83,9 +87,9 @@ export class TicketStore {
    * A plain Map.get() on attacker-supplied input leaks match length through
    * timing. The set is tiny and short-lived, so scanning it costs nothing.
    */
-  private find(ticket: string): { key: string; entry: Issued } | null {
+  private find(ticket: string): { key: string; entry: Issued<G> } | null {
     const candidate = Buffer.from(ticket);
-    let match: { key: string; entry: Issued } | null = null;
+    let match: { key: string; entry: Issued<G> } | null = null;
 
     for (const [key, entry] of this.issued) {
       const known = Buffer.from(key);

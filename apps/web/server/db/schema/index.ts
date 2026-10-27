@@ -1,6 +1,3 @@
-export * from './auth';
-export * from './orgs';
-export * from './connections';
-export * from './definitions';
-export * from './runs';
-export * from './validations';
+// The schema lives in @movy/db, which the runner agent shares. Re-exported so
+// the web app's imports stay where they were.
+export * from '@movy/db/schema';

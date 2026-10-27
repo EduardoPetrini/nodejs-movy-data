@@ -1,0 +1,25 @@
+# Host builds are macOS binaries and per-machine state; the image builds its own.
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+**/.nuxt
+**/.output
+**/.data
+**/coverage
+**/test-results
+**/playwright-report
+**/.playwright
+
+# Run journals and logs belong to the machine that produced them.
+**/.movy
+logs
+*.log
+
+# Secrets never enter an image layer. Compose passes them at run time.
+**/.env
+**/.env.*
+!**/.env.example
+docker/*.env
+
+.git
+.claude

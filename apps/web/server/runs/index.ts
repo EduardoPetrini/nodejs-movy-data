@@ -1,55 +1,90 @@
-import * as fs from 'node:fs';
-import * as path from 'node:path';
-import { createRequire } from 'node:module';
-import { useDb } from '../db/client';
+import * as os from 'node:os';
+import { metaDatabaseUrl, useDb } from '../db/client';
+import { runEvents, runs } from '../db/schema';
+import { toPublicEvent } from '../serializers/run.serializer';
+import { RunEventFeed } from './run-event-feed';
+import { findSimulationFixture, journalPathFor, resolveRunnerEntry } from './host-paths';
+import { configuredPlatformAdmins, platformAdminIds } from '../utils/platform-admin';
+import { readEmbeddedRunnerConfig, type EmbeddedRunnerConfig } from './embedded-config';
+import { RunnerHub, type RunnersGrant } from '../runners/runner-hub';
+import { loadRunnersSnapshot } from '../runners/runner-summary';
 import {
+  EventWriter,
+  RunManager,
+  RUN_EVENTS_CHANNEL,
+  RUNNERS_CHANNEL,
+  PROBES_CHANNEL,
+  PROBE_DONE_CHANNEL,
+  RUNS_QUEUED_CHANNEL,
+  RUN_CANCEL_CHANNEL,
+  RUN_SETTLED_CHANNEL,
+  PgListener,
+  ProbeWorker,
+  RunnerAgent,
+  SUPPORTED_SPEC_VERSIONS,
   applyProjection,
   finaliseRunIfUnsettled,
-  findUnsettledRuns,
   markRunLaunched,
-} from '../repositories/runs.repo';
-import { EventWriter } from './event-writer';
+  parseEventPointer,
+  parseStringField,
+  reattachableRuns,
+  sqlAgentQueue,
+  sqlProbeQueue,
+  type SqlClient,
+} from '@movy/runner/agent';
+import { ProbeWaiters } from '../probes/probe-waiters';
 import { RunHub } from './run-hub';
-import { RunManager } from './run-manager';
+import { SettledStatusFeed } from './settled-status';
 import { TicketStore } from './subscription-ticket';
 import { memberships } from '../db/schema';
 import { memberKey } from './run-hub';
-import { and, eq, or } from 'drizzle-orm';
+import { and, asc, eq, gt, inArray, or } from 'drizzle-orm';
+
+export { findSimulationFixture, journalPathFor, resolveRunnerEntry } from './host-paths';
 
 let manager: RunManager | undefined;
 let writer: EventWriter | undefined;
+let agent: RunnerAgent | undefined;
+let probeWorker: ProbeWorker | undefined;
+let probeWaiters: ProbeWaiters | undefined;
+let feed: RunEventFeed | undefined;
+let runnerHub: RunnerHub | undefined;
+let runnersTickets: TicketStore<RunnersGrant> | undefined;
+let listener: PgListener | undefined;
 let hub: RunHub | undefined;
+let settledFeed: SettledStatusFeed | undefined;
 let tickets: TicketStore | undefined;
 
-/**
- * The socket fan-out. Built before the writer, because the writer broadcasts
- * into it on every successful flush.
- */
+/** The socket fan-out for run streams. The event feed publishes into it. */
 export function useRunHub(): RunHub {
   if (!hub) {
-    const db = useDb();
     hub = new RunHub({
-      // Read per check, never cached: a demotion has to take effect on a live
-      // socket, not at the subscriber's next reconnect. One query for every
-      // subscriber, which is what makes checking every few seconds affordable.
-      resolveRole: async (pairs) => {
-        const found = new Map<string, (typeof memberships.$inferSelect)['role']>();
-        if (pairs.length === 0) return found;
-
-        const rows = await db
-          .select({ orgId: memberships.orgId, userId: memberships.userId, role: memberships.role })
-          .from(memberships)
-          .where(
-            or(...pairs.map((p) => and(eq(memberships.orgId, p.orgId), eq(memberships.userId, p.userId))))
-          );
-
-        for (const row of rows) found.set(memberKey(row.orgId, row.userId), row.role);
-        return found;
-      },
+      resolveRole: resolveRoles,
       onError: (err) => console.error('[runs] hub:', err.message),
     });
   }
   return hub;
+}
+
+/**
+ * The CURRENT role of every subscriber, in one query. Read per check, never
+ * cached: a demotion has to take effect on a live socket, not at the
+ * subscriber's next reconnect. One query for every subscriber is what makes
+ * checking every few seconds affordable. Shared by the run and runner hubs.
+ */
+async function resolveRoles(
+  pairs: readonly { readonly orgId: string; readonly userId: string }[]
+): Promise<Map<string, (typeof memberships.$inferSelect)['role']>> {
+  const found = new Map<string, (typeof memberships.$inferSelect)['role']>();
+  if (pairs.length === 0) return found;
+
+  const rows = await useDb()
+    .select({ orgId: memberships.orgId, userId: memberships.userId, role: memberships.role })
+    .from(memberships)
+    .where(or(...pairs.map((p) => and(eq(memberships.orgId, p.orgId), eq(memberships.userId, p.userId)))));
+
+  for (const row of rows) found.set(memberKey(row.orgId, row.userId), row.role);
+  return found;
 }
 
 export function useTicketStore(): TicketStore {
@@ -58,38 +93,237 @@ export function useTicketStore(): TicketStore {
 }
 
 /**
- * One manager per Nitro process, built lazily.
+ * Run events for the sockets on this host, from `run_events`, on NOTIFY.
  *
- * Module-level rather than per-request: it owns IPC channels to live child
- * processes, which outlive any one request by definition.
+ * The cursor is fixed by `track()` when a peer joins — the socket handler
+ * awaits it BEFORE reading that peer's snapshot — so live delivery starts no
+ * later than the snapshot ends. See RunEventFeed for the ordering rules.
  */
-export function useRunManager(): RunManager {
-  if (!manager) {
+export function useRunEventFeed(): RunEventFeed {
+  if (!feed) {
     const db = useDb();
-    const runHub = useRunHub();
+    const hub = useRunHub();
+    feed = new RunEventFeed(
+      {
+        currentSeq: async (runId) => {
+          const [row] = await db.select({ lastSeq: runs.lastSeq }).from(runs).where(eq(runs.id, runId)).limit(1);
+          return row?.lastSeq ?? 0;
+        },
+        // Every cohort's events: the hub splits them into rooms, so a new event
+        // type can never default into the wrong audience.
+        readAfter: async (runId, afterSeq, limit) => {
+          const rows = await db
+            .select()
+            .from(runEvents)
+            .where(and(eq(runEvents.runId, runId), gt(runEvents.seq, afterSeq)))
+            .orderBy(asc(runEvents.seq))
+            .limit(limit);
+          return rows.map(toPublicEvent);
+        },
+        publish: (runId, events) => hub.publish(runId, events),
+        isWatched: (runId) => hub.isWatching(runId),
+      },
+      { onError: (err, runId) => console.error(`[runs] event feed for ${runId}:`, err.message) }
+    );
+  }
+  return feed;
+}
+
+/**
+ * Statuses no event carries: `movy_run_settled`, and a re-read of every watched
+ * run when LISTEN reconnects, since a notification sent meanwhile is gone.
+ */
+export function useSettledStatusFeed(): SettledStatusFeed {
+  settledFeed ??= new SettledStatusFeed({
+    hub: useRunHub(),
+    loadStatuses: async (runIds) => {
+      const rows = await useDb()
+        .select({
+          id: runs.id,
+          status: runs.status,
+          errorName: runs.errorName,
+          errorMessage: runs.errorMessage,
+          startedAt: runs.startedAt,
+          finishedAt: runs.finishedAt,
+        })
+        .from(runs)
+        .where(inArray(runs.id, [...runIds]));
+      return rows.map((row) => ({
+        id: row.id,
+        status: row.status,
+        error: row.errorMessage ? { name: row.errorName ?? 'Error', message: row.errorMessage } : null,
+        startedAt: row.startedAt?.toISOString() ?? null,
+        finishedAt: row.finishedAt?.toISOString() ?? null,
+      }));
+    },
+    onError: (err, runId) => console.error(`[runs] settled status${runId ? ` for ${runId}` : ''}:`, err.message),
+  });
+  return settledFeed;
+}
+
+/** Runner availability for the org home and runs page. */
+export function useRunnerHub(): RunnerHub {
+  if (!runnerHub) {
+    const sql = useMetaSql();
+    runnerHub = new RunnerHub({
+      load: (orgId, includeRunners) => loadRunnersSnapshot(sql, orgId, { includeRunners }),
+      resolveRole: resolveRoles,
+      resolveOperators: (userIds) => platformAdminIds(sql, userIds, configuredPlatformAdmins()),
+      onError: (err) => console.error('[runners] hub:', err.message),
+    });
+  }
+  return runnerHub;
+}
+
+/** Its own store: a run-stream ticket can never open the runners socket, nor the reverse. */
+export function useRunnersTicketStore(): TicketStore<RunnersGrant> {
+  if (!runnersTickets) runnersTickets = new TicketStore<RunnersGrant>();
+  return runnersTickets;
+}
+
+/**
+ * The LISTEN connection behind the feed. Started by the `run-bus` plugin.
+ * On every reconnect both feeds re-read — events past their cursors, settled
+ * statuses of every watched run: NOTIFY has no replay.
+ */
+export function useBusListener(): PgListener {
+  if (!listener) {
+    const runFeed = useRunEventFeed();
+    listener = new PgListener({
+      connectionString: metaDatabaseUrl(),
+      // The queued and cancel channels matter only to this host's embedded
+      // agent, for a run launched or cancelled through another web replica.
+      channels: embeddedConfig()
+        ? [RUN_EVENTS_CHANNEL, RUN_SETTLED_CHANNEL, RUNNERS_CHANNEL, PROBES_CHANNEL, PROBE_DONE_CHANNEL, RUNS_QUEUED_CHANNEL, RUN_CANCEL_CHANNEL]
+        : [RUN_EVENTS_CHANNEL, RUN_SETTLED_CHANNEL, RUNNERS_CHANNEL, PROBES_CHANNEL, PROBE_DONE_CHANNEL],
+      onNotification: (channel, payload) => {
+        if (channel === RUNNERS_CHANNEL) {
+          void useRunnerHub().refresh();
+          return;
+        }
+        if (channel === PROBES_CHANNEL) {
+          // Queued by any replica; this host's embedded worker may take it.
+          void useProbeWorker()?.wake();
+          return;
+        }
+        if (channel === RUNS_QUEUED_CHANNEL) {
+          void useRunnerAgent()?.wake();
+          return;
+        }
+        if (channel === RUN_CANCEL_CHANNEL) {
+          const runId = parseStringField(payload, 'runId');
+          if (runId) void useRunnerAgent()?.cancel(runId);
+          return;
+        }
+        if (channel === RUN_SETTLED_CHANNEL) {
+          const runId = parseStringField(payload, 'runId');
+          if (runId) void useSettledStatusFeed().announce(runId);
+          return;
+        }
+        if (channel === PROBE_DONE_CHANNEL) {
+          const id = parseStringField(payload, 'id');
+          if (id) useProbeWaiters().notify(id);
+          return;
+        }
+        if (channel !== RUN_EVENTS_CHANNEL) return;
+        const pointer = parseEventPointer(payload);
+        if (pointer) runFeed.notify(pointer.runId, pointer.lastSeq);
+      },
+      onConnected: () => {
+        // NOTIFY has no replay: re-read what either kind of notification may
+        // have carried while the connection was down.
+        runFeed.resync();
+        void useSettledStatusFeed().resync();
+        useProbeWaiters().notifyAll();
+        void useProbeWorker()?.wake();
+        void useRunnerHub().refresh();
+      },
+      onError: (err) => console.warn('[runs] LISTEN connection lost, reconnecting:', err.message),
+    });
+  }
+  return listener;
+}
+
+/** The requests on this host waiting for a probe's answer. */
+export function useProbeWaiters(): ProbeWaiters {
+  probeWaiters ??= new ProbeWaiters();
+  return probeWaiters;
+}
+
+/**
+ * The embedded agent's probe worker: answers Test and Preview asked of this
+ * host's class. Undefined when this host runs no agent.
+ */
+export function useProbeWorker(): ProbeWorker | undefined {
+  const config = embeddedConfig();
+  if (!config) return undefined;
+  probeWorker ??= new ProbeWorker({
+    queue: sqlProbeQueue(useMetaSql(), embeddedRunnerId(), config.runnerClass),
+    slots: config.probeSlots,
+    onError: (err, probeId) => console.error(`[probes] ${probeId ?? 'worker'}:`, err.message),
+  });
+  return probeWorker;
+}
+
+/**
+ * Whether this web process runs an agent in-process.
+ *
+ * On unless `MOVY_EMBEDDED_RUNNER=false`, which a deployment with runner
+ * services sets (Compose does: `runner-default`, `runner-large`). Turning it
+ * off with no runner service running leaves every run queued — the UI says
+ * so and offers to start one, and nothing is lost.
+ */
+export function isEmbeddedRunner(): boolean {
+  return process.env.MOVY_EMBEDDED_RUNNER !== 'false';
+}
+
+let embedded: EmbeddedRunnerConfig | undefined;
+
+/**
+ * The embedded agent's class and slots, or null when it runs none: switched
+ * off, or misconfigured — refused by the runner service's own rules, logged
+ * once, and then off, rather than run on a default nobody chose.
+ */
+export function embeddedConfig(): (EmbeddedRunnerConfig & { ok: true }) | null {
+  if (!isEmbeddedRunner()) return null;
+  if (!embedded) {
+    embedded = readEmbeddedRunnerConfig(process.env);
+    if (!embedded.ok) console.error(`[runs] embedded runner off: ${embedded.message}`);
+  }
+  return embedded.ok ? embedded : null;
+}
+
+/** Stable across restarts of this host, so it re-attaches to its own runs. */
+export function embeddedRunnerId(): string {
+  return process.env.MOVY_RUNNER_ID || `embedded-${os.hostname()}`;
+}
+
+/** The SQL the queue, the sweeper and re-attach run, on the same pool Drizzle uses. */
+export function useMetaSql(): SqlClient {
+  return useDb().$client as unknown as SqlClient;
+}
+
+/**
+ * The in-process runner agent, or undefined when this host runs none.
+ *
+ * Module-level rather than per-request: its RunManager owns IPC channels to
+ * live child processes, which outlive any one request by definition.
+ */
+export function useRunnerAgent(): RunnerAgent | undefined {
+  const config = embeddedConfig();
+  if (!config) return undefined;
+  if (!agent) {
+    const db = useDb();
+    const sql = useMetaSql();
+    const runnerId = embeddedRunnerId();
     writer = new EventWriter(
       { apply: (runId, projection) => applyProjection(db, runId, projection) },
       {
         onError: (err, runId) => console.error(`[runs] event write failed for ${runId}:`, err.message),
         onTruncated: (runId, atSeq) =>
           console.warn(`[runs] ${runId} exceeded its log-event cap at seq ${atSeq}; later log lines are not stored.`),
-        // After the durable write, never before — see EventWriter.onFlushed.
-        //
-        // Converted to the SAME WireEvent shape the snapshot sends. An earlier
-        // version published the raw MigrationEvent, so a client received
-        // `{seq,type,at,level,payload}` on connect and a bare event afterwards
-        // — and every live frame then blew up in the reducer.
-        onFlushed: (runId, projection) =>
-          runHub.publish(
-            runId,
-            projection.events.map((e) => ({
-              seq: e.seq,
-              type: e.type,
-              at: e.at.toISOString(),
-              level: e.level,
-              payload: e.payload as unknown as Record<string, unknown>,
-            }))
-          ),
+        // No broadcast here: every batch commits a NOTIFY, and the feed below
+        // delivers it — the same path an agent in another process uses.
       }
     );
 
@@ -97,7 +331,7 @@ export function useRunManager(): RunManager {
       {
         markLaunched: (runId, info) => markRunLaunched(db, runId, info),
         finaliseIfUnsettled: (runId, outcome) => finaliseRunIfUnsettled(db, runId, outcome),
-        unsettledRuns: () => findUnsettledRuns(db),
+        unsettledRuns: () => reattachableRuns(sql, runnerId),
       },
       writer,
       {
@@ -113,77 +347,42 @@ export function useRunManager(): RunManager {
           ),
       }
     );
+
+    agent = new RunnerAgent({
+      queue: sqlAgentQueue(sql, {
+        id: runnerId,
+        runnerClass: config.runnerClass,
+        version: `spec-v${SUPPORTED_SPEC_VERSIONS.join(',')}`,
+        slots: config.slots,
+        probeSlots: config.probeSlots,
+      }),
+      control: manager,
+      slots: config.slots,
+      journalPathFor,
+      simulationFixture: findSimulationFixture,
+      onError: (err, runId) => console.error(`[runs] agent${runId ? ` (${runId})` : ''}:`, err.message),
+      onFenced: (runId) =>
+        console.warn(`[runs] ${runId} lost its lease and was stopped here; the sweeper had already settled it.`),
+    });
   }
-  return manager;
+  return agent;
 }
 
-export function useEventWriter(): EventWriter {
-  useRunManager();
-  return writer!;
-}
-
-/**
- * Where this run's journal goes.
- *
- * Under a directory, one file per run id, so a run is recoverable knowing only
- * its id. The id is a UUID generated server-side and is checked here anyway:
- * this string becomes a filesystem path, and a path built from a request-shaped
- * value is exactly the kind of thing that stops being a UUID one refactor later.
- */
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-export function journalPathFor(runId: string): string {
-  if (!UUID.test(runId)) throw new Error('runId must be a UUID');
-  const dir = process.env.MOVY_JOURNAL_DIR ?? path.resolve(process.cwd(), '.movy/runs');
-  fs.mkdirSync(dir, { recursive: true });
-  return path.join(dir, `${runId}.ndjson`);
+/** Closes the writer the embedded agent feeds, after the agent has stopped. */
+export async function closeEventWriter(): Promise<void> {
+  await writer?.close();
 }
 
 /**
- * The one recording the web app will replay.
- *
- * Resolved here rather than accepted from a request body: this string becomes
- * `--simulate <path>` on a child process, and a path from a client is a path
- * the client chose.
+ * Refuses a simulation up front when this host's own agent has no recording,
+ * rather than queuing a run that can only fail. An external agent resolves its
+ * own fixture, so without an embedded one there is nothing to check here.
  */
-export function simulationFixture(): string {
-  const override = process.env.MOVY_SIMULATION_FIXTURE;
-  if (override) return path.resolve(override);
-
-  const bundled = path.resolve(process.cwd(), '../runner/fixtures/pg-to-pg-315k.ndjson');
-  if (!fs.existsSync(bundled)) {
+export function assertSimulationAvailable(): void {
+  if (embeddedConfig() && !findSimulationFixture()) {
     throw createError({
       statusCode: 503,
       statusMessage: 'No simulation recording is available on this host.',
     });
   }
-  return bundled;
-}
-
-/**
- * Finds the runner binary.
- *
- * Prefers the built `dist/main.js` via package resolution. Falls back to the
- * TypeScript entry in the workspace, which `RunManager` loads through tsx — so
- * `pnpm dev:web` can start a run in a fresh clone without a build first, and
- * "click Run" never fails with a module-not-found nobody can act on.
- */
-export function resolveRunnerEntry(): string {
-  const override = process.env.MOVY_RUNNER_ENTRY;
-  if (override) return path.resolve(override);
-
-  try {
-    const require = createRequire(import.meta.url);
-    const resolved = require.resolve('@movy/runner');
-    if (fs.existsSync(resolved)) return resolved;
-  } catch {
-    // Not built, or resolution is unavailable in this bundle. Fall through.
-  }
-
-  const source = path.resolve(process.cwd(), '../runner/src/main.ts');
-  if (fs.existsSync(source)) return source;
-
-  throw new Error(
-    '@movy/runner could not be located. Run `pnpm build`, or set MOVY_RUNNER_ENTRY.'
-  );
 }

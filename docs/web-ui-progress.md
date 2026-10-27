@@ -1,6 +1,6 @@
 # Web UI — progress and handoff
 
-Working branch: **`feat/monorepo-restructure`**.
+Working branch: **`feat/runner-service-phase-0`** (runner service plan R0–R6).
 Plan: `~/.claude-personal/plans/let-s-a-web-ui-vectorized-codd.md` — **no longer
 on disk** (checked 2026-10-22). Every phase it described is closed; this file is
 now the only record of them.
@@ -25,7 +25,7 @@ phase is indistinguishable from one that was never started.
 
 ## Status board
 
-*Last reviewed: 2026-10-22. 1233 unit tests (88 files) + 8 Playwright E2E, green.*
+*Last reviewed: 2026-10-27. 1637 unit tests green; Compose E2E green at 28/28 after all three PR #8 review passes (re-run 2026-10-27, migration `0009` applied); host E2E 12/12 as of the first pass. Work after this release is tracked in GitHub issues #9–#21.*
 
 | Phase | State | Notes |
 |-------|-------|-------|
@@ -39,6 +39,14 @@ phase is indistinguishable from one that was never started.
 | 5r — review of Phase 5 | **DONE** (2026-09-09) | five defects found in `1329ca1` and fixed in `6f13fcd` |
 | — connection lifecycle | **DONE** (2026-09-09) | edit, delete behind a typed confirmation, failure reason inline |
 | — sequence reseed + test before save | **DONE** (2026-09-17) | step 9 reads the destination's `MAX()`; create form tests unsaved credentials |
+| R0 — Compose foundations (runner service plan) | **DONE** (2026-10-22) | `docker-compose.yml`: meta-db, migrate, seed, web, three seeded lab DBs, CLI, e2e. Live gate moved PG→MySQL → PG→PG + MySQL→PG after it found the auto-increment gap; see *R0* below. Next: R1 (extract `@movy/db`) |
+| R1 — extract `@movy/db`, move run control into `apps/runner` | **DONE** (2026-10-22) | no behaviour change; web still forks. Gate met: moved tests changed import paths only, 1262/1262, `pnpm docker:e2e` green. See *R1* below. Next: R2 (queue and agent) |
+| R2 — queue and agent | **DONE** (2026-10-22) | migration `0004`; agent claims from `runs` (SKIP LOCKED), heartbeats a lease, fences, drains; sweeper settles lost runs; web enqueues instead of forking, embedded agent by default. Gate met: `pnpm docker:e2e` 13/13 on the embedded agent. See *R2* below. Next: R3 (NOTIFY bus) |
+| R3 — NOTIFY bus and runner availability | **DONE** (2026-10-22) | events reach the hub through `LISTEN movy_run_events` (the in-process `onFlushed` path is gone); runners socket, ticket and panel on the org home and runs page. See *R3* below. Next: R4 (destination lock and classes) |
+| R4 — destination lock and runner classes | **DONE** (2026-10-23) | one run per destination (`target_lock_key`, migration `0005`) and why a run is queued; classes from `MOVY_RUNNER_CLASSES_FILE`, a class per definition and a Runner selector (`0006`); source size in bytes on the preview and a class suggestion. Gate: `pnpm docker:e2e` 19/19. See *R4* below. Next: R5 (probes) |
+| R5 — probes: Test and Preview from a runner | **DONE** (2026-10-23) | migration `0007` (`runner_probes`, `runners.probe_slots`, `connections.last_test_via`); executors in `@movy/runner/probes` shared by the in-request path and the agent's `ProbeWorker`; `via: 'web' | <class>` on both Test routes and on preview; 503 `no_runner`, 504 on silence; "Test from" and "Inspect from" selectors. Gate: `pnpm docker:e2e` 23/23. See *R5* below. Next: R6 (runner services) |
+| R6 — runner services and provisioning in Compose | **DONE** (2026-10-25) | `movy-runner-agent` as `runner-default`/`runner-large` under the least-privilege `movy_runner` role (`docker/runner.env`); `web` no longer forks; NOTIFY wakes agents on launch and cancel; `manual` and opt-in `docker` provisioners, Start a runner (`runner:scale`), auto mode, idle exit. Found and fixed: an agent wedged after a network partition (query timeouts), clone swap limit. Gate: the plan's Verification list in Compose, `pnpm docker:e2e` 26/26. See *R6* below. Next: R7 (Kubernetes) or R8 (runner classes in the UI) |
+| — PR #8 review fixes | **DONE** (2026-10-25) | platform operators (`platform_admins`, migration `0008`, `MOVY_PLATFORM_ADMINS`) replace the org-admin `runner:scale`; heartbeat/claim race in fencing; live feed retries a failed read; embedded agent retries its start and refuses bad config; one class-name rule; runner answers rebuilt, not cast; provisioner cap under concurrency; drain stops claiming first. See *PR #8 review fixes* below. Gate re-run: `pnpm docker:e2e` 28/28, host `pnpm test:e2e` 12/12 |
 
 ### Remaining work
 
@@ -53,14 +61,14 @@ five tables), wrong for a database where one `COUNT(*)` takes minutes. The
 shaped for an out-of-band version; nothing else is. **Explicitly descoped from
 Phase 5** and recorded as such at the start: it needs a second runner mode
 rather than hardening, and doing it there would have crowded out seven items.
-Move it behind the runner before pointing this at anything large.
+Move it behind the runner before pointing this at anything large. Tracked in [#13](https://github.com/EduardoPetrini/nodejs-movy-data/issues/13).
 
 **A stalled run is reported to the server log and nowhere else.** The watchdog
 deliberately does not settle a live-but-silent run — that would free the org's
 concurrency slot and let a second run launch into a destination the first is
 still writing to. But surfacing it in the UI needs a `stalled` flag on `runs`
 and a migration, which Phase 5 did not add. Today an operator learns about it
-from `console.warn`. The review closed the other half of this: until `6f13fcd`
+from `console.warn`. Tracked in [#14](https://github.com/EduardoPetrini/nodejs-movy-data/issues/14). The review closed the other half of this: until `6f13fcd`
 the watchdog only ever watched runs ADOPTED after a restart, never the ones
 this host forked itself. See *Bugs found reviewing Phase 5* below.
 
@@ -70,11 +78,11 @@ up again, and the thresholds are re-ratcheted to the floor — set by NAME, sinc
 the report prints statements/branches/functions/lines and the `thresholds`
 object does not list them in that order. The largest remaining gaps are
 `apps/cli/src/presentation/cli/cli.ts` at 0% and the Vue components, neither of
-which is unit-tested at all.
+which is unit-tested at all. Tracked in [#17](https://github.com/EduardoPetrini/nodejs-movy-data/issues/17).
 
 **No `prefers-contrast` or screen-reader pass.** Phase 5 did keyboard and focus:
 a skip link, focus rings verified in a browser, and three Playwright tests. It
-did not audit with a screen reader, and `docs/agents/` records no commitment to.
+did not audit with a screen reader, and `docs/agents/` records no commitment to. Tracked in [#18](https://github.com/EduardoPetrini/nodejs-movy-data/issues/18).
 
 **Known bugs, tracked.** One open, CLI-side:
 [#4](https://github.com/EduardoPetrini/nodejs-movy-data/issues/4) `MssqlQueryAnalyzer`
@@ -85,14 +93,18 @@ assumed an `id` column) and [#5](https://github.com/EduardoPetrini/nodejs-movy-d
 (query migration crashed on a non-PostgreSQL destination) were fixed in code
 earlier and left open on GitHub; both closed 2026-10-22.
 
-**Auto-increment is not carried across engines.** A PG `serial` lands on
-MySQL/MSSQL as a plain integer, and a MySQL/MSSQL identity lands on PG with no
-sequence. Step 9 cannot fix that — there is no counter to reset. See CLAUDE.md,
-*Migration flow*.
+**~~Auto-increment is not carried across engines.~~ Fixed 2026-10-22** — see
+*Fix — auto-increment across engines* below.
+
+**~~MSSQL as a destination is broken for real data.~~ Fixed 2026-10-22** — see
+*Fix — SQL Server as a destination* below.
+
+**Comparisons count rows, never values.** A PG→MySQL run rounded every price to a
+whole number and its comparison still read 100%. Found by reading the column. Tracked in [#15](https://github.com/EduardoPetrini/nodejs-movy-data/issues/15).
 
 **The test-before-save endpoint has no unit test.**
 `connections/test.post.ts` (2026-09-17) was verified by hand only. See the
-section at the end of this file.
+section at the end of this file. Tracked in [#16](https://github.com/EduardoPetrini/nodejs-movy-data/issues/16).
 
 ---
 
@@ -809,8 +821,8 @@ Two pages under `/o/:slug/runs`, four components, and one pure reducer.
 serializer and the reducer import the same declarations — a field the server
 stops sending is a type error in the client rather than `undefined` in front of
 someone watching a migration. It restates the nine step ids rather than
-importing them from `@movy/core`, because core is CommonJS and externalised for
-Nitro; `step-order.test.ts` fails if the copy ever drifts.
+importing them from `@movy/core`, because core is CommonJS and the client bundle
+cannot import it (the server bundle inlines it — see CLAUDE.md); `step-order.test.ts` fails if the copy ever drifts.
 
 **`app/utils/run-reducer.ts` is pure and outside any store**, the same reasoning
 as `run-projection.ts` on the server. It de-duplicates by `seq` (the snapshot
@@ -1260,3 +1272,527 @@ already covers a saved connection.
   hand in the browser only. Its timeout `setTimeout` is also never cleared, so
   a fast connect leaves a 10s timer pending — harmless, but worth fixing when a
   test is written for it.
+
+## R0 — Compose foundations (2026-10-22)
+
+Phase 0 of `docs/runner-service-plan.md` (decisions: ADR 0004, Proposed). Branch
+`feat/runner-service-phase-0`. The web container still forks the runner; Phase 6
+moves runs to separate runner services.
+
+**What exists.** `docker/Dockerfile` (one image for web, runner and CLI; `build`
+target for `migrate`/`seed`; Playwright `e2e` target), `docker-compose.yml`,
+`scripts/docker-init.sh` (writes `docker/{movy,meta-db,lab,cli}.env`, never
+overwrites), lab fixtures for PG, MySQL and MSSQL (same deterministic shop:
+2000/200/5000/15000 rows, a self-referencing FK, a PG sequence left BEHIND its
+`MAX(id)`), `apps/web/scripts/seed-lab.ts` (saves the three lab connections in
+`acme`), `apps/web/tests/e2e/live-migration.spec.ts`, and `pnpm docker:*` scripts.
+
+### Decisions that are load-bearing
+
+- **The e2e container shares web's network namespace** (`network_mode: service:web`).
+  The session cookie is `Secure`; a browser only sends that over plain HTTP to
+  `localhost`, so at `http://web:3000` sign-in silently does not stick.
+- **Compose never reads the root `.env`** (the CLI's). Env files live in `docker/`
+  and are gitignored by the existing `*.env` rule.
+- **`docker:init` refuses to overwrite**: a new `NUXT_ENCRYPTION_KEY` makes every
+  saved connection undecryptable; a new meta-db password no longer matches the volume.
+- **`CI=true` is set per `pnpm install` line, not as an image ENV**, so the runtime
+  container does not flip CI-sniffing libraries into CI mode.
+
+### The bugs this work found
+
+1. **`@movy/web` imported `@movy/runner` without declaring it.** It only resolved
+   on a dev machine through a stale root `node_modules/@movy/runner` symlink (dated
+   Sep 7); a clean lockfile install — the image — crashed on boot with
+   `ERR_MODULE_NOT_FOUND`. Fixed: `"@movy/runner": "workspace:*"` in
+   `apps/web/package.json` (3-line lockfile change).
+2. **PG→MySQL fails for any table with a `serial` column.** The documented
+   auto-increment gap is not "degraded", it is fatal on MySQL: the `nextval()`
+   default is emitted as a string literal and schema sync rejects the first table.
+   Recorded in CLAUDE.md under the gap; the spec carries it as `test.fixme`. Not
+   fixed here — it is core translator work. PG→MSSQL unverified, probably the same.
+3. **`compose up --wait` fails on a one-shot nothing depends on** (`mssql-init`,
+   exit 0). `docker:up` starts everything, then waits on the long-running services only.
+
+### Verified
+
+- `pnpm docker:up`: meta-db, web and the three labs healthy; migrate, seed and
+  mssql-init exited 0. Fixture counts identical on all three engines.
+- `pnpm docker:e2e`: **9 passed, 1 skipped** (the PG→MySQL `fixme`). Includes the
+  simulated mid-run reload, and a REAL PG→PG run whose comparison matches 22,200/22,200.
+- Step 9 inside the container: source `orders_id_seq` at 10, destination reseeded
+  so the next insert gets id 5001 (MAX is 5000).
+- `docker compose run --rm cli`: MySQL→PG, 4/4 tables, 22,200 rows, the CLI's own
+  validation 100 %. The log file lands in `./logs` on the host.
+- `pnpm test` 1233/1233 and `pnpm typecheck` green. (One earlier run showed 3
+  failures while a Docker build saturated the CPU; they passed on every quiet rerun.
+  Timing-sensitive tests under load, not a regression, but worth knowing.)
+- **Not verified:** a cold build on another machine; Rosetta-less SQL Server on Intel
+  is fine by construction but was not run.
+
+### Remaining for the runner plan
+
+R1 next: extract `@movy/db` (+ crypto) and move the run-control modules into
+`apps/runner`, no behaviour change; this Compose stack is its gate.
+
+## Fix — auto-increment across engines (2026-10-22)
+
+Done before R1, because the Compose live e2e had shown PG→MySQL failing on its
+first table.
+
+- **The flag, not the default, crosses engines.** The PG inspector now sets
+  `autoIncrement` for `serial` and identity columns; `carryAutoIncrement` drops a
+  foreign `nextval()` default and keeps the flag only where the destination allows
+  it (MySQL: the primary key's first column; MSSQL: one; PG: all). The PG
+  synchronizer emits `GENERATED BY DEFAULT AS IDENTITY` for a flagged integer with
+  no default, so MySQL→PG now has a counter, which step 9 reseeds.
+- **Re-runs** needed two diff fixes: primary keys matched by type
+  (`constraintKey()`), and alterations whose translated type equals the current one
+  dropped. Before, every cross-engine re-run tried to drop the PK and MODIFY every
+  column.
+- **`unwrapMssql`.** The Nitro bundle inlines `@movy/core` (the `external` entry
+  does not do what its comment claimed), and inside it `mssql` arrived as an ESM
+  namespace with no `ConnectionPool`. Every in-request MSSQL call failed in a
+  production build; dev and the runner were unaffected.
+- **Verified:** `pnpm docker:e2e` twice in a row, green: PG→PG, MySQL→PG, PG→MySQL,
+  fresh and re-run. MySQL `orders` AUTO_INCREMENT = 5001 although the PG source's
+  sequence sat at 10; PG `orders.id` is an identity at 5001 after MySQL→PG.
+  `pnpm test` 1261/1261, `pnpm typecheck` clean.
+- **Not fixed:** the MSSQL-destination gap above. Next: R1.
+
+## R1 — extract `@movy/db`, move run control into `apps/runner` (2026-10-22)
+
+**No behaviour change**, by construction: sources moved with `git mv` and came out
+R100/R099; the five moved tests changed import paths and nothing else.
+
+- **`packages/db` (`@movy/db`)**, CommonJS like core: `src/schema/*`, `migrations/`,
+  `drizzle.config.ts`, `createDb(url, { max })`, and the connection-secret half of
+  `crypto.ts`. Subpaths `@movy/db/schema` and `@movy/db/crypto`. It builds with
+  `module: node16` — under the base config's `node10`, declaration emit cannot name
+  Drizzle's inferred table types (TS2883). Output is still CommonJS.
+- **Web keeps its imports**: `server/db/schema/index.ts`, `server/db/client.ts` (now
+  `useDb()` over `createDb`) and `server/utils/crypto.ts` (re-export + the dev-only
+  password hashing) are shims. `db:migrate` / `db:generate` / `db:studio` delegate.
+- **`apps/runner/src/agent/`**: `event-writer`, `run-projection`, `journal-tailer`,
+  `run-manager`, plus `ingestion.ts` (the four unscoped helpers, out of `runs.repo.ts`).
+  Exported as `@movy/runner/agent`; `server/runs/index.ts` imports it.
+- **Wiring**: root `build`/`typecheck` include `packages/db`; vitest gains a `db`
+  project and anchored source aliases for `@movy/db`, its subpaths and
+  `@movy/runner/agent`; the Dockerfile copies `packages/db/dist`; Compose's `migrate`
+  calls `@movy/db` directly. One `drizzle-orm` install variant, so types are shared.
+- **Deviations from the plan** (recorded in its *Code moves*): ingestion went to the
+  runner, not `@movy/db/ingestion`, to avoid a package cycle; `crypto.test.ts` stayed
+  in web unchanged; the `MOVY_ENCRYPTION_KEY` alias waits for Phase 2.
+- **Dev note**: like core, `@movy/db` and `@movy/runner/agent` resolve to `dist`
+  outside the tests, so a fresh clone needs `pnpm build` before `pnpm dev:web` or
+  `pnpm seed:dev` (true for core already).
+- **Verified**: `pnpm test` 1262/1262 (same count as before); `pnpm typecheck` clean;
+  `pnpm build` green; `pnpm docker:e2e` 11 passed, 1 skipped (the PG→MSSQL fixme);
+  the moved migrations applied to an empty scratch database (4 migrations, 13 tables).
+- **Next — R2**: migration `0004`, the agent (claim, heartbeat, lease, fencing, drain),
+  the sweeper, embedded mode; the web stops forking.
+
+## Fix — SQL Server as a destination (2026-10-22)
+
+Between R1 and R2. Four stacked bugs, each found only once the one before it was fixed:
+the client pinned no session; `SET IDENTITY_INSERT` ran inside `sp_executesql` and
+reverted; INSERTs overran the 2,100-parameter cap; string lengths were dropped on
+create (`nvarchar(1)`). Along the way, two that affected other Pairs too:
+
+- **PG numeric precision was lost** on MySQL and SQL Server destinations
+  (`decimal(10,0)`, `numeric(18,0)`): data loss that row counts cannot see.
+- **A self-referencing table broke load order** for every table under it.
+
+Also: a run that fails on tables now carries a `TablesFailed` error naming them, and a
+re-run treats `decimal` and `numeric` as one type.
+
+- **Verified:** `pnpm docker:e2e` twice from an empty SQL Server `movy_dst`, both green
+  with no retries: PG→PG, MySQL→PG, PG→MySQL, PG→MSSQL, MySQL→MSSQL. `SUM(orders.total)`
+  is 1,074,991.50 on all three engines; `customers.email` is `nvarchar(255)`.
+  `pnpm test` 1284/1284, `pnpm typecheck` clean.
+- **Still open:** comparisons count rows only; SQL Server cannot ALTER a column a default
+  constraint uses (a re-run that changes a type there fails). Next: R2.
+
+## R2 — queue and agent (2026-10-22)
+
+- **Migration `0004_runners`**: `runner_classes` (seeded `default`, inserted before the
+  FK that needs it), `runners`, `run_specs`; `runs` gains `runner_class`, `runner_id`,
+  `claimed_at`, `lease_expires_at`, a partial queue index, and a nullable
+  `journal_path`. Tested on PGlite, including the upgrade over existing runs.
+- **The agent** (`apps/runner/src/agent/`): `queue-store.ts` (every statement),
+  `runner-agent.ts`, `run-spec-envelope.ts`; `RunManager` gains `liveRunIds()`,
+  `terminate()` and the followed run's pid. Embedded in web by default.
+- **Web**: launch enqueues a sealed spec in one transaction and wakes the agent;
+  cancel cancels a queued run outright (org-scoped), else `cancelling` + forward; the
+  new sweeper plugin runs every 10 s; `runs-reattach.ts` became
+  `embedded-runner.ts`.
+- **Two bugs caught before they shipped**: `RunManager.cancel` on a run it does not
+  hold settled it `RunnerGone` (wrong once a run can live on another runner, and wrong
+  for a re-attached run, whose pid it did not keep); and the old re-attach query
+  listed queued runs, which would have settled every waiting run as vanished on boot.
+- **Deviations from the plan**: the spec is deleted at claim, not at settle (no resume
+  needs it); `target_lock_key`, the busy index and `definitions.runner_class` wait for
+  phase 4, `runner_probes` for phase 5; the runner DB role and grants, and the
+  standalone `movy-runner-agent` bin, wait for phase 6, when an agent first runs
+  outside the web process. PGlite is a root devDependency (see CLAUDE.md).
+- **Verified**: `pnpm test` 1331/1331; `pnpm typecheck` clean; `pnpm docker:e2e` 13/13 —
+  the embedded runner registered, heartbeating, claimed every run, and `run_specs` was
+  empty afterwards.
+- **Next — R3**: the NOTIFY bus, so an agent outside the web process reaches the hub.
+
+## R3 — NOTIFY bus and runner availability (2026-10-22)
+
+- **One path for run events, whatever process ran the run.** `applyProjection` sends
+  `NOTIFY movy_run_events '{runId, lastSeq}'` inside its transaction (delivered only on
+  commit, never on rollback — tested on PGlite); the web's `RunEventFeed` reads
+  `run_events` past a per-run cursor and publishes to the unchanged `RunHub`. The
+  embedded agent's in-process `onFlushed` broadcast is removed, so the embedded and
+  external cases cannot behave differently.
+- **Ordering**: the socket awaits `feed.track()` (cursor = stored `last_seq`) before
+  reading the snapshot; a second peer never moves the cursor; reads per run never
+  overlap; a reconnect of the dedicated LISTEN connection (`PgListener`) triggers
+  `resync()`, since NOTIFY has no replay. `RunEventFeed` is pure and has ten tests.
+- **Runner availability**: `movy_runners` NOTIFY on register / state change / sweeper
+  offline (never per heartbeat); `RunnerHub` with its own ticket store and
+  `/_ws/runners`; refresh on NOTIFY and every 5 s while watched, sending only a
+  changed frame; roles revalidated each refresh. `RunnerAvailability.vue` sits in the
+  org home's summary rail and as a strip on the runs page; wording from the pure
+  `classSentence()`. Capacity is platform-wide, queue depth is this org's, runner ids
+  are admin-only.
+- **Found while looking at it**: every rebuilt container is a new embedded runner id,
+  so offline runners accumulated. The admin list drops a runner an hour after it went
+  offline; the sweeper deletes it after a day.
+- **Verified**: `pnpm test` 1370/1370; `pnpm typecheck` clean; `pnpm docker:e2e` 16/16,
+  including the mid-run reload over the new feed and the three panel tests; screenshots
+  at 1280 and 375.
+- **Not done**: "Start a runner" (phase 6, needs a provisioner); queue reasons in the UI
+  (phase 4, with the destination lock).
+
+## R4 — destination lock and runner classes (2026-10-23)
+
+- **One run per destination, across orgs.** The launch hashes engine, host, port and
+  database into `runs.target_lock_key` (`server/runs/target-lock.ts`; never
+  serialised, null for a replay). The claim skips a queued run whose key a running or
+  cancelling run holds, so it waits while younger runs to other databases go ahead;
+  the partial unique index `runs_target_busy_uq` refuses the second of two claims made
+  at the same instant, and the claim then asks again. Two spellings of one server
+  (`localhost`, `127.0.0.1`) are two keys: the lock guards the common mistake.
+- **Why a run is queued** — `no_runner`, `destination_busy`, `runners_busy`,
+  `starting` — is derived per request (`GET …/runs/:id/queue`, `server/runs/queue-state.ts`),
+  never stored, and polled by `QueueNotice.vue` every 5 s while the run is queued.
+  Another org's run holding the destination is never named; "ahead of it" counts this
+  org's runs only, the same rule as the runners panel.
+- **Runner classes** come from `MOVY_RUNNER_CLASSES_FILE` (Compose ships
+  `docker/runner-classes.json`: `default`, `large` above 20 GB). Parsed strictly in
+  `@movy/runner/agent` (unknown keys rejected, exactly one default) and upserted in one
+  statement at boot; the embedded agent awaits it before registering. A class dropped
+  from the file is kept, marked `configured = false`, loses the default, and is hidden
+  from the panel and selector. A broken file is logged and the table keeps what it had.
+- **A class per definition** (`migration_definitions.runner_class`, null follows the
+  default), and a Runner selector on the definition form and the review screen, each
+  option with its availability sentence. At launch: the body's class, else the
+  definition's, else the default (`chooseRunnerClass`); a definition whose class was
+  dropped runs on the default rather than becoming unlaunchable. The run header shows
+  the class.
+- **Size in bytes**: optional `ISchemaInspector.getTableSizeEstimates` — PG
+  `pg_total_relation_size`, MySQL `DATA_LENGTH + INDEX_LENGTH`, MSSQL used pages from
+  `sys.allocation_units`. Advisory, so each answers an empty map rather than failing the
+  preview, which then says "size unknown". The preview carries per-table and total bytes
+  and `runnerSuggestion` (highest threshold exceeded); the review screen shows it as a
+  hint with a "Use it" button, never as a switch.
+- **Found while testing it**: a queued run cancelled outright emitted no event, so its
+  page said "Queued" forever. `applyRunRow` takes the cancel response (and a refresh when
+  the queue notice finds the run gone) and only ever moves the status forward. And
+  `host-death.test.ts` was flaky because its host died on a 1.2 s timer before tsx had
+  started the runner under load; the host now dies once the journal has lines.
+- **Verified**: `pnpm test` 1421/1421 (twice, after the host-death fix); `pnpm typecheck`
+  clean; `pnpm docker:e2e` 19/19, including sizes read live from all three engines and
+  the queued-for-`large` run's reason and cancel; screenshots at 1280 and 375 of the
+  queue notice and the preview with a suggestion (threshold lowered for the shot only).
+- **Not done / noticed**: the lock under true concurrency (two agents) needs phase 6's
+  separate runner services. The preview counts column alterations the run will drop
+  (a PG→MySQL re-run shows "21 columns to alter"; `SyncSchemaUseCase` filters them) —
+  pre-existing, worth fixing in `buildPreview`.
+
+
+## R5 — probes: Test and Preview from a runner (2026-10-23)
+
+- **Why**: a runner can sit on a different network from the console. "It connects from
+  here" says nothing about whether a `large` runner reaches the same host, and the first
+  place that used to show up was a failed run.
+- **One implementation, two hosts.** `apps/runner/src/probes/` (`@movy/runner/probes`)
+  holds `testConnection`, `inspectForPreview` and the scrubbing (`safe-error.ts`, moved
+  from web, which re-exports it so the five callers did not move). The in-request
+  handlers and the agent's probe worker call the same functions, so a failure is the same
+  sentence from either. `buildPreview` stays in web and reads one `PreviewInspection`
+  shape (maps as entries) from either path.
+- **The probe queue** is `runner_probes` (migration `0007`), shaped like the run queue:
+  insert + `NOTIFY movy_probes` in one statement; claim with `SKIP LOCKED`, which also
+  sets the sealed request (`probeAad(orgId, probeId)`) to NULL; complete +
+  `NOTIFY movy_probe_done` in one statement; the waiting request takes the result with
+  `DELETE … RETURNING`, scoped to its org. The sweeper deletes expired rows.
+- **The wait** (`server/probes/run-probe.ts`): no online runner of the class with
+  `probe_slots > 0` is an immediate 503 `{reason: 'no_runner', runnerClass}` and nothing
+  is queued. Otherwise it waits on the NOTIFY but re-reads every second anyway (a NOTIFY
+  can be missed, or reach a different replica). Timeouts are 15 s for Test and 60 s for
+  Preview; past that it is a 504 and the row is deleted, so a late runner has nothing to
+  write to.
+- **The worker** (`apps/runner/src/agent/probe-worker.ts`) has its own slots
+  (`MOVY_RUNNER_PROBE_SLOTS`, default 2), separate from run slots: a runner busy with a
+  long migration still answers "can you reach this database?". A request it cannot
+  decrypt or whose version it does not know is answered in its own words, never the
+  request's. The embedded agent starts it after registering and stops it first on close.
+- **Recorded**: `connections.last_test_via` (`web` or the class), on the wire as
+  `lastTest.via` for every role (a class name, never a host); the row says "from the
+  Default runner" when it was not the console.
+- **UI**: one "Test from" selector per connections page, which also drives the create
+  form's test-before-save; "Inspect from" beside Preview on the review screen, with
+  "Inspected from the … runner." under the result. Compare's drift view stays in-request
+  (decision 6).
+- **Tests**: probe SQL against PGlite (12), the worker (6), seal/open and the executor's
+  result mapping (7), `testConnection` (3), a console↔runner round trip through PGlite
+  with a real worker (4), `via` parsing and error mapping, waiters, display. E2E
+  `probes.spec.ts`: a test from the default runner shows in its row; a preview from the
+  runner lists the same tables as the console's; the review screen names where it
+  inspected; `via: 'large'` with no large runner is a 503 in under 5 s.
+- **Gate**: `pnpm docker:e2e` 23/23 (19 earlier + 4 in `probes.spec.ts`). Its first run
+  failed on the test, not the app: `getByLabel('Source', { exact: true })` never resolves
+  on the review screen, because the `<label>` wraps the `<select>` and Playwright's label
+  text then includes every option. The spec matches `getByRole('combobox', { name })`,
+  which uses the computed accessible name. Both selectors checked at 1280 and 375: no
+  page overflow; the connections table scrolls inside its own container, as before.
+
+## R6 — runner services and provisioning in Compose (2026-10-25)
+
+- **Why**: until now every run still executed inside the web container (the embedded
+  agent). A console restart, an OOM in a big migration, or a runner that needs a
+  different network all took the console with them.
+- **`movy-runner-agent`** (`apps/runner/src/agent-main.ts`): the same `RunnerAgent`,
+  `RunManager`, `EventWriter` and `ProbeWorker` the console embeds, wired from the
+  environment by `readAgentConfig` (pure; a bad value is refused at boot with exit 64,
+  never defaulted). No port. It LISTENs on two new channels, `movy_runs {runnerClass}`
+  (sent in the enqueue transaction) and `movy_run_cancel {runId}` (sent by
+  `requestCancel`), plus `movy_probes`; the web listener forwards the same two to an
+  embedded agent, for a run launched through another replica. `PgListener` moved into
+  `@movy/runner/agent`. `agent.cancel` is now idempotent per run, since a NOTIFY and the
+  console's fast path can both deliver one.
+- **Least privilege**: `movy_runner` is created — or its password reset — by the `migrate`
+  service after the migrations (`ensureRunnerRole`, `RUNNER_GRANTS` in `@movy/db`).
+  `REVOKE ALL` then the list, so a dropped grant is dropped from a live deployment too.
+  Tighter than the plan: no INSERT on `runs` or `runner_probes`. Runners read
+  `docker/runner.env` only (role URL + encryption key), never `movy.env`.
+- **Compose**: `web` lost `init`, `MOVY_RUNNER_ENTRY`, `MOVY_JOURNAL_DIR` and the journals
+  volume and sets `MOVY_EMBEDDED_RUNNER=false`. `runner-default` (1 replica, 2 slots) and
+  `runner-large` (0) with `init`, `stop_grace_period: 2m`, replica-local journals and the
+  `movy.runner-template` label. `docker-compose.provisioner.yml` mounts the socket into
+  `web` as root, with `MOVY_PROVISIONER=docker` and `MOVY_AUTOSCALE=true`. Scripts:
+  `docker:scale N`, `docker:up:provisioner`; `docker:down` removes provisioned runners
+  first (Compose does not know them, and they hold the network).
+- **Provisioning** (`server/runners/`): `ManualProvisioner` answers
+  `docker compose up -d --scale runner-<class>=<n+1>` (`MOVY_PROVISIONER_COMMAND`
+  overrides it); `DockerProvisioner` clones a template container through the Engine API
+  (`docker-engine.ts`, five calls, no library) with the class's limits, no restart
+  policy, no Compose labels, `movy.provisioned` and `MOVY_RUNNER_PROVISIONED_BY=docker`.
+  `POST …/runners/scale` needs the new `runner:scale` (admin only). The sweeper replica
+  removes exited clones and, in auto mode, scales a class with queued work that is not
+  blocked on its destination, no free slot and room under `max_replicas`, once per 60 s.
+- **UI**: `StartRunner.vue` under a `no_runner` queue notice and beside "Test from" /
+  "Inspect from" on a class with nobody online; absent without `runner:scale`. The
+  manual answer is a read-only command with Copy.
+- **Tests**: config (7), idle watch (2), self-fencing (3), idempotent cancel, re-attach
+  scoping, the busy reset; the role against PGlite *as the role* — every table outside
+  the grant list refused, structurally, so a new table is covered — and every agent
+  statement run as `movy_runner` (5); provisioners (15, incl. the clone body), auto mode
+  (4), capacity and demand SQL (4), `scaleSentence`, `runner:scale`; the agent binary's
+  boot refusals as a process (2). E2E `runner-services.spec.ts` (Compose only): a run is
+  claimed by a container, never `embedded-*`; an admin offered a runner gets the command
+  (or, under the override, a started runner); an editor is not offered one and gets 403.
+
+### The bugs this work found
+
+- **A network partition left the agent heartbeating but never claiming again.** A query
+  sent on a socket that died in the partition never settles — `pg` has no client-side
+  timeout by default — and `wake()` kept returning that pending `claiming` promise.
+  Heartbeats took fresh connections, so the runner looked healthy in the panel while the
+  next run sat `starting` forever. Fixed with a 30 s `query_timeout` and
+  `connectionTimeoutMillis` on the agent's pool (`createDb` options) and TCP keepalive
+  on the pool and the LISTEN connection; the stuck queries now fail as
+  "Query read timeout" and the next wake claims. Found only by
+  `docker network disconnect` — no unit test models a socket that never answers.
+- **The docker provisioner could not start a large runner.** The clone copied the
+  template's `MemorySwap` (sized for the 1 GB default runner) and raised `Memory` to 8 GB;
+  Docker refuses swap below memory. The clone's swap is now its own memory.
+- **An offline runner kept its last `busy` count**, so the admin list showed a stopped
+  runner as busy. `setRunnerState('offline')` zeroes it.
+- **Not a bug, a gap closed**: an agent cut off from the database kept its runs going
+  until it could hear the sweeper had settled them. It now stops them itself once a full
+  lease passes without a successful heartbeat — before, or as, the sweeper settles them.
+
+### Verified (Compose, 2026-10-25)
+
+Against the plan's Verification list:
+
+1. `pnpm docker:up`: every service healthy or exited 0; `migrate` logged
+   `movy_runner is up to date`; the runner registered as the role. ✔
+2. `docker compose stop runner-default` with nothing running: offline at once (it says
+   so itself on the way out, rather than waiting 20 s for the sweeper). ✔
+3. Large run with no large runner: `queued: no runner`, Start a runner → the command
+   (manual); under the override → a container, which claimed the run. ✔
+4. Two orgs, one `movy_dst`, real PG→PG runs: the second showed `destination_busy` with
+   no run named (another org's), then ran a second after the first settled; both
+   succeeded. ✔
+5. `docker compose restart web` mid-run: the run finished `succeeded`, events 1…118, no
+   gap, no duplicate, read back through the API. The browser reload is
+   `run-lifecycle.spec.ts`. ✔
+6. `docker compose kill runner-default` mid-run: `failed` / `RunnerVanished` with the
+   partially-applied message ~32 s after the kill (lease 30 s + one sweep); not retried. ✔
+7. `docker network disconnect` for 45 s mid-run, then reconnect: the agent logged the
+   fence, no runner process survived, no events after the settle, and — after the fix
+   above — the next run was claimed within 4 s. Simulated, so "no writes to `movy_dst`"
+   is shown by the fence rather than by row counts. ✔
+8. `docker compose stop runner-default` mid-run: drained 14 s, the run `succeeded`. ✔
+9. Size suggestion: R4. A large run launched with zero large runners was claimed by the
+   runner auto mode started ~10 s later. ✔
+10. Test from `large` with none: 503 in 3 ms → Start a runner → registered in 1 s with
+    8 GB / 4 CPUs / no restart → retry `ok`, connection shows `via: large`. Editor: 403. ✔
+11. Viewer counts without ids: `runner-availability.spec.ts`. ✔
+12. `pnpm docker:down && pnpm docker:up`: users, orgs, connections, definitions, runs and
+    run events identical before and after. `down -v` not run against a working meta-db;
+    it is Compose's own volume removal. ✔
+- **Idle exit**: the clone auto mode started exited 0 ten minutes after its last run
+  (12:03:44 → 12:13:44), the sweeper removed it within 10 s, and its row went offline
+  with `busy = 0`. Class cap: a second Start while at `max_replicas` answered
+  `at_capacity` and started nothing. ✔
+13. `pnpm docker:e2e` 26/26 (23 + 3 in `runner-services.spec.ts`); `pnpm test` 1528/1528;
+    `pnpm test:coverage` above its floor (66.83 / 57.7 / 68.69 / 67.58).
+
+## PR #8 review fixes (2026-10-25)
+
+- **Why**: a multi-agent review of the runner-service PR, then a deeper pass over the
+  areas it covered lightly. Twenty-two commits on `feat/runner-service-phase-0`; each
+  fix landed with a test that failed first.
+- **Platform operators** (the one design change; ADR 0004, amendment 1). Orgs are
+  self-serve, so the org-admin `runner:scale` let any signed-in user start shared
+  runners and read every runner's hostname. Acting on shared infrastructure is now a
+  platform operator's: a `platform_admins` row (migration `0008`, granted with who and
+  when — the SaaS case) or an email in `MOVY_PLATFORM_ADMINS` (self-hosted, or a SaaS's
+  first operator). Read from the database on every check and every runner-hub refresh.
+  `/api/me` answers `platformAdmin`; `pnpm seed:dev` adds `ops@movy.local`, and
+  `admin@` stays a plain org admin the e2e specs show being refused.
+- **Reliability**:
+  - the heartbeat judged fencing by the live set read after its query, so a run claimed
+    during it was killed as swept, or never fenced at all;
+  - a failed cancel was an unhandled rejection that also blocked any retry;
+  - the embedded agent tried its start once; the live feed waited for a notification
+    that, after `run_finished`, never comes;
+  - `PgListener.stop()` during a reconnect leaked a LISTENing connection;
+  - a non-JSON 2xx from Docker threw out of a response listener and crashed the console;
+  - the provisioner missed created-but-unstarted clones and could pass `max_replicas`;
+  - a shutdown waited on probes before it stopped claiming.
+- **Consistency**: one class-name rule (`web` reserved, counts within `integer`); one
+  reading of `MOVY_RUNNER_SLOTS`, which the embedded agent used to default silently;
+  probe requests, runner answers and the run spec envelope checked, never cast; a failed
+  spec read reported as `RunSpecUnavailable`, not "spec gone".
+- **Cleanup**: `EventWriter.onFlushed` removed; NOTIFY payload parsing and the
+  simulation recording each resolved in one place; `agent-main`'s `run()` split;
+  `server/runs/host-paths.ts`. `run-manager.ts` was left alone: its `reattach()` is 20
+  lines, not the 100 the first review reported.
+- **New tests**: `PgListener` (first ever), the Docker socket client against a real
+  HTTP server, `sweepTick`, a probe answered with no NOTIFY, the heartbeat race, the
+  provisioner under concurrent requests, operator resolution against PGlite.
+
+### Verified
+
+- `pnpm test`, `pnpm typecheck` and `pnpm build` after every commit group.
+- `pnpm docker:e2e`: **28/28** on a rebuilt stack (migration `0008` applied). The first
+  run failed one test: `runner-services.spec.ts` still read runner ids as `admin@`, who
+  since the operator change gets class counts but no `runners` list. The spec now signs in
+  as `ops@`, and reads the online count from `classes`, which every role gets.
+- Host `pnpm test:e2e` (embedded agent): **12/12**; the 16 skips are the Compose-only
+  specs (`live-migration`, `probes`, `runner-classes`, `runner-services`). A cold
+  `nuxt dev` can outlast Playwright's 120 s `webServer` timeout; start it yourself and set
+  `MOVY_E2E_EXTERNAL_SERVER=1` (plus `MOVY_E2E_BASE_URL` if Nuxt picks another port).
+
+### Tracked after this release
+
+Everything below is outside PR #8 and has its own issue:
+
+| Issue | What |
+|-------|------|
+| [#9](https://github.com/EduardoPetrini/nodejs-movy-data/issues/9) | simultaneous launches can pass `max_concurrent_runs` |
+| [#10](https://github.com/EduardoPetrini/nodejs-movy-data/issues/10) | two web replicas can start a runner past `max_replicas` |
+| [#11](https://github.com/EduardoPetrini/nodejs-movy-data/issues/11) | runner phase R7: Kubernetes (Deployment per class, KEDA, shared tickets) |
+| [#12](https://github.com/EduardoPetrini/nodejs-movy-data/issues/12) | runner phase R8: runner classes edited in the UI by platform operators |
+| [#13](https://github.com/EduardoPetrini/nodejs-movy-data/issues/13) | comparisons count inside the request and time out on large databases |
+| [#14](https://github.com/EduardoPetrini/nodejs-movy-data/issues/14) | a stalled run reaches only the server log |
+| [#15](https://github.com/EduardoPetrini/nodejs-movy-data/issues/15) | comparisons check counts, never values |
+| [#16](https://github.com/EduardoPetrini/nodejs-movy-data/issues/16) | unit tests for the test-before-save endpoint |
+| [#17](https://github.com/EduardoPetrini/nodejs-movy-data/issues/17) | coverage to the 80 % target |
+| [#18](https://github.com/EduardoPetrini/nodejs-movy-data/issues/18) | axe checks, screen-reader and `prefers-contrast` pass |
+| [#19](https://github.com/EduardoPetrini/nodejs-movy-data/issues/19) | automate the chaos steps 5–7 of the runner verification |
+| [#20](https://github.com/EduardoPetrini/nodejs-movy-data/issues/20) | a production Compose override (no seed or lab, SSO, TLS) |
+| [#21](https://github.com/EduardoPetrini/nodejs-movy-data/issues/21) | the new organisation form has no Cancel button |
+
+### Second review pass (2026-10-25)
+
+Eleven more findings, each fixed with a test that failed first:
+
+- **Fencing** (`runner-agent.ts`, `run-manager.ts`): a fenced run is SIGKILLed, not sent
+  the cooperative SIGTERM; a run recovered after a restart is owned and fenced like a
+  claimed one, by its stored pid; leases have a per-run deadline measured from the
+  renewal's send time and checked on a 1 s timer, 5 s before expiry, never only after a
+  heartbeat fails; a run that finished between beats leaves `owned`.
+- **Cancel before launch** (`ingestion.ts`): `run_started` no longer turns `cancelling`
+  back into `running`, which hid the cancel from every later heartbeat.
+- **Swept runs reach the page**: the sweep NOTIFYs `movy_run_settled`, and the console
+  pushes a cohort-neutral `run_status` frame, applied with `applyRunRow`.
+- **Runner hub**: one membership object in both indexes, so an operator promoted and
+  then revoked on a live socket leaves the operator room.
+- **Primary keys** (`constraint-key.ts`): matched by type AND ordered columns, so a key
+  over different columns is replaced rather than kept.
+- **Probes**: a per-kind execution deadline (15 s test, 60 s preview — the console's own
+  waits) aborts the probe, closes its connections and frees the slot.
+- **Runner classes**: a failed upsert is retried (5 s timer and the next caller) instead
+  of memoised; a broken file still is not.
+- **Docker provisioner**: a clone whose start fails is removed, and `cleanup` removes one
+  left `created` for over two minutes, so neither holds the class at capacity.
+
+`pnpm test` 1614/1614, `pnpm typecheck`, `pnpm build` green. Compose E2E not re-run.
+
+### Third review pass (2026-10-25)
+
+Five findings, each fixed with a test that failed first:
+
+- **Fencing at startup** (`runner-agent.ts`): the lease watchdog is armed BEFORE the
+  first beat. That beat awaits a heartbeat and the whole claim loop, so a heartbeat that
+  hung left recovered runs writing unchecked. A first beat slower than one check
+  interval now stops them: their remaining lease is unknown.
+- **A claim answered late** (`runner-agent.ts`): leases are checked synchronously right
+  before `launch`, not only on the timer, so a claim whose answer arrived past its
+  deadline is never started.
+- **Preview abort** (`pg-connection.adapter.ts`, `inspect-for-preview.ts`):
+  `IDatabaseConnection.abort?()` cancels in-flight statements on the server
+  (`pg_cancel_backend` on a connection of its own), then ends. `pool.end()` alone waits
+  for busy clients, so a blocked catalogue query outlived the freed slot. `end()` is now
+  idempotent. MySQL and MSSQL have no `abort()` yet and are only closed.
+- **Every settlement is announced**: migration `0009` adds the `runs_settled_notify`
+  trigger, which NOTIFYs `movy_run_settled` whenever a run's status becomes terminal,
+  whoever wrote it. Only the sweeper did before; a fenced, crashed or refused run left
+  the page on "running". The sweep's hand-written NOTIFY is gone.
+  `run-settled-notify.test.ts` drives every settlement path against the real migrations.
+- **Settlements across a LISTEN reconnect** (`server/runs/settled-status.ts`): on
+  reconnect the console re-reads every watched run and pushes the settled ones, as the
+  event feed re-reads events. NOTIFY has no replay.
+
+`pnpm test` 1637/1637, `pnpm typecheck`, `pnpm build` green. `pnpm docker:e2e`
+**28/28** on a rebuilt stack (2026-10-27), covering the second and third passes and
+migration `0009`.
+
+### Out of scope, found on the way
+
+- Launching checks `countActive()` and then enqueues without a lock, so two
+  simultaneous launches can pass `max_concurrent_runs`. On `main` before this branch:
+  #9 (lock the org row inside the `enqueue` transaction).
+- Two web replicas asked to start a runner within the same second can pass a class's
+  cap by one; documented in CLAUDE.md, tracked in #10.
+

@@ -8,6 +8,7 @@ import {
 } from '../../domain/types/migration.types.js';
 import { MssqlConnection } from '../database/mssql/mssql-connection.adapter.js';
 import { throwIfCancelled, rethrowIfCancelled } from './cancellation.js';
+import { insertMssqlRows } from './mssql-insert.js';
 
 const BATCH_SIZE = 500;
 const DEFAULT_SCHEMA = 'dbo';
@@ -134,7 +135,6 @@ export class MssqlDataMigrator implements IDataMigrator {
 
     const escapedTable = escapeId(table);
     const colList = columns.map(escapeId).join(', ');
-    const placeholders = columns.map(() => '?').join(', ');
 
     if (hasIdentity) {
       await destClient.query(`SET IDENTITY_INSERT ${escapedTable} ON`);
@@ -155,17 +155,7 @@ export class MssqlDataMigrator implements IDataMigrator {
 
         if (rows.length === 0) break;
 
-        const values: unknown[] = [];
-        const rowPlaceholders: string[] = [];
-        for (const row of rows) {
-          rowPlaceholders.push(`(${placeholders})`);
-          for (const col of columns) values.push(row[col] ?? null);
-        }
-
-        await destClient.query(
-          `INSERT INTO ${escapedTable} (${colList}) VALUES ${rowPlaceholders.join(', ')}`,
-          values
-        );
+        await insertMssqlRows(destClient, escapedTable, columns, rows);
 
         totalCopied += rows.length;
         offset += rows.length;

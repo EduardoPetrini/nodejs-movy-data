@@ -166,3 +166,25 @@ describe('parseDefinitionInput — the destination table name', () => {
     }
   });
 });
+
+describe('parseDefinitionInput — the runner class', () => {
+  it('is null unless given, so the definition follows the default', () => {
+    expect(accepted(valid).runnerClass).toBeNull();
+    expect(accepted({ ...valid, runnerClass: '  ' }).runnerClass).toBeNull();
+  });
+
+  it('keeps a class name, in both modes', () => {
+    expect(accepted({ ...valid, runnerClass: 'large' }).runnerClass).toBe('large');
+    expect(accepted({ ...valid, mode: 'query', querySql: 'select 1', targetTableName: 't', runnerClass: 'large' }).runnerClass)
+      .toBe('large');
+  });
+
+  it('refuses something that cannot be a class name, without quoting it', () => {
+    const error = rejection({ ...valid, runnerClass: 'Large; drop' });
+    expect(error).toEqual({ field: 'runnerClass', message: 'That is not a runner class name.' });
+  });
+
+  it('refuses "web", which names the console and never a class', () => {
+    expect(rejection({ ...valid, runnerClass: 'web' })).toEqual({ field: 'runnerClass', message: 'That is not a runner class name.' });
+  });
+});

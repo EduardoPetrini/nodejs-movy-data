@@ -60,6 +60,26 @@ describe('MysqlSchemaSynchronizer', () => {
       expect(diff.tablesToDrop).toHaveLength(0);
     });
 
+    it('matches primary keys by type, since MySQL names every one PRIMARY', () => {
+      // A PG source calls it customers_pkey. Matching by name dropped and re-added
+      // the key on every re-run, which MySQL refuses under an AUTO_INCREMENT column.
+      const pk = (name: string) => ({ name, type: 'PRIMARY KEY' as const, columns: ['id'] });
+      const source: DatabaseSchema = { tables: [makeTable('customers', { constraints: [pk('customers_pkey')] })], sequences: [], enums: [] };
+      const target: DatabaseSchema = { tables: [makeTable('customers', { constraints: [pk('PRIMARY')] })], sequences: [], enums: [] };
+      const diff = sync.diff(source, target);
+      expect(diff.constraintsToAdd).toHaveLength(0);
+      expect(diff.constraintsToDrop).toHaveLength(0);
+    });
+
+    it('still adds a primary key the destination lacks', () => {
+      const source: DatabaseSchema = {
+        tables: [makeTable('customers', { constraints: [{ name: 'customers_pkey', type: 'PRIMARY KEY', columns: ['id'] }] })],
+        sequences: [], enums: [],
+      };
+      const diff = sync.diff(source, { tables: [makeTable('customers')], sequences: [], enums: [] });
+      expect(diff.constraintsToAdd.map((c) => c.constraint.name)).toEqual(['customers_pkey']);
+    });
+
     it('detects tables to create', () => {
       const source: DatabaseSchema = { tables: [makeTable('users')], sequences: [], enums: [] };
       const diff = sync.diff(source, emptySchema());

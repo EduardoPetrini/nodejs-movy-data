@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import type { ConnectionInput, WireConnection } from '#shared/connection-wire'
+import { WEB_VIA, viaDisplay } from '#shared/probe-via'
+import type { RunnersSnapshot } from '#shared/runner-wire'
 import { formatDateTime } from '../../../utils/format-datetime'
 import { timeValue, type SortColumn } from '../../../utils/table-sort'
 import {
@@ -20,6 +22,10 @@ const { data, refresh, error } = await useFetch<{ connections: WireConnection[] 
  * host, so an edit form would be a form with nothing in it.
  */
 const { data: me } = await useFetch('/api/me')
+const { data: runners } = useFetch<RunnersSnapshot>(() => `/api/orgs/${slug.value}/runners`, {
+  key: `runner-classes-${slug.value}`,
+})
+const runnerClasses = computed(() => runners.value?.classes ?? [])
 const mayWrite = computed(
   () => me.value?.orgs.find((o) => o.slug === slug.value)?.permissions.includes('connection:write') ?? false
 )
@@ -88,6 +94,8 @@ function messageOf(err: unknown, fallback: string) {
 // ---- test ----
 
 const testing = ref<string | null>(null)
+/** One choice for every Test on the page, the create form's included. */
+const testVia = ref(WEB_VIA)
 
 /**
  * A failed test opens its own reason.
@@ -101,7 +109,10 @@ async function test(id: string) {
   testing.value = id
   rowError.value = null
   try {
-    const result = await $fetch<{ ok: boolean }>(`${base.value}/${id}/test`, { method: 'POST' })
+    const result = await $fetch<{ ok: boolean }>(`${base.value}/${id}/test`, {
+      method: 'POST',
+      body: { via: testVia.value },
+    })
     await refresh()
     if (!result.ok) openPanel(id, 'error')
     else if (isOpen(id, 'error')) closePanel()
@@ -230,9 +241,14 @@ async function remove(id: string) {
       :saving="creating"
       :error="formError"
       :test-base="base"
+      :test-via="testVia"
       submit-label="Save connection"
       @submit="create"
     />
+
+    <div v-if="connections.length || showForm" class="toolbar">
+      <ProbeViaSelect v-model="testVia" :org-slug="slug" />
+    </div>
 
     <div v-if="connections.length" class="mv-scroll-x">
       <table class="grid-table">
@@ -274,6 +290,10 @@ async function remove(id: string) {
                   >
                     failed
                   </button>
+                  <!-- Only a runner is worth saying: the console is the default. -->
+                  <span v-if="c.lastTest.via && c.lastTest.via !== WEB_VIA" class="via" data-testid="last-test-via">
+                    from {{ viaDisplay(c.lastTest.via, runnerClasses) }}
+                  </span>
                 </template>
                 <span v-else class="never">never</span>
               </td>
@@ -364,6 +384,8 @@ tbody tr:hover td { background: var(--mv-bg-base); }
 .test { display: flex; align-items: center; gap: var(--mv-s-2); height: var(--mv-row-h); color: var(--mv-fg-muted); }
 .test .mv-num { font-family: var(--mv-font-mono); }
 .never { color: var(--mv-fg-subtle); }
+.test .via { font-size: var(--mv-fs-micro); color: var(--mv-fg-subtle); white-space: nowrap; }
+.toolbar { display: flex; justify-content: flex-end; margin-bottom: var(--mv-s-3); }
 .actions { display: flex; gap: var(--mv-s-2); justify-content: flex-end; }
 
 .fail {

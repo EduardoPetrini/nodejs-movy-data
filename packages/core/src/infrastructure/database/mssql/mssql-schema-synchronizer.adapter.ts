@@ -9,9 +9,33 @@ import {
 } from '../../../domain/types/schema.types.js';
 import { SchemaDiff } from '../../../domain/types/migration.types.js';
 import { SchemaSyncError } from '../../../domain/errors/migration.errors.js';
+import { constraintKey } from '../constraint-key.js';
 
 function escapeId(name: string): string {
   return '[' + name.replace(/]/g, ']]') + ']';
+}
+
+/** The longest length SQL Server accepts before a variable type must be (max). */
+const MSSQL_MAX_LENGTH: Readonly<Record<string, number>> = {
+  nvarchar: 4000, nchar: 4000, varchar: 8000, char: 8000, varbinary: 8000, binary: 8000,
+};
+const MSSQL_VARIABLE = new Set(['nvarchar', 'varchar', 'varbinary']);
+
+/**
+ * The column's type with its length, when the type string does not carry one.
+ *
+ * A PG `character varying(255)` arrives translated to bare `nvarchar` with the
+ * length in `characterMaxLength`, and SQL Server reads a bare nvarchar as
+ * nvarchar(1): every email failed to copy. MySQL's synchronizer has always
+ * appended the length; this one never did.
+ */
+function withLength(col: ColumnSchema): string {
+  const type = col.dataType.trim().toLowerCase();
+  const limit = MSSQL_MAX_LENGTH[type];
+  if (col.dataType.includes('(') || limit === undefined || col.characterMaxLength == null) return col.dataType;
+  const len = col.characterMaxLength;
+  if (len === -1 || len > limit) return MSSQL_VARIABLE.has(type) ? `${col.dataType}(max)` : `${col.dataType}(${limit})`;
+  return `${col.dataType}(${len})`;
 }
 
 export class MssqlSchemaSynchronizer implements ISchemaSynchronizer {
@@ -253,20 +277,20 @@ export class MssqlSchemaSynchronizer implements ISchemaSynchronizer {
     toAdd: SchemaDiff['constraintsToAdd'],
     toDrop: SchemaDiff['constraintsToDrop']
   ): void {
-    const targetConstraints = new Map(target.constraints.map((c) => [c.name, c]));
-    const sourceConstraints = new Map(source.constraints.map((c) => [c.name, c]));
+    const targetConstraints = new Map(target.constraints.map((c) => [constraintKey(c), c]));
+    const sourceConstraints = new Map(source.constraints.map((c) => [constraintKey(c), c]));
     const columnTypes: Record<string, string> = Object.fromEntries(
       source.columns.map((c) => [c.name, c.dataType])
     );
 
     for (const constraint of source.constraints) {
-      if (!targetConstraints.has(constraint.name)) {
+      if (!targetConstraints.has(constraintKey(constraint))) {
         toAdd.push({ tableName: source.name, constraint, columnTypes });
       }
     }
 
     for (const constraint of target.constraints) {
-      if (!sourceConstraints.has(constraint.name)) {
+      if (!sourceConstraints.has(constraintKey(constraint))) {
         toDrop.push({ tableName: source.name, constraintName: constraint.name, constraintType: constraint.type });
       }
     }
@@ -313,7 +337,7 @@ export class MssqlSchemaSynchronizer implements ISchemaSynchronizer {
   }
 
   private buildColumnDef(col: ColumnSchema): string {
-    let def = `${escapeId(col.name)} ${col.dataType}`;
+    let def = `${escapeId(col.name)} ${withLength(col)}`;
     if (!col.isNullable) def += ' NOT NULL';
     if (col.autoIncrement) def += ' IDENTITY(1,1)';
     if (col.defaultValue !== null && !col.autoIncrement) {

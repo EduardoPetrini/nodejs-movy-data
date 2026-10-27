@@ -123,6 +123,33 @@ describe('MssqlSchemaSynchronizer', () => {
       expect(createStmt).toContain('[my_table]');
     });
 
+    it('gives a string column its length, since a bare nvarchar is one character', async () => {
+      // A PG character varying(255) arrives as `nvarchar` with the length beside
+      // it. Emitted bare, SQL Server created nvarchar(1) and refused every email.
+      const col = (name: string, dataType: string, characterMaxLength: number | null) => ({
+        name, dataType, characterMaxLength, isNullable: true, defaultValue: null, numericPrecision: null, numericScale: null,
+      });
+      const diff = emptyDiff();
+      diff.tablesToCreate = [makeTable('t', { columns: [
+        col('email', 'nvarchar', 255),
+        col('code', 'char', 3),
+        col('big', 'nvarchar', 10_000),
+        col('note', 'nvarchar(max)', null),
+        col('sku', 'varchar(40)', 40),
+        col('n', 'int', null),
+      ] })];
+      await sync.apply(connection, diff);
+      const calls = (connection.query as ReturnType<typeof import('vitest').vi.fn>).mock.calls;
+      const createStmt = calls.find((c) => String(c[0]).includes('CREATE TABLE'))?.[0] as string;
+      expect(createStmt).toContain('[email] nvarchar(255)');
+      expect(createStmt).toContain('[code] char(3)');
+      expect(createStmt).toContain('[big] nvarchar(max)');
+      expect(createStmt).toContain('[note] nvarchar(max)');
+      expect(createStmt).toContain('[sku] varchar(40)');
+      expect(createStmt).toContain('[n] int');
+      expect(createStmt).not.toContain('int(');
+    });
+
     it('generates IDENTITY(1,1) for autoIncrement columns', async () => {
       const diff = emptyDiff();
       diff.tablesToCreate = [makeTable('t')];

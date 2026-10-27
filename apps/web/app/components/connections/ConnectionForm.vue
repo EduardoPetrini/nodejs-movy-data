@@ -29,6 +29,8 @@ const props = defineProps<{
   submitLabel: string
   /** Base connections URL for this org, e.g. `/api/orgs/acme/connections`. Only needed in create mode, to test before saving. */
   testBase?: string
+  /** Where the test-before-save runs: `web`, or a runner class. */
+  testVia?: string
 }>()
 
 const emit = defineEmits<{
@@ -60,7 +62,7 @@ async function testConnection() {
   try {
     testResult.value = await $fetch<{ ok: boolean; latencyMs: number | null; error?: string }>(
       `${props.testBase}/test`,
-      { method: 'POST', body: toConnectionInput(props.values) }
+      { method: 'POST', body: { ...toConnectionInput(props.values), via: props.testVia ?? 'web' } }
     )
   } catch (err) {
     testResult.value = {

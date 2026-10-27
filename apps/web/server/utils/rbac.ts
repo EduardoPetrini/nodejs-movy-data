@@ -7,6 +7,9 @@ import type { OrgRole } from '../db/schema';
  * viewer  — past executions and reports only. Never credentials, never a run.
  * editor  — connections and runs. Cannot touch users.
  * admin   — everything, plus members and promotion.
+ *
+ * Nothing here reaches past the org: starting runners and seeing them is a
+ * platform operator's (`platform-admin.ts`), because orgs are self-serve.
  */
 export type Permission =
   | 'run:read' | 'run:execute' | 'run:cancel' | 'run:log:read'

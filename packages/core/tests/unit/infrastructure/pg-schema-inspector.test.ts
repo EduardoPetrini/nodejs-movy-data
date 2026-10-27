@@ -183,6 +183,32 @@ describe('PgSchemaInspector', () => {
       expect(schema.tables[0].indexes[0].method).toBe('btree');
     });
 
+    it('flags serial and identity columns as autoIncrement, and nothing else', async () => {
+      const base = { table_name: 't', data_type: 'integer', udt_name: 'int4', is_nullable: 'NO', character_maximum_length: null, numeric_precision: 32, numeric_scale: 0 };
+      mockQuerySequence(conn, [[
+        { ...base, column_name: 'id', column_default: "nextval('t_id_seq'::regclass)", is_identity: 'NO' },
+        { ...base, column_name: 'ident', column_default: null, is_identity: 'YES' },
+        { ...base, column_name: 'qty', column_default: '1', is_identity: 'NO' },
+      ], [], [], [], []]);
+      const schema = await inspector.inspect(conn);
+      expect(schema.tables[0].columns.map((c) => c.autoIncrement)).toEqual([true, true, false]);
+      // The default stays as inspected: PG→PG recreates the sequence and needs it.
+      expect(schema.tables[0].columns[0].defaultValue).toBe("nextval('t_id_seq'::regclass)");
+    });
+
+    it('carries a numeric column\'s precision and scale in its type, as MySQL and MSSQL do', async () => {
+      // Reported as bare `numeric`, a PG numeric(12,2) became MySQL's
+      // decimal(10,0) and SQL Server's numeric(18,0): 4.50 was stored as 5.
+      const base = { table_name: 't', udt_name: 'numeric', is_nullable: 'NO', column_default: null, is_identity: 'NO', character_maximum_length: null };
+      mockQuerySequence(conn, [[
+        { ...base, column_name: 'price', data_type: 'numeric', numeric_precision: 12, numeric_scale: 2 },
+        { ...base, column_name: 'any', data_type: 'numeric', numeric_precision: null, numeric_scale: null },
+        { ...base, column_name: 'n', data_type: 'integer', udt_name: 'int4', numeric_precision: 32, numeric_scale: 0 },
+      ], [], [], [], []]);
+      const schema = await inspector.inspect(conn);
+      expect(schema.tables[0].columns.map((c) => c.dataType)).toEqual(['numeric(12,2)', 'numeric', 'integer']);
+    });
+
     it('builds sequences', async () => {
       const seqRows = [
         { sequence_name: 'users_id_seq', start_value: '1', minimum_value: '1', maximum_value: '9223372036854775807', increment: '1', cycle_option: 'NO' },
@@ -226,6 +252,23 @@ describe('PgSchemaInspector', () => {
         .mockResolvedValueOnce([{ count: '0' }]);
       const map = await inspector.getTableRowEstimates(conn);
       expect(map.get('empty_table')).toBe(0);
+    });
+  });
+
+  describe('getTableSizeEstimates', () => {
+    it('reads total relation size per table, coercing the bigint strings node-pg returns', async () => {
+      (conn.query as any).mockResolvedValue([
+        { relname: 'users', bytes: '81920' },
+        { relname: 'orders', bytes: 1048576 },
+      ]);
+      const map = await inspector.getTableSizeEstimates(conn);
+      expect(map).toEqual(new Map([['users', 81920], ['orders', 1048576]]));
+      expect((conn.query as any).mock.calls[0][0]).toContain('pg_total_relation_size');
+    });
+
+    it('answers an empty map when it cannot read sizes, since a size never gates a run', async () => {
+      (conn.query as any).mockRejectedValue(new Error('permission denied'));
+      expect(await inspector.getTableSizeEstimates(conn)).toEqual(new Map());
     });
   });
 });

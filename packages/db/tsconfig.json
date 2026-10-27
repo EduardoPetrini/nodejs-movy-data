@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    // node16, not the base config's node10: Drizzle's types are reached through
+    // its package exports map, and declaration emit for the inferred table
+    // types cannot name them otherwise (TS2883). Still CommonJS output, since
+    // package.json declares no "type".
+    "module": "node16",
+    "moduleResolution": "node16",
+    "rootDir": "./src",
+    "outDir": "./dist"
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist", "tests"]
+}

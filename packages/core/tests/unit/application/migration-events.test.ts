@@ -154,6 +154,50 @@ describe('MigrationOrchestrator event stream', () => {
     expect(last.type === 'run_finished' && last.status).toBe('failed');
   });
 
+  it('gives a run that failed on its tables an error naming them', async () => {
+    // A run can fail with no exception at all: the migrator records each failed
+    // table and returns. With no error on run_finished, the run's error message
+    // was stored empty, and the UI showed "failed" with no reason.
+    const result: MigrationResult = {
+      tables: [
+        { tableName: 'customers', rowsCopied: 10, durationMs: 1, success: true },
+        { tableName: 'orders', rowsCopied: 0, durationMs: 1, success: false, error: 'too many parameters' },
+        { tableName: 'products', rowsCopied: 0, durationMs: 1, success: false, error: 'IDENTITY_INSERT is OFF' },
+      ],
+      totalDurationMs: 3,
+      success: false,
+    };
+    registry = new DatabaseAdapterRegistry();
+    registry.register(DatabaseType.POSTGRES, makeAdapterSet(result));
+    await runWithEvents(result);
+
+    const last = events[events.length - 1];
+    expect(last.type === 'run_finished' && last.status).toBe('failed');
+    const error = last.type === 'run_finished' ? last.error : undefined;
+    expect(error?.name).toBe('TablesFailed');
+    expect(error?.message).toBe('2 of 3 tables failed: orders: too many parameters; products: IDENTITY_INSERT is OFF');
+  });
+
+  it('lists at most three failed tables and counts the rest', async () => {
+    const tables = Array.from({ length: 5 }, (_, i) => ({
+      tableName: `t${i}`, rowsCopied: 0, durationMs: 1, success: false, error: 'boom',
+    }));
+    const result: MigrationResult = { tables, totalDurationMs: 5, success: false };
+    registry = new DatabaseAdapterRegistry();
+    registry.register(DatabaseType.POSTGRES, makeAdapterSet(result));
+    await runWithEvents(result);
+
+    const last = events[events.length - 1];
+    const error = last.type === 'run_finished' ? last.error : undefined;
+    expect(error?.message).toBe('5 of 5 tables failed: t0: boom; t1: boom; t2: boom; and 2 more');
+  });
+
+  it('puts no error on a run that succeeded', async () => {
+    await runWithEvents({ tables: [], totalDurationMs: 1, success: true });
+    const last = events[events.length - 1];
+    expect(last.type === 'run_finished' && last.error).toBeUndefined();
+  });
+
   it('reports a pre-aborted run as cancelled, not failed', async () => {
     const controller = new AbortController();
     controller.abort();
