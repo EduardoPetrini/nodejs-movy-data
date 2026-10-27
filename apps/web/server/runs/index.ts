@@ -6,7 +6,7 @@ import { RunEventFeed } from './run-event-feed';
 import { findSimulationFixture, journalPathFor, resolveRunnerEntry } from './host-paths';
 import { configuredPlatformAdmins, platformAdminIds } from '../utils/platform-admin';
 import { readEmbeddedRunnerConfig, type EmbeddedRunnerConfig } from './embedded-config';
-import { RunnerHub, type RunnersGrant } from '../runners/runner-hub';
+import { RunnerHub, readRunnersGrant, type RunnersGrant } from '../runners/runner-hub';
 import { loadRunnersSnapshot } from '../runners/runner-summary';
 import {
   EventWriter,
@@ -33,7 +33,7 @@ import {
   type SqlClient,
 } from '@movy/runner/agent';
 import { ProbeWaiters } from '../probes/probe-waiters';
-import { RunHub } from './run-hub';
+import { RunHub, readSubscriptionGrant, type SubscriptionGrant } from './run-hub';
 import { SettledStatusFeed } from './settled-status';
 import { TicketStore } from './subscription-ticket';
 import { memberships } from '../db/schema';
@@ -53,7 +53,7 @@ let runnersTickets: TicketStore<RunnersGrant> | undefined;
 let listener: PgListener | undefined;
 let hub: RunHub | undefined;
 let settledFeed: SettledStatusFeed | undefined;
-let tickets: TicketStore | undefined;
+let tickets: TicketStore<SubscriptionGrant> | undefined;
 
 /** The socket fan-out for run streams. The event feed publishes into it. */
 export function useRunHub(): RunHub {
@@ -87,8 +87,8 @@ async function resolveRoles(
   return found;
 }
 
-export function useTicketStore(): TicketStore {
-  if (!tickets) tickets = new TicketStore();
+export function useTicketStore(): TicketStore<SubscriptionGrant> {
+  tickets ??= new TicketStore({ sql: useMetaSql(), kind: 'runs', parse: readSubscriptionGrant });
   return tickets;
 }
 
@@ -175,9 +175,9 @@ export function useRunnerHub(): RunnerHub {
   return runnerHub;
 }
 
-/** Its own store: a run-stream ticket can never open the runners socket, nor the reverse. */
+/** Its own kind: a run-stream ticket can never open the runners socket, nor the reverse. */
 export function useRunnersTicketStore(): TicketStore<RunnersGrant> {
-  if (!runnersTickets) runnersTickets = new TicketStore<RunnersGrant>();
+  runnersTickets ??= new TicketStore({ sql: useMetaSql(), kind: 'runners', parse: readRunnersGrant });
   return runnersTickets;
 }
 

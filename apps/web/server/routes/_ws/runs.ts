@@ -1,5 +1,6 @@
 import type { Peer } from 'crossws';
 import { useRunEventFeed, useRunHub, useTicketStore } from '~~/server/runs';
+import type { SubscriptionGrant } from '~~/server/runs/run-hub';
 import { loadRunSnapshot } from '~~/server/runs/snapshot';
 
 /**
@@ -28,7 +29,7 @@ export default defineWebSocketHandler({
     const frame = parsed as { k?: unknown; ticket?: unknown };
     if (frame?.k !== 'subscribe') return fail(peer, 'expected a subscribe message');
 
-    const grant = useTicketStore().redeem(frame.ticket);
+    const grant = await redeemTicket(frame.ticket);
     if (!grant) {
       // One message for expired, spent, forged and wrong-org alike: a
       // distinguishable failure would tell a prober which runs exist.
@@ -63,6 +64,19 @@ export default defineWebSocketHandler({
     useRunHub().unsubscribe(peer);
   },
 });
+
+/**
+ * A meta-db that cannot be reached reads, to the client, as any other bad
+ * ticket: the client re-mints over HTTP, which reports the outage as a 500.
+ */
+async function redeemTicket(ticket: unknown): Promise<SubscriptionGrant | null> {
+  try {
+    return await useTicketStore().redeem(ticket);
+  } catch (err) {
+    console.error('[ws] ticket redemption failed:', err instanceof Error ? err.message : err);
+    return null;
+  }
+}
 
 function fail(peer: Peer, message: string): void {
   peer.send(JSON.stringify({ k: 'error', message }));

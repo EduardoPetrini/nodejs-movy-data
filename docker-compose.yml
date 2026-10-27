@@ -122,6 +122,29 @@ services:
     depends_on: { migrate: { condition: service_completed_successfully } }
     restart: unless-stopped
 
+  # A second console on the same meta-db, for the e2e profile only: it proves a
+  # stream ticket minted on `web` redeems on another replica. No port and no
+  # load balancer — several replicas in a shipped deployment are #20's.
+  web-2:
+    <<: *app
+    profiles: [e2e]
+    env_file: [docker/movy.env]
+    working_dir: /app/apps/web
+    command: node .output/server/index.mjs
+    environment:
+      HOST: 0.0.0.0
+      PORT: "3000"
+      MOVY_EMBEDDED_RUNNER: "false"
+      MOVY_PROVISIONER: manual
+      MOVY_RUNNER_CLASSES_FILE: /etc/movy/runner-classes.json
+    volumes:
+      - ./docker/runner-classes.json:/etc/movy/runner-classes.json:ro
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/login').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 3s
+      retries: 40
+    depends_on: { migrate: { condition: service_completed_successfully } }
+
   # ── Runners ──────────────────────────────────────────────────────────────────
   # Both carry the template label: the docker provisioner clones a runner from
   # one of them (runner-large has no container until scaled, so usually from
@@ -213,11 +236,14 @@ services:
       MOVY_E2E_LIVE: "1"
       # The specs that need runner services rather than an embedded agent.
       MOVY_E2E_COMPOSE: "1"
+      # The second console, reached by service name from web's namespace.
+      MOVY_E2E_REPLICA_URL: http://web-2:3000
     working_dir: /app/apps/web
     command: pnpm exec playwright test
     volumes: [./apps/web/test-results:/app/apps/web/test-results]
     depends_on:
       web: { condition: service_healthy }
+      web-2: { condition: service_healthy }
       runner-default: { condition: service_started }
       seed: { condition: service_completed_successfully }
       pg-lab: { condition: service_healthy }

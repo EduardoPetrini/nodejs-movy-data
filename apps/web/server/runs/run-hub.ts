@@ -1,6 +1,7 @@
 import type { OrgRole } from '../db/schema';
 import type { WireEvent, WireRunStatus } from '../../shared/run-wire';
 import { mayReadLogs } from '../serializers/run.serializer';
+import { isGrantRecord, isUuidShaped } from './subscription-ticket';
 
 /**
  * The two log cohorts, as rooms.
@@ -36,6 +37,19 @@ export interface SubscriptionGrant {
   readonly orgId: string;
   readonly runId: string;
   readonly cohort: Cohort;
+}
+
+/**
+ * A grant read back from `stream_tickets`, rebuilt field by field: only the
+ * known fields survive, and any other shape is no grant at all. A cast here
+ * would let whatever sits in that row choose a room.
+ */
+export function readSubscriptionGrant(raw: unknown): SubscriptionGrant | null {
+  if (!isGrantRecord(raw)) return null;
+  const { userId, orgId, runId, cohort } = raw;
+  if (!isUuidShaped(userId) || !isUuidShaped(orgId) || !isUuidShaped(runId)) return null;
+  if (cohort !== 'full' && cohort !== 'redacted') return null;
+  return { userId, orgId, runId, cohort };
 }
 
 /**

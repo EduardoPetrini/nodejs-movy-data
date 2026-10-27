@@ -47,6 +47,7 @@ phase is indistinguishable from one that was never started.
 | R5 — probes: Test and Preview from a runner | **DONE** (2026-10-23) | migration `0007` (`runner_probes`, `runners.probe_slots`, `connections.last_test_via`); executors in `@movy/runner/probes` shared by the in-request path and the agent's `ProbeWorker`; `via: 'web' | <class>` on both Test routes and on preview; 503 `no_runner`, 504 on silence; "Test from" and "Inspect from" selectors. Gate: `pnpm docker:e2e` 23/23. See *R5* below. Next: R6 (runner services) |
 | R6 — runner services and provisioning in Compose | **DONE** (2026-10-25) | `movy-runner-agent` as `runner-default`/`runner-large` under the least-privilege `movy_runner` role (`docker/runner.env`); `web` no longer forks; NOTIFY wakes agents on launch and cancel; `manual` and opt-in `docker` provisioners, Start a runner (`runner:scale`), auto mode, idle exit. Found and fixed: an agent wedged after a network partition (query timeouts), clone swap limit. Gate: the plan's Verification list in Compose, `pnpm docker:e2e` 26/26. See *R6* below. Next: R7 (Kubernetes) or R8 (runner classes in the UI) |
 | — PR #8 review fixes | **DONE** (2026-10-25) | platform operators (`platform_admins`, migration `0008`, `MOVY_PLATFORM_ADMINS`) replace the org-admin `runner:scale`; heartbeat/claim race in fencing; live feed retries a failed read; embedded agent retries its start and refuses bad config; one class-name rule; runner answers rebuilt, not cast; provisioner cap under concurrency; drain stops claiming first. See *PR #8 review fixes* below. Gate re-run after all three passes (2026-10-27): `pnpm docker:e2e` 28/28, host `pnpm test:e2e` 14/14 |
+| — stream tickets in the meta-db (pulled forward from R7) | **DONE** (2026-10-27) | `stream_tickets` (migration `0010`): hashed, `kind`-scoped, redeemed by one `DELETE … RETURNING` on any replica, expiry on the database clock, grants rebuilt not cast. Plan: `docs/stream-tickets-plan.md`. Gate: `pnpm test` 1646/1646, `pnpm docker:e2e` 30/30 incl. `multi-replica.spec.ts` against a second console `web-2`. See *Stream tickets in the meta-db* below |
 
 ### Remaining work
 
@@ -1798,4 +1799,42 @@ class with no runner online.
   #9 (lock the org row inside the `enqueue` transaction).
 - Two web replicas asked to start a runner within the same second can pass a class's
   cap by one; documented in CLAUDE.md, tracked in #10.
+
+## Stream tickets in the meta-db (2026-10-27)
+
+Pulled forward from R7 (#11): the one thing that broke a live page behind two web
+replicas. Plan and verification: `docs/stream-tickets-plan.md`.
+
+**What changed.** `TicketStore` (`server/runs/subscription-ticket.ts`) keeps its name and
+its `mint`/`redeem` shape, now async, over `stream_tickets`. The four callers (two ticket
+routes, two `_ws` handlers) gained an `await`; the client and the wire are untouched.
+
+**Decisions.**
+- **Only sha256(ticket) is stored.** A dump or backup holds nothing redeemable. The old
+  constant-time scan is gone on purpose: the lookup key is a digest of the input, so
+  timing says nothing about a stored ticket.
+- **One table, a `kind` column** (`runs` | `runners`, CHECK `stream_tickets_kind_ck`).
+  Redeem filters on it, so a run ticket presented to the runners socket is refused AND
+  left unspent.
+- **Expiry is the database's `now()`**, never a replica's clock.
+- **Stored grants are rebuilt, never cast**: `readSubscriptionGrant` (run-hub) and
+  `readRunnersGrant` (runner-hub) accept uuid ids and a known cohort/audience only.
+- **A meta-db failure on redeem** is caught in the socket handler and reads as
+  `ticket is not valid`; on mint it is a 500, which `useRunStream` already backs off on.
+- **Sweep on mint**, as before (`DELETE … WHERE expires_at < now()`, indexed).
+- No runner grant: `RUNNER_GRANTS` starts with `REVOKE ALL`; `runner-role.test.ts` passes.
+
+**Verified.**
+- Unit, PGlite with the real migrations: once-only, DB-clock expiry, prune on mint,
+  bogus input, lifetime stored as reported, cross-replica redeem, one winner of two,
+  kind isolation without spending, no plaintext in the table, tampered grants refused,
+  unknown kind refused by the CHECK. One PGlite connection serialises the "one winner"
+  case; true concurrency is what the Compose spec adds.
+- Compose: `web-2` (e2e profile, same image and `movy.env`, no port) —
+  `multi-replica.spec.ts` mints on `web`, subscribes on `web-2`, is refused back on
+  `web`, and follows a simulated run on `web-2` to `run_finished`. `pnpm docker:e2e` 30/30.
+
+**Still per-process** (unchanged by this, see Step 0 of the plan): the dev-only login
+rate limiter (`attempts` Map, `login.post.ts`) counts per replica; #10's provisioner
+cap. The shipped Compose still runs one console — several behind a load balancer is #20.
 

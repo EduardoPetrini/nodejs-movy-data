@@ -1,6 +1,7 @@
 import type { OrgRole } from '../db/schema';
 import type { RunnersSnapshot } from '../../shared/runner-wire';
 import { memberKey, type HubPeer, type RoleResolver } from '../runs/run-hub';
+import { isGrantRecord, isUuidShaped } from '../runs/subscription-ticket';
 
 /**
  * Platform operators see runner ids; everyone else sees counts. Never an org
@@ -25,6 +26,15 @@ export interface RunnersGrant {
   readonly userId: string;
   readonly orgId: string;
   readonly audience: RunnersAudience;
+}
+
+/** A stored grant rebuilt field by field, like `readSubscriptionGrant`. Never cast. */
+export function readRunnersGrant(raw: unknown): RunnersGrant | null {
+  if (!isGrantRecord(raw)) return null;
+  const { userId, orgId, audience } = raw;
+  if (!isUuidShaped(userId) || !isUuidShaped(orgId)) return null;
+  if (audience !== 'operator' && audience !== 'member') return null;
+  return { userId, orgId, audience };
 }
 
 /** Reachable only with a grant, so nothing typed on the socket can name a room. */
