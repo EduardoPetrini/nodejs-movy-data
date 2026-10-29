@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { availabilityOf, classSentence, scaleSentence, type RunnerClassSummary } from '#shared/runner-wire';
 
 function cls(over: Partial<RunnerClassSummary>): RunnerClassSummary {
-  return { name: 'default', label: 'Default', description: null, isDefault: true, online: 1, draining: 0, totalSlots: 4, freeSlots: 3, queued: 0, ...over };
+  return { name: 'default', label: 'Default', description: null, isDefault: true, online: 1, draining: 0, totalSlots: 4, freeSlots: 3, queued: 0, onDemand: false, ...over };
 }
 
 describe('runner availability wording', () => {
@@ -28,6 +28,16 @@ describe('runner availability wording', () => {
     const c = cls({ online: 0, draining: 1, totalSlots: 0, freeSlots: 0 });
     expect(availabilityOf(c)).toBe('draining');
     expect(classSentence(c)).toBe('Draining · finishing its runs, taking no new ones');
+  });
+
+  it('says an on-demand class starts a runner per run, rather than that none is online', () => {
+    const idle = cls({ onDemand: true, online: 0, totalSlots: 0, freeSlots: 0, queued: 1 });
+    expect(availabilityOf(idle)).toBe('on_demand');
+    expect(classSentence(idle)).toBe('On demand · a runner starts for each run · 1 of your runs waiting');
+    const running = cls({ onDemand: true, online: 2, totalSlots: 2, freeSlots: 0 });
+    expect(availabilityOf(running)).toBe('on_demand');
+    expect(classSentence(running)).toBe('On demand · 2 runners running');
+    expect(classSentence(cls({ onDemand: true, online: 1, totalSlots: 1, freeSlots: 0 }))).toBe('On demand · 1 runner running');
   });
 
   it('uses the singular for one', () => {

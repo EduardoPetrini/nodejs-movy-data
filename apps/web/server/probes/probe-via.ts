@@ -30,11 +30,14 @@ export function viaLabel(via: ProbeVia): string {
 /**
  * A probe that got no answer, as an HTTP error. `no_runner` is a 503 whose
  * data the client turns into a "start a runner" offer; a timeout is a 504.
+ * On an on-demand class a timeout usually means the runner is still starting —
+ * the request queued the work that starts it — so it says to try again.
  */
 export function probeUnanswered(
   outcome: Exclude<ProbeOutcome, { status: 'done' }>,
   runnerClass: string,
-  timeoutMs: number
+  timeoutMs: number,
+  onDemand = false
 ): { statusCode: 503 | 504; statusMessage: string; data: { reason: 'no_runner' | 'timeout'; runnerClass: string } } {
   if (outcome.status === 'no_runner') {
     return {
@@ -45,7 +48,9 @@ export function probeUnanswered(
   }
   return {
     statusCode: 504,
-    statusMessage: `The "${runnerClass}" runner did not answer within ${Math.round(timeoutMs / 1000)}s.`,
+    statusMessage: onDemand
+      ? `A "${runnerClass}" runner is being started for this: the cluster starts one on demand. Try again in a minute.`
+      : `The "${runnerClass}" runner did not answer within ${Math.round(timeoutMs / 1000)}s.`,
     data: { reason: 'timeout', runnerClass },
   };
 }

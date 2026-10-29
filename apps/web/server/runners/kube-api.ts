@@ -74,6 +74,22 @@ export function kubeApi(request: KubeRequest, namespace: string): KubeApi {
   };
 }
 
+/**
+ * A client built on its first call, not before. The console asks the
+ * provisioner `isOnDemand` on every queue and panel request; a pod with no
+ * ServiceAccount mounted must fail "Start a runner" with a sentence, not every
+ * page that merely mentions a class.
+ */
+export function lazyKubeApi(build: () => KubeApi): KubeApi {
+  let api: KubeApi | undefined;
+  const get = (): KubeApi => (api ??= build());
+  return {
+    getScale: async (deployment) => get().getScale(deployment),
+    patchScale: async (deployment, replicas) => get().patchScale(deployment, replicas),
+    countActiveJobs: async (runnerClass) => get().countActiveJobs(runnerClass),
+  };
+}
+
 /** A Job is over once its `Complete` or `Failed` condition is true. */
 function isFinished(job: unknown): boolean {
   const conditions = readObject(job, 'status')?.conditions;
@@ -103,7 +119,19 @@ const TIMEOUT_MS = 15_000;
 
 /** The namespace this pod runs in, from its ServiceAccount mount. */
 export function inClusterNamespace(serviceAccountDir = SERVICE_ACCOUNT_DIR): string {
-  return readFileSync(`${serviceAccountDir}/namespace`, 'utf8').trim();
+  return readMounted(`${serviceAccountDir}/namespace`).toString('utf8').trim();
+}
+
+/** A ServiceAccount file, or a sentence saying the pod has none mounted. */
+function readMounted(file: string): Buffer {
+  try {
+    return readFileSync(file);
+  } catch {
+    throw new KubeApiError(
+      'Kubernetes: no ServiceAccount token is mounted in this pod. The console needs one to start runners (automountServiceAccountToken).',
+      500
+    );
+  }
 }
 
 /**
@@ -117,11 +145,16 @@ export function inClusterRequest(
   const host = env.KUBERNETES_SERVICE_HOST;
   const port = env.KUBERNETES_SERVICE_PORT || '443';
   if (!host) throw new KubeApiError('Kubernetes: not running in a cluster (KUBERNETES_SERVICE_HOST is unset).', 500);
-  const ca = readFileSync(`${serviceAccountDir}/ca.crt`);
+  const ca = readMounted(`${serviceAccountDir}/ca.crt`);
 
   return (method, path, body, contentType = 'application/json') =>
     new Promise((resolve, reject) => {
-      const token = readFileSync(`${serviceAccountDir}/token`, 'utf8').trim();
+      let token: string;
+      try {
+        token = readMounted(`${serviceAccountDir}/token`).toString('utf8').trim();
+      } catch (err) {
+        return reject(err);
+      }
       const payload = body === undefined ? undefined : JSON.stringify(body);
       const req = https.request(
         {

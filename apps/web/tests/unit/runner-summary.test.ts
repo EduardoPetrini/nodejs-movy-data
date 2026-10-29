@@ -45,9 +45,14 @@ describe('loadRunnersSnapshot', () => {
     const snap = await loadRunnersSnapshot(sql, ORG_A, { includeRunners: false });
 
     expect(snap.classes).toEqual([
-      { name: 'default', label: 'Default', description: null, isDefault: true, online: 2, draining: 0, totalSlots: 3, freeSlots: 1, queued: 0 },
-      { name: 'large', label: 'Large', description: 'More memory', isDefault: false, online: 0, draining: 1, totalSlots: 0, freeSlots: 0, queued: 0 },
+      { name: 'default', label: 'Default', description: null, isDefault: true, online: 2, draining: 0, totalSlots: 3, freeSlots: 1, queued: 0, onDemand: false },
+      { name: 'large', label: 'Large', description: 'More memory', isDefault: false, online: 0, draining: 1, totalSlots: 0, freeSlots: 0, queued: 0, onDemand: false },
     ]);
+  });
+
+  it('marks the classes the provisioner runs on demand, and no other', async () => {
+    const snap = await loadRunnersSnapshot(sql, ORG_A, { includeRunners: false, isOnDemand: (cls) => cls === 'large' });
+    expect(snap.classes.map((c) => [c.name, c.onDemand])).toEqual([['default', false], ['large', true]]);
   });
 
   it('counts only this org\'s queued runs, never another org\'s', async () => {

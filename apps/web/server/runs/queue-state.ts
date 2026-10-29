@@ -8,9 +8,15 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
  *
  * The org id is in the WHERE clause, so another org's run id answers null. The
  * destination's holder is reported only by whether it is this org's: its id
- * goes back to the client only then.
+ * goes back to the client only then. `isOnDemand` is the provisioner's: on a
+ * cluster a Job class with no runner up is scheduling one, not missing one.
  */
-export async function loadQueueState(sql: SqlClient, orgId: string, runId: string): Promise<QueueState | null> {
+export async function loadQueueState(
+  sql: SqlClient,
+  orgId: string,
+  runId: string,
+  isOnDemand: (runnerClass: string) => boolean = () => false
+): Promise<QueueState | null> {
   // A malformed id is simply not a queued run of this org's, not a 500.
   if (!UUID.test(runId)) return null;
   const { rows } = await sql.query<{
@@ -49,5 +55,6 @@ export async function loadQueueState(sql: SqlClient, orgId: string, runId: strin
     aheadInOrg: row.ahead,
     destinationHeld: row.holder_id !== null,
     blockingRunId: row.holder_org === orgId ? row.holder_id : null,
+    onDemand: isOnDemand(row.runner_class),
   });
 }

@@ -4,6 +4,7 @@ import { useMetaSql, useProbeWaiters, useProbeWorker } from '../runs';
 import { listConfiguredClasses } from '../runners/runner-classes';
 import { parseProbeVia, probeUnanswered, viaLabel } from './probe-via';
 import { runProbe } from './run-probe';
+import { useProvisioner } from '../runners/use-provisioner';
 
 /** The wait for a runner's answer: the 10 s connect timeout, plus the round trip. */
 export const TEST_PROBE_TIMEOUT_MS = 15_000;
@@ -24,11 +25,14 @@ export async function testConnectionVia(
 
   if (via.kind === 'web') return { ...(await testConnection(config)), via: 'web' };
 
+  const onDemand = useProvisioner().isOnDemand(via.runnerClass);
   const outcome = await runProbe<ConnectionTestResult>(
     { sql: useMetaSql(), waiters: useProbeWaiters(), wake: () => void useProbeWorker()?.wake() },
-    { orgId, runnerClass: via.runnerClass, request: { kind: 'test', config }, timeoutMs: TEST_PROBE_TIMEOUT_MS }
+    { orgId, runnerClass: via.runnerClass, request: { kind: 'test', config }, timeoutMs: TEST_PROBE_TIMEOUT_MS, onDemand }
   );
-  if (outcome.status !== 'done') throw createError(probeUnanswered(outcome, via.runnerClass, TEST_PROBE_TIMEOUT_MS));
+  if (outcome.status !== 'done') {
+    throw createError(probeUnanswered(outcome, via.runnerClass, TEST_PROBE_TIMEOUT_MS, onDemand));
+  }
   return { ...outcome.result, via: viaLabel(via) };
 }
 

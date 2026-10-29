@@ -5,6 +5,7 @@ import {
 import { useMetaSql, useProbeWaiters, useProbeWorker } from '../runs';
 import { probeUnanswered, type ProbeVia } from './probe-via';
 import { runProbe } from './run-probe';
+import { useProvisioner } from '../runners/use-provisioner';
 
 /** A preview inspects two whole schemas; a large one takes a while. */
 export const PREVIEW_PROBE_TIMEOUT_MS = 60_000;
@@ -32,11 +33,14 @@ export async function inspectPreviewVia(
     }
   }
 
+  const onDemand = useProvisioner().isOnDemand(via.runnerClass);
   const outcome = await runProbe<PreviewProbeResult>(
     { sql: useMetaSql(), waiters: useProbeWaiters(), wake: () => void useProbeWorker()?.wake() },
-    { orgId, runnerClass: via.runnerClass, request: { kind: 'preview', source, target }, timeoutMs: PREVIEW_PROBE_TIMEOUT_MS }
+    { orgId, runnerClass: via.runnerClass, request: { kind: 'preview', source, target }, timeoutMs: PREVIEW_PROBE_TIMEOUT_MS, onDemand }
   );
-  if (outcome.status !== 'done') throw createError(probeUnanswered(outcome, via.runnerClass, PREVIEW_PROBE_TIMEOUT_MS));
+  if (outcome.status !== 'done') {
+    throw createError(probeUnanswered(outcome, via.runnerClass, PREVIEW_PROBE_TIMEOUT_MS, onDemand));
+  }
 
   const result = outcome.result;
   if (result.ok) return result.inspection;

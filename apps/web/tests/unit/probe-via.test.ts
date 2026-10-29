@@ -46,4 +46,12 @@ describe('probeUnanswered', () => {
     expect(err).toMatchObject({ statusCode: 504, data: { reason: 'timeout', runnerClass: 'large' } });
     expect(err.statusMessage).toContain('15s');
   });
+
+  it('says a runner is being started when an on-demand class did not answer in time, and to try again', () => {
+    const err = probeUnanswered({ status: 'timeout' }, 'large', 15_000, true);
+    expect(err).toMatchObject({ statusCode: 504, data: { reason: 'timeout', runnerClass: 'large' } });
+    expect(err.statusMessage).toBe(
+      'A "large" runner is being started for this: the cluster starts one on demand. Try again in a minute.'
+    );
+  });
 });

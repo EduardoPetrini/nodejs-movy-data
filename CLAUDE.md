@@ -450,8 +450,9 @@ happens at the claim. No Redis, no BullMQ: Postgres was already there.
   serialised. The claim skips a queued run whose key a `running`/`cancelling` run holds;
   the partial unique index `runs_target_busy_uq` refuses the second of two simultaneous
   claims, and the claim asks again. Why a run is still queued (`no_runner`,
-  `destination_busy`, `runners_busy`, `starting`) is derived per request
-  (`server/runs/queue-state.ts`), never stored; another org's run is never named.
+  `destination_busy`, `runners_busy`, `starting`, and `scheduling` for an on-demand class
+  with no free runner — never `no_runner`, which asks someone to act) is derived per
+  request (`server/runs/queue-state.ts`), never stored; another org's run is never named.
 - **Runner classes come from `MOVY_RUNNER_CLASSES_FILE`** (`docker/runner-classes.json`),
   parsed strictly by `parseRunnerClassesFile` (unknown keys rejected, one default) and
   upserted at boot. **One name rule** (`isRunnerClassName`) for the file,
@@ -472,7 +473,10 @@ happens at the claim. No Redis, no BullMQ: Postgres was already there.
   own slots (`probe_slots`), its result taken and deleted by the waiting request
   (`server/probes/run-probe.ts`). `NOTIFY movy_probe_done` wakes the request; it re-reads
   every second anyway, because a NOTIFY can be missed. No runner of the class online is an
-  immediate 503 `no_runner`, never a wait; silence is a 504 and deletes the row. The test
+  immediate 503 `no_runner`, never a wait; silence is a 504 and deletes the row. **Except
+  an on-demand class** (`RunnerProvisioner.isOnDemand`, a Kubernetes Job class): its probe is
+  queued and waited for with nobody online, because that queued row is the demand that
+  starts a Job — refusing first meant no Job ever started. Its 504 says one is starting. The test
   is recorded with `connections.last_test_via`. Compare stays in-request (decision 6).
   **A runner's answer is rebuilt, never cast** (`readProbeResult`): every runner writes
   through the one `movy_runner` role across orgs, and the result is served to a browser,

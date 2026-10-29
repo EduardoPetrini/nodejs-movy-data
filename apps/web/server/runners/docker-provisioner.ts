@@ -92,6 +92,11 @@ export class DockerProvisioner implements RunnerProvisioner {
     return { status: 'started', runnerClass: c.name, container: name };
   }
 
+  /** A clone is started by hand or by auto mode, never per run. */
+  isOnDemand(): boolean {
+    return false;
+  }
+
   async cleanup(): Promise<number> {
     const clones = await this.engine.listContainers([`${PROVISIONED_LABEL}=true`], true);
     const done = clones.filter((c) => c.State === 'exited' || c.State === 'dead' || this.neverStarted(c));

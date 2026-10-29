@@ -33,6 +33,11 @@ export interface RunnerProvisioner {
   readonly kind: ProvisionerKind;
   /** One more runner of the class, capped by its `max_replicas`. */
   scaleUp(runnerClass: ClassCapacity): Promise<ProvisionResult>;
+  /**
+   * The deployment starts a runner per queued run of this class by itself (a
+   * Kubernetes Job class): no runner online is its resting state, not a fault.
+   */
+  isOnDemand(runnerClass: string): boolean;
   /** Removes runners it started that have since exited. Returns how many. */
   cleanup(): Promise<number>;
 }
@@ -85,6 +90,10 @@ export class ManualProvisioner implements RunnerProvisioner {
     if (live >= c.maxReplicas) return { status: 'at_capacity', runnerClass: c.name, maxReplicas: c.maxReplicas };
     const command = this.template.replaceAll('{class}', c.name).replaceAll('{replicas}', String(live + 1));
     return { status: 'manual', runnerClass: c.name, command };
+  }
+
+  isOnDemand(): boolean {
+    return false;
   }
 
   async cleanup(): Promise<number> {

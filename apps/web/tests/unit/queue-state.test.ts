@@ -74,6 +74,12 @@ describe('loadQueueState', () => {
     expect(await loadQueueState(sql, ORG_A, id)).toMatchObject({ reason: 'starting' });
   });
 
+  it('says scheduling for a class the provisioner runs on demand', async () => {
+    const id = await run(ORG_A);
+    expect(await loadQueueState(sql, ORG_A, id, (cls) => cls === 'default')).toMatchObject({ reason: 'scheduling' });
+    expect(await loadQueueState(sql, ORG_A, id, () => false)).toMatchObject({ reason: 'no_runner' });
+  });
+
   it('answers null for a run that is not queued, another org\'s run, and a malformed id', async () => {
     const running = await run(ORG_A, { status: 'running' });
     const other = await run(ORG_B);
@@ -109,5 +115,26 @@ describe('queueStateOf and queueSentence', () => {
       'Waiting for the destination: another run is writing to the same database.'
     );
     expect(queueSentence(queueStateOf(facts))).toBe('Starting: a Large runner is picking it up.');
+  });
+
+  it('says an on-demand class is scheduling a runner, never that none is online', () => {
+    // On a cluster no Large runner online is the normal resting state, not a fault.
+    const state = queueStateOf({ ...facts, onDemand: true, onlineRunners: 0, freeSlots: 0 });
+    expect(state.reason).toBe('scheduling');
+    expect(queueSentence(state)).toBe(
+      'Starting a Large runner: the cluster starts one for each queued run, usually within a minute.'
+    );
+  });
+
+  it('schedules for an on-demand class whose runners are all busy too: a new Job is started for this run', () => {
+    expect(queueStateOf({ ...facts, onDemand: true, freeSlots: 0 }).reason).toBe('scheduling');
+  });
+
+  it('still puts a held destination first for an on-demand class: no new runner would get past it', () => {
+    expect(queueStateOf({ ...facts, onDemand: true, onlineRunners: 0, destinationHeld: true }).reason).toBe('destination_busy');
+  });
+
+  it('starts at once on an on-demand runner with a free slot, as on any other', () => {
+    expect(queueStateOf({ ...facts, onDemand: true }).reason).toBe('starting');
   });
 });

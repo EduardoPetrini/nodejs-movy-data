@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { KubeApiError, kubeApi, type KubeRequest } from '../../server/runners/kube-api';
+import { KubeApiError, inClusterRequest, kubeApi, type KubeRequest } from '../../server/runners/kube-api';
 
 /**
  * The calls the kubernetes provisioner makes, against a fake transport: which
@@ -23,6 +23,15 @@ const JOBS = '/apis/batch/v1/namespaces/movy/jobs?labelSelector=movy.runner-clas
 function job(conditions: { type: string; status: string }[] = []) {
   return { metadata: { name: 'j' }, status: { conditions } };
 }
+
+describe('inClusterRequest', () => {
+  it('refuses with a sentence, not a file error, when no ServiceAccount is mounted', () => {
+    const missing = '/nonexistent/serviceaccount';
+    expect(() => inClusterRequest({ KUBERNETES_SERVICE_HOST: '10.0.0.1' }, missing)).toThrow(KubeApiError);
+    expect(() => inClusterRequest({ KUBERNETES_SERVICE_HOST: '10.0.0.1' }, missing)).toThrow(/ServiceAccount/);
+    expect(() => inClusterRequest({}, missing)).toThrow(/KUBERNETES_SERVICE_HOST/);
+  });
+});
 
 describe('kubeApi', () => {
   it('reads a Deployment\'s desired replicas from its scale subresource', async () => {

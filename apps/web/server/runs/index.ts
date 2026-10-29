@@ -8,6 +8,7 @@ import { configuredPlatformAdmins, platformAdminIds } from '../utils/platform-ad
 import { readEmbeddedRunnerConfig, type EmbeddedRunnerConfig } from './embedded-config';
 import { RunnerHub, readRunnersGrant, type RunnersGrant } from '../runners/runner-hub';
 import { loadRunnersSnapshot } from '../runners/runner-summary';
+import { useProvisioner } from '../runners/use-provisioner';
 import {
   EventWriter,
   RunManager,
@@ -166,7 +167,8 @@ export function useRunnerHub(): RunnerHub {
   if (!runnerHub) {
     const sql = useMetaSql();
     runnerHub = new RunnerHub({
-      load: (orgId, includeRunners) => loadRunnersSnapshot(sql, orgId, { includeRunners }),
+      load: (orgId, includeRunners) =>
+        loadRunnersSnapshot(sql, orgId, { includeRunners, isOnDemand: (cls) => useProvisioner().isOnDemand(cls) }),
       resolveRole: resolveRoles,
       resolveOperators: (userIds) => platformAdminIds(sql, userIds, configuredPlatformAdmins()),
       onError: (err) => console.error('[runners] hub:', err.message),

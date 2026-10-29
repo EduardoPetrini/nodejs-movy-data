@@ -34,12 +34,13 @@ const id = useId()
       <option :value="WEB_VIA">The console</option>
       <option v-for="c in classes" :key="c.name" :value="c.name">{{ c.label }} runner</option>
     </select>
-    <span v-if="selected" class="state" :data-availability="selected.online === 0 ? 'none' : 'some'">
+    <span v-if="selected" class="state" :data-availability="selected.online === 0 && !selected.onDemand ? 'none' : 'some'">
       {{ classSentence(selected) }}
     </span>
-    <!-- Asking a class with nobody online is an immediate 503; this is the way out. -->
+    <!-- Asking a class with nobody online is an immediate 503; this is the way out.
+         Not for an on-demand class: asking it IS how a runner gets started. -->
     <StartRunner
-      v-if="selected && selected.online === 0"
+      v-if="selected && selected.online === 0 && !selected.onDemand"
       class="offer"
       :org-slug="orgSlug"
       :runner-class="selected.name"

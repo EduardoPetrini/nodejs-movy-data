@@ -2,13 +2,13 @@ import { ManualProvisioner, type RunnerProvisioner } from './provisioner';
 import { DockerProvisioner } from './docker-provisioner';
 import { socketDockerEngine } from './docker-engine';
 import { KubernetesConfigError, KubernetesProvisioner, readKubernetesConfig } from './kubernetes-provisioner';
-import { inClusterNamespace, inClusterRequest, kubeApi, type KubeApi } from './kube-api';
+import { inClusterNamespace, inClusterRequest, kubeApi, lazyKubeApi, type KubeApi } from './kube-api';
 
 type Env = Readonly<Record<string, string | undefined>>;
 
 interface BuildDeps {
   readonly warn: (message: string) => void;
-  /** Deferred: it reads the ServiceAccount mount, which exists only in a cluster. */
+  /** Called on the first API call, never at build: it reads the ServiceAccount mount. */
   readonly kube: () => KubeApi;
 }
 
@@ -35,7 +35,7 @@ export function buildProvisioner(env: Env, deps: BuildDeps): RunnerProvisioner {
   if (kind === 'docker') return new DockerProvisioner(socketDockerEngine(env.MOVY_DOCKER_SOCKET || undefined));
   if (kind === 'kubernetes') {
     try {
-      return new KubernetesProvisioner(deps.kube(), readKubernetesConfig(env));
+      return new KubernetesProvisioner(lazyKubeApi(deps.kube), readKubernetesConfig(env));
     } catch (err) {
       if (!(err instanceof KubernetesConfigError)) throw err;
       deps.warn(`${err.message} Using manual.`);

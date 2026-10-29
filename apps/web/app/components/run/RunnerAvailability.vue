@@ -18,6 +18,8 @@ const DOT: Record<ClassAvailability, 'ok' | 'running' | 'failed' | 'idle'> = {
   busy: 'running',
   none: 'failed',
   draining: 'idle',
+  // Nothing up is this class's resting state, not a fault.
+  on_demand: 'idle',
 }
 
 const classes = computed(() => snapshot.value?.classes ?? [])

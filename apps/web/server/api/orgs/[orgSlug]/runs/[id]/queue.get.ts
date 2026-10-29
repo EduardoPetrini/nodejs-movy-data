@@ -1,6 +1,7 @@
 import { requirePermission } from '~~/server/utils/rbac';
 import { useMetaSql } from '~~/server/runs';
 import { loadQueueState } from '~~/server/runs/queue-state';
+import { useProvisioner } from '~~/server/runners/use-provisioner';
 
 /**
  * Why a queued run has not started. `{ queue: null }` once it has — or when it
@@ -9,5 +10,6 @@ import { loadQueueState } from '~~/server/runs/queue-state';
 export default defineEventHandler(async (event) => {
   const org = requirePermission(event, 'run:read');
   const id = getRouterParam(event, 'id')!;
-  return { queue: await loadQueueState(useMetaSql(), org.orgId, id) };
+  const provisioner = useProvisioner();
+  return { queue: await loadQueueState(useMetaSql(), org.orgId, id, (cls) => provisioner.isOnDemand(cls)) };
 });

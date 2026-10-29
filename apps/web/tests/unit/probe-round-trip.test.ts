@@ -127,6 +127,47 @@ describe('runProbe', () => {
     expect(await probeRows()).toBe(0);
   });
 
+  it('queues for an on-demand class with no runner online, so the scaler sees it and starts one', async () => {
+    await db.query(`INSERT INTO runner_classes (name, label) VALUES ('large', 'Large')`);
+    let demandWhileWaiting = -1;
+    const waiters = new ProbeWaiters();
+    const pending = runProbe(
+      { sql, waiters, now: Date.now },
+      { orgId: ORG, runnerClass: 'large', request, timeoutMs: 300, onDemand: true }
+    );
+    // Read while the request waits: what KEDA would see on its next poll.
+    await new Promise((r) => setTimeout(r, 100));
+    const { rows } = await db.query<{ n: number }>(`SELECT queued_probes AS n FROM runner_demand WHERE runner_class = 'large'`);
+    demandWhileWaiting = rows[0]!.n;
+
+    expect(await pending).toEqual({ status: 'timeout' });
+    expect(demandWhileWaiting).toBe(1);
+    expect(await probeRows()).toBe(0);
+  });
+
+  it('is answered by an on-demand runner that comes up while the request waits', async () => {
+    await db.query(`INSERT INTO runner_classes (name, label) VALUES ('large', 'Large')`);
+    const pending = runProbe(
+      { sql, waiters: new ProbeWaiters() },
+      { orgId: ORG, runnerClass: 'large', request, timeoutMs: 5_000, onDemand: true }
+    );
+    await new Promise((r) => setTimeout(r, 100));
+    await db.query(
+      `INSERT INTO runners (id, class, version, slots, state, started_at, last_heartbeat_at)
+       VALUES ('job-1', 'large', '1', 1, 'online', now(), now())`
+    );
+    worker = new ProbeWorker({
+      queue: sqlProbeQueue(sql, 'job-1', 'large'),
+      slots: 1,
+      pollIntervalMs: 0,
+      execute: async () => ({ ok: true, latencyMs: 3 }) as never,
+    });
+    worker.start();
+    await worker.wake();
+
+    expect(await pending).toMatchObject({ status: 'done', result: { ok: true } });
+  });
+
   it('times out when the runner stays silent, and deletes the request it was holding', async () => {
     const outcome = await runProbe(
       { sql, waiters: new ProbeWaiters() },

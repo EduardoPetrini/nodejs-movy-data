@@ -8,12 +8,15 @@ import type { RunnerClassSummary, RunnerDetail, RunnersSnapshot } from '../../sh
  * them; the queue depth is this org's alone. Runner ids are hostnames — pod or
  * container names — which say something about the infrastructure, so they are
  * read only for a platform operator and are otherwise not in the answer at all.
+ * `isOnDemand` is the provisioner's: such a class is shown as "on demand", not
+ * as having no runner online.
  */
 export async function loadRunnersSnapshot(
   sql: SqlClient,
   orgId: string,
-  options: { includeRunners: boolean }
+  options: { includeRunners: boolean; isOnDemand?: (runnerClass: string) => boolean }
 ): Promise<RunnersSnapshot> {
+  const isOnDemand = options.isOnDemand ?? (() => false);
   const { rows } = await sql.query<{
     name: string; label: string; description: string | null; is_default: boolean;
     online: number; draining: number; total_slots: number; free_slots: number; queued: number;
@@ -44,6 +47,7 @@ export async function loadRunnersSnapshot(
     totalSlots: r.total_slots,
     freeSlots: r.free_slots,
     queued: r.queued,
+    onDemand: isOnDemand(r.name),
   }));
 
   const snapshot: RunnersSnapshot = { classes, at: new Date().toISOString() };

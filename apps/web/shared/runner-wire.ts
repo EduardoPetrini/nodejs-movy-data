@@ -20,6 +20,11 @@ export interface RunnerClassSummary {
    * (decision 3), but another org's queue is that org's business.
    */
   queued: number;
+  /**
+   * The deployment starts a runner per queued run of this class (a Kubernetes
+   * Job class): no runner online is its resting state.
+   */
+  onDemand: boolean;
 }
 
 /** One runner, as an org admin sees it. Never sent to anyone else. */
@@ -48,9 +53,12 @@ export type RunnersServerFrame =
   | { k: 'revoked'; reason: string };
 
 /** What the panel says about a class. Pure, so it is unit-tested. */
-export type ClassAvailability = 'free' | 'busy' | 'none' | 'draining';
+export type ClassAvailability = 'free' | 'busy' | 'none' | 'draining' | 'on_demand';
 
 export function availabilityOf(c: RunnerClassSummary): ClassAvailability {
+  // Before anything else: free, busy and none all describe a pool someone
+  // sizes, and an on-demand class has none to size.
+  if (c.onDemand) return 'on_demand';
   if (c.online === 0) return c.draining > 0 ? 'draining' : 'none';
   return c.freeSlots > 0 ? 'free' : 'busy';
 }
@@ -67,6 +75,8 @@ function plural(n: number, one: string, many: string): string {
 export function classSentence(c: RunnerClassSummary): string {
   const waiting = c.queued > 0 ? ` · ${c.queued} of your runs waiting` : '';
   switch (availabilityOf(c)) {
+    case 'on_demand':
+      return (c.online === 0 ? 'On demand · a runner starts for each run' : `On demand · ${plural(c.online, 'runner', 'runners')} running`) + waiting;
     case 'none':
       return `No runner online${waiting}`;
     case 'draining':

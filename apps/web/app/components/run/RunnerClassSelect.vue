@@ -37,7 +37,7 @@ const id = useId()
       <option value="">{{ followLabel }}</option>
       <option v-for="c in classes" :key="c.name" :value="c.name">{{ c.label }}</option>
     </select>
-    <p v-if="selected" class="state" :data-availability="selected.online === 0 ? 'none' : 'some'">
+    <p v-if="selected" class="state" :data-availability="selected.online === 0 && !selected.onDemand ? 'none' : 'some'">
       {{ selected.label }}: {{ classSentence(selected) }}
     </p>
   </div>

@@ -16,6 +16,12 @@ export interface RunProbeInput {
   readonly request: ProbeRequest;
   /** How long the user waits for a runner to answer. */
   readonly timeoutMs: number;
+  /**
+   * The class starts a runner per unit of queued work (a Kubernetes Job class).
+   * Then the probe is queued even with no runner online: the queued row is the
+   * demand that starts one, and refusing first would mean none ever starts.
+   */
+  readonly onDemand?: boolean;
 }
 
 export interface RunProbeDeps {
@@ -43,7 +49,7 @@ export async function runProbe<R extends ProbeResult>(
 ): Promise<ProbeOutcome<R>> {
   const { sql, waiters } = deps;
   const now = deps.now ?? Date.now;
-  if (!(await probeRunnerAvailable(sql, input.runnerClass))) return { status: 'no_runner' };
+  if (!input.onDemand && !(await probeRunnerAvailable(sql, input.runnerClass))) return { status: 'no_runner' };
 
   const id = randomUUID();
   await enqueueProbe(sql, {

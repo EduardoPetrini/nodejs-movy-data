@@ -13,7 +13,12 @@ export type QueueReason =
   /** Runners are online, but every slot is taken. */
   | 'runners_busy'
   /** Nothing is in its way: a runner is about to claim it. */
-  | 'starting';
+  | 'starting'
+  /**
+   * An on-demand class (a Kubernetes Job per run) with no free runner: the
+   * cluster is starting one for it. Not `no_runner`, which asks someone to act.
+   */
+  | 'scheduling';
 
 export interface QueueState {
   reason: QueueReason;
@@ -36,19 +41,22 @@ export interface QueueFacts {
   aheadInOrg: number;
   destinationHeld: boolean;
   blockingRunId: string | null;
+  /** The class starts a runner per queued run; absent is false. */
+  onDemand?: boolean;
 }
 
 /**
  * The order is what someone can act on. No runner first: that one never
  * resolves by itself. Then the destination, which is specific and names a run.
  * Busy slots last, since they free up on their own.
+ *
+ * An on-demand class has nothing to act on: a missing or busy runner is the
+ * cluster's to start, so the destination comes first and the rest is
+ * `scheduling` — a run blocked on its destination is not demand, and no new
+ * runner would get past that lock.
  */
 export function queueStateOf(f: QueueFacts): QueueState {
-  const reason: QueueReason =
-    f.onlineRunners === 0 ? 'no_runner'
-      : f.destinationHeld ? 'destination_busy'
-        : f.freeSlots === 0 ? 'runners_busy'
-          : 'starting';
+  const reason: QueueReason = f.onDemand ? onDemandReason(f) : provisionedReason(f);
   return {
     reason,
     runnerClass: f.runnerClass,
@@ -56,6 +64,19 @@ export function queueStateOf(f: QueueFacts): QueueState {
     aheadInOrg: f.aheadInOrg,
     blockingRunId: reason === 'destination_busy' ? f.blockingRunId : null,
   };
+}
+
+function provisionedReason(f: QueueFacts): QueueReason {
+  return f.onlineRunners === 0 ? 'no_runner'
+    : f.destinationHeld ? 'destination_busy'
+      : f.freeSlots === 0 ? 'runners_busy'
+        : 'starting';
+}
+
+function onDemandReason(f: QueueFacts): QueueReason {
+  return f.destinationHeld ? 'destination_busy'
+    : f.onlineRunners === 0 || f.freeSlots === 0 ? 'scheduling'
+      : 'starting';
 }
 
 /** One line for the run page. Pure, so the wording is unit-tested. */
@@ -74,5 +95,7 @@ export function queueSentence(q: QueueState): string {
       return `Waiting for a free slot: every ${q.classLabel} runner is busy.${ahead}`;
     case 'starting':
       return `Starting: a ${q.classLabel} runner is picking it up.`;
+    case 'scheduling':
+      return `Starting a ${q.classLabel} runner: the cluster starts one for each queued run, usually within a minute.`;
   }
 }
