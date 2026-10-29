@@ -59,6 +59,7 @@ A and C were rejected for the reasons in the table. The decision is recorded in 
 - **`docker/Dockerfile`, `runtime` stage:** `apt-get install -y --no-install-recommends tini`, then `ENTRYPOINT ["/usr/bin/tini", "--"]`.
 - **No `-g`.** tini forwards a signal to its direct child only, which is the agent. The runners the agent forks are detached on purpose, and a forwarded SIGTERM would reach them as a user's cancel. Kubernetes sends SIGTERM to PID 1 only, so this keeps today's drain behaviour.
 - **`docker-compose.yml`:** remove `init: true` from `x-runner`, because the image now provides it. Keep the comment explaining why an init process is needed, and move it to the Dockerfile.
+- **`docker-provisioner.ts` `cloneBody`** (found at implementation): it forced `Init: true` on every clone. It now sets `Init: false` explicitly, since Docker's init in front of tini would leave tini off PID 1, and a template from an older Compose file still carries `Init: true` in the HostConfig it spreads.
 - The `e2e` and `build` targets are unchanged.
 
 ## Step 2 — Agent: Job mode and health (gaps 2, 3)
@@ -178,7 +179,7 @@ deploy/helm/movy/
 | `pnpm k8s:e2e` | `kubectl port-forward svc/movy-web 3000` and run host Playwright with `MOVY_E2E_EXTERNAL_SERVER=1 MOVY_E2E_LIVE=1 MOVY_E2E_K8S=1` |
 | `pnpm k8s:down` | `kind delete cluster` |
 
-The port-forward makes the console `localhost` to the browser, so the `Secure` cookie works, which is the same reason Compose's e2e uses `network_mode: service:web`. **Prerequisites** (none are installed today, only `kubectl`): `kind`, `helm`, and the KEDA chart repo. The README lists them.
+The port-forward makes the console `localhost` to the browser, so the `Secure` cookie works, which is the same reason Compose's e2e uses `network_mode: service:web`. **Prerequisites:** `kubectl`, `kind`, `helm` (all installed as of 2026-10-29), and the KEDA chart repo, which `k8s:up` adds. The README lists them.
 
 ## Step 8 — Tests
 
