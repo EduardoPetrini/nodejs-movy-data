@@ -23,7 +23,8 @@
     "docker:down": "bash scripts/docker-remove-provisioned.sh && docker compose down",
     "docker:cli": "docker compose run --rm cli",
     "docker:e2e": "docker compose --profile e2e run --rm --build e2e",
-    "docker:scale": "bash scripts/docker-scale.sh"
+    "docker:scale": "bash scripts/docker-scale.sh",
+    "k8s:sync-fixtures": "bash scripts/k8s-sync-fixtures.sh"
   },
   "keywords": [],
   "author": "",
@@ -37,7 +38,8 @@
     "@vitest/coverage-v8": "^4.1.11",
     "tsx": "^4.23.13",
     "typescript": "^6.0.2",
-    "vitest": "^4.1.3"
+    "vitest": "^4.1.3",
+    "yaml": "^2.9.1"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

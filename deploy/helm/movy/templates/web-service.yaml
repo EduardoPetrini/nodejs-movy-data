@@ -1,0 +1,36 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "movy.fullname" . }}-web
+  labels:
+    {{- include "movy.labels" . | nindent 4 }}
+    app.kubernetes.io/component: web
+spec:
+  type: ClusterIP
+  selector: {{- include "movy.selector" (dict "root" $ "component" "web") | nindent 4 }}
+  ports:
+    - { name: http, port: 3000, targetPort: http }
+{{- if .Values.ingress.enabled }}
+---
+# A stub: TLS, a real host and SSO are #20's production override.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "movy.fullname" . }}-web
+  labels: {{- include "movy.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  rules:
+    - host: {{ required "ingress.host is required when ingress.enabled" .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service: { name: {{ include "movy.fullname" . }}-web, port: { name: http } }
+{{- end }}

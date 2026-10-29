@@ -1,0 +1,42 @@
+{{- if .Values.seed.enabled }}
+{{- /*
+Dev users and orgs, then (with the lab) its connections in `acme`. Both
+scripts are idempotent, so it runs after every install and upgrade. A
+post-install hook can start before the install's migrate Job has finished,
+hence the retries.
+*/ -}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "movy.fullname" . }}-seed
+  labels:
+    {{- include "movy.labels" . | nindent 4 }}
+    app.kubernetes.io/component: seed
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: {{ .Values.seed.backoffLimit }}
+  template:
+    metadata:
+      labels: {{- include "movy.selector" (dict "root" $ "component" "seed") | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      containers:
+        - name: seed
+          image: {{ include "movy.toolsImage" . }}
+          imagePullPolicy: {{ .Values.toolsImage.pullPolicy }}
+          workingDir: /app/apps/web
+          command:
+            - sh
+            - -c
+            - {{ ternary "pnpm exec tsx scripts/seed-dev.ts && pnpm exec tsx scripts/seed-lab.ts" "pnpm exec tsx scripts/seed-dev.ts" .Values.lab.enabled | quote }}
+          envFrom:
+            - secretRef: { name: {{ include "movy.secret.movy" . }} }
+            {{- if .Values.lab.enabled }}
+            - secretRef: { name: {{ include "movy.secret.lab" . }} }
+            {{- end }}
+          securityContext:
+            allowPrivilegeEscalation: false
+{{- end }}

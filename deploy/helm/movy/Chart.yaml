@@ -1,0 +1,11 @@
+apiVersion: v2
+name: movy
+description: >-
+  Movy on Kubernetes: the console, runner classes as Deployments (warm) or KEDA
+  ScaledJobs (one run per Job), the migrations and, optionally, a bundled
+  meta-db and the seeded lab databases.
+type: application
+version: 0.1.0
+# The image tag. Both images a release runs, `image` and `toolsImage`, default to it.
+appVersion: "1.0.0"
+kubeVersion: ">=1.27.0-0"

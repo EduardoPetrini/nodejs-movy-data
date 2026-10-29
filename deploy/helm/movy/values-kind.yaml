@@ -1,0 +1,41 @@
+# A local kind cluster (pnpm k8s:up): everything in one release, small enough
+# for a laptop. The console is reached through `kubectl port-forward`, so it is
+# http://localhost:3000 to the browser and the Secure session cookie sticks.
+
+metaDb:
+  bundled: true
+  storage: 1Gi
+
+web:
+  allowPasswordLogin: true
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { memory: 1Gi }
+
+# The same two classes, sized for a laptop.
+runnerClasses:
+  - name: default
+    label: Default
+    description: For most migrations.
+    mode: deployment
+    default: true
+    replicas: 1
+    slots: 2
+    cpuMillis: 500
+    memoryMb: 768
+    maxReplicas: 2
+  - name: large
+    label: Large
+    description: More memory and CPU, for sources of tens of gigabytes.
+    mode: job
+    slots: 1
+    cpuMillis: 1000
+    memoryMb: 1024
+    maxReplicas: 1
+    suggestAboveBytes: 20000000000
+
+seed:
+  enabled: true
+
+lab:
+  enabled: true

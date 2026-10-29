@@ -1,0 +1,13 @@
+{{- if include "movy.jobClasses" . }}
+# KEDA reads runner_demand as movy_scaler, whose only grant is SELECT on that view.
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: {{ include "movy.fullname" . }}-scaler
+  labels: {{- include "movy.labels" . | nindent 4 }}
+spec:
+  secretTargetRef:
+    - parameter: connection
+      name: {{ include "movy.secret.scaler" . }}
+      key: connection
+{{- end }}

@@ -1,0 +1,68 @@
+{{- if .Values.metaDb.bundled }}
+{{- /*
+Movy's own metadata: the only database here whose data must survive. LISTEN
+is used on it (run events, settlements, probes), so it is reached directly,
+never through a transaction-mode pooler.
+*/ -}}
+{{- $name := printf "%s-meta-db" (include "movy.fullname" .) -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "movy.labels" . | nindent 4 }}
+    app.kubernetes.io/component: meta-db
+spec:
+  selector: {{- include "movy.selector" (dict "root" $ "component" "meta-db") | nindent 4 }}
+  ports:
+    - { name: postgres, port: 5432, targetPort: postgres }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "movy.labels" . | nindent 4 }}
+    app.kubernetes.io/component: meta-db
+spec:
+  serviceName: {{ $name }}
+  replicas: 1
+  selector:
+    matchLabels: {{- include "movy.selector" (dict "root" $ "component" "meta-db") | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "movy.selector" (dict "root" $ "component" "meta-db") | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: postgres
+          image: {{ .Values.metaDb.image }}
+          env:
+            - { name: POSTGRES_USER, value: {{ .Values.metaDb.username | quote }} }
+            - { name: POSTGRES_DB, value: {{ .Values.metaDb.database | quote }} }
+            # A subdirectory: a fresh volume's root holds lost+found, which initdb refuses.
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+          envFrom:
+            - secretRef: { name: {{ include "movy.secret.metaDb" . }} }
+          ports:
+            - { name: postgres, containerPort: 5432 }
+          # -h 127.0.0.1: during initdb the server listens on its socket only,
+          # so a TCP probe cannot report ready before initialisation finished.
+          readinessProbe:
+            exec:
+              command: [sh, -c, "pg_isready -h 127.0.0.1 -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+            periodSeconds: 3
+          resources: {{- toYaml .Values.metaDb.resources | nindent 12 }}
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/postgresql/data }
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- with .Values.metaDb.storageClass }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests: { storage: {{ .Values.metaDb.storage }} }
+{{- end }}

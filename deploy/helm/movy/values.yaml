@@ -1,0 +1,153 @@
+# Movy on Kubernetes. Production-shaped defaults: an external meta-db, no lab,
+# no seed, no password sign-in. `values-kind.yaml` is the local cluster.
+#
+# Prerequisites: KEDA (keda.sh/v1alpha1) when any class has `mode: job`.
+
+# The runtime image: console and runner agents (docker/Dockerfile, target `runtime`).
+image:
+  repository: movy
+  tag: ""                # defaults to Chart.appVersion
+  pullPolicy: IfNotPresent
+
+# The `build` target: migrate and seed need drizzle-kit and tsx (devDependencies).
+toolsImage:
+  repository: movy-build
+  tag: ""                # defaults to Chart.appVersion
+  pullPolicy: IfNotPresent
+
+fullnameOverride: ""
+
+# Movy's metadata database. It is LISTENed on, so `host` must reach PostgreSQL
+# directly — never a transaction-mode PgBouncer, which drops LISTEN between
+# transactions and leaves run pages and probes waiting for notifications that
+# never arrive.
+metaDb:
+  bundled: false         # true: a single-replica StatefulSet in this release
+  host: ""               # required when not bundled
+  port: 5432
+  database: movy_data
+  username: movy         # the owner: runs the migrations, creates movy_runner and movy_scaler
+  password: ""           # required when not bundled; generated (and kept) when bundled
+  params: ""             # appended to every URL, e.g. "?sslmode=require"
+  # Bundled only:
+  image: postgres:17-alpine
+  storage: 10Gi
+  storageClass: ""
+  resources:
+    requests: { cpu: 250m, memory: 256Mi }
+    limits: { memory: 1Gi }
+
+# Each value: given here, else the one this release already stored, else
+# generated once and kept across upgrades (and uninstalls). Set them here only
+# to bring your own; NEVER change encryptionKey on a live install — every saved
+# connection password becomes undecryptable.
+secrets:
+  encryptionKey: ""      # 32 random bytes, base64
+  sessionPassword: ""
+  runnerDbPassword: ""   # the movy_runner role
+  scalerDbPassword: ""   # the movy_scaler role (only with a job class)
+
+web:
+  # More than one is fine: any replica redeems any stream ticket.
+  replicas: 2
+  allowPasswordLogin: false
+  # Platform operators may start runners and see their hostnames; org admins never can.
+  platformAdmins: []
+  allowedEmailDomain: ""
+  oauth:
+    google: { clientId: "", clientSecret: "" }
+  resources:
+    requests: { cpu: 250m, memory: 384Mi }
+    limits: { memory: 1Gi }
+
+# What "Start a runner" does. `kubernetes`: a Deployment class gets one more
+# replica (up to maxReplicas); a Job class answers that one starts per queued
+# run. `manual`: it shows the command. Auto mode (MOVY_AUTOSCALE) does not
+# apply here: KEDA owns Job classes.
+provisioner:
+  kind: kubernetes
+
+# The one list of runner classes. It renders the runner Deployments, the KEDA
+# ScaledJobs, the class file the console upserts at boot and
+# MOVY_K8S_JOB_CLASSES, so none of them can drift from another.
+#
+#   mode: deployment  warm replicas (`replicas`), never autoscaled
+#   mode: job         KEDA starts one Job per queued run, up to maxReplicas;
+#                     each Job runs one and exits
+#
+# cpuMillis/memoryMb are the pod's requests and limits, and what the console
+# shows for the class. suggestAboveBytes: the review screen suggests the class
+# for a source above that size.
+runnerClasses:
+  - name: default
+    label: Default
+    description: For most migrations.
+    mode: deployment
+    default: true
+    replicas: 1
+    slots: 2
+    cpuMillis: 1000
+    memoryMb: 1024
+    maxReplicas: 3
+  - name: large
+    label: Large
+    description: More memory and CPU, for sources of tens of gigabytes.
+    mode: job
+    slots: 1
+    cpuMillis: 4000
+    memoryMb: 8192
+    maxReplicas: 2
+    suggestAboveBytes: 21474836480
+
+runner:
+  # = drainMs plus a margin: a stopping runner lets live runs finish this long.
+  # Draining never cancels a run.
+  terminationGracePeriodSeconds: 120
+  drainMs: 110000
+  # A Job's agent that has claimed nothing exits after this (a lost race for a
+  # run, or a probe that was answered elsewhere).
+  jobIdleExitMs: 120000
+  # /livez and /readyz, for the kubelet only.
+  healthPort: 8081
+  nodeSelector: {}
+  tolerations: []
+
+keda:
+  pollingInterval: 10
+  ttlSecondsAfterFinished: 600
+
+migrate:
+  # Retries while a freshly installed meta-db boots.
+  backoffLimit: 10
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits: { memory: 1Gi }
+
+# Dev users (admin@/editor@/viewer@movy.local, ops@ an operator), and the lab
+# connections when the lab is on. Never on an install anyone else can reach.
+seed:
+  enabled: false
+  backoffLimit: 10
+
+# Disposable pg-lab, mysql-lab and mssql-lab with the shop fixture. SQL Server
+# needs about 2 GB and has no arm64 image.
+lab:
+  enabled: false
+  images:
+    postgres: postgres:17
+    mysql: mysql:8.4
+    mssql: mcr.microsoft.com/mssql/server:2022-latest
+  resources:
+    postgres: { requests: { cpu: 100m, memory: 128Mi } }
+    mysql: { requests: { cpu: 100m, memory: 384Mi } }
+    mssql: { requests: { cpu: 500m, memory: 2Gi } }
+
+networkPolicy:
+  # Runner pods accept no connections (the kubelet's probes are not affected).
+  enabled: true
+
+ingress:
+  enabled: false
+  className: ""
+  host: ""
+  annotations: {}

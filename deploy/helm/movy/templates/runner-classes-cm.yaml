@@ -1,0 +1,22 @@
+{{- /*
+MOVY_RUNNER_CLASSES_FILE, rendered from the same list that renders the runner
+pods, so the class table and the pods cannot drift. The console upserts it at
+boot; a class dropped from it stays as history.
+*/ -}}
+{{- include "movy.validateClasses" . -}}
+{{- $classes := list -}}
+{{- range .Values.runnerClasses -}}
+{{- $c := dict "name" .name "label" .label "cpuMillis" (int .cpuMillis) "memoryMb" (int .memoryMb) "maxReplicas" (int (.maxReplicas | default 1)) -}}
+{{- with .description }}{{ $_ := set $c "description" . }}{{ end -}}
+{{- with .suggestAboveBytes }}{{ $_ := set $c "suggestAboveBytes" (int64 .) }}{{ end -}}
+{{- if .default }}{{ $_ := set $c "isDefault" true }}{{ end -}}
+{{- $classes = append $classes $c -}}
+{{- end -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "movy.fullname" . }}-runner-classes
+  labels: {{- include "movy.labels" . | nindent 4 }}
+data:
+  runner-classes.json: |
+    {{- dict "classes" $classes | toPrettyJson | nindent 4 }}

@@ -1,0 +1,122 @@
+{{- if .Values.lab.enabled }}
+{{- /*
+The lab: disposable, seeded databases to migrate between, as in Compose. Each
+holds movy_src (the shop fixture) and an empty movy_dst, and has no volume.
+The Services keep Compose's names, pg-lab, mysql-lab and mssql-lab, so the
+connections seed-lab.ts saves work unchanged.
+
+The fixtures are files/fixtures, copied from docker/fixtures by
+`pnpm k8s:sync-fixtures`: Helm cannot read outside the chart.
+*/ -}}
+{{- $lab := include "movy.secret.lab" . -}}
+{{- $engines := list
+  (dict "name" "pg-lab" "image" .Values.lab.images.postgres "port" 5432 "engine" "postgres" "fixtures" "postgres" "mount" "/docker-entrypoint-initdb.d"
+        "ready" "psql -h 127.0.0.1 -U postgres -d movy_src -tAc 'SELECT 1 FROM order_items LIMIT 1' | grep -q 1")
+  (dict "name" "mysql-lab" "image" .Values.lab.images.mysql "port" 3306 "engine" "mysql" "fixtures" "mysql" "mount" "/docker-entrypoint-initdb.d"
+        "ready" "mysql -h 127.0.0.1 -uroot -p\"$MYSQL_ROOT_PASSWORD\" -NBe 'SELECT 1 FROM movy_src.order_items LIMIT 1' | grep -q 1")
+  (dict "name" "mssql-lab" "image" .Values.lab.images.mssql "port" 1433 "engine" "mssql" "fixtures" ""  "mount" ""
+        "ready" "/opt/mssql-tools18/bin/sqlcmd -C -S 127.0.0.1 -U sa -P \"$MSSQL_SA_PASSWORD\" -Q 'SELECT 1' -b -o /dev/null")
+-}}
+{{- range $engines }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .name }}
+  labels:
+    {{- include "movy.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ .name }}
+spec:
+  selector: {{- include "movy.selector" (dict "root" $ "component" .name) | nindent 4 }}
+  ports:
+    - { name: db, port: {{ .port }}, targetPort: db }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .name }}
+  labels:
+    {{- include "movy.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ .name }}
+spec:
+  replicas: 1
+  # Two copies of a database with no volume would be two different databases.
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: {{- include "movy.selector" (dict "root" $ "component" .name) | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "movy.selector" (dict "root" $ "component" .name) | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: db
+          image: {{ .image }}
+          {{- if eq .name "mssql-lab" }}
+          env:
+            - { name: ACCEPT_EULA, value: "Y" }
+            - { name: MSSQL_PID, value: Developer }
+          {{- end }}
+          envFrom:
+            - secretRef: { name: {{ $lab }} }
+          ports:
+            - { name: db, containerPort: {{ .port }} }
+          readinessProbe:
+            exec: { command: [sh, -c, {{ .ready | quote }}] }
+            periodSeconds: 3
+            failureThreshold: 3
+          resources: {{- toYaml (index $.Values.lab.resources .engine) | nindent 12 }}
+          {{- if .fixtures }}
+          volumeMounts:
+            - { name: fixtures, mountPath: {{ .mount }}, readOnly: true }
+          {{- end }}
+      {{- if .fixtures }}
+      volumes:
+        - name: fixtures
+          configMap: { name: {{ include "movy.fullname" $ }}-fixtures-{{ .fixtures }} }
+      {{- end }}
+{{- end }}
+{{- range list "postgres" "mysql" "mssql" }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "movy.fullname" $ }}-fixtures-{{ . }}
+  labels: {{- include "movy.labels" $ | nindent 4 }}
+data: {{- ($.Files.Glob (printf "files/fixtures/%s/*" .)).AsConfig | nindent 2 }}
+{{- end }}
+---
+# SQL Server has no init directory: this loads the fixture once it answers.
+# The SQL is idempotent.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mssql-init
+  labels:
+    {{- include "movy.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mssql-init
+spec:
+  backoffLimit: 6
+  template:
+    metadata:
+      labels: {{- include "movy.selector" (dict "root" $ "component" "mssql-init") | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      containers:
+        - name: init
+          image: {{ .Values.lab.images.mssql }}
+          command:
+            - bash
+            - -c
+            - |
+              until /opt/mssql-tools18/bin/sqlcmd -C -S mssql-lab -U sa -P "$MSSQL_SA_PASSWORD" -Q 'SELECT 1' -b -o /dev/null; do sleep 3; done
+              exec /fixtures/init.sh
+          envFrom:
+            - secretRef: { name: {{ $lab }} }
+          volumeMounts:
+            - { name: fixtures, mountPath: /fixtures, readOnly: true }
+      volumes:
+        - name: fixtures
+          configMap: { name: {{ include "movy.fullname" . }}-fixtures-mssql, defaultMode: 0755 }
+{{- end }}

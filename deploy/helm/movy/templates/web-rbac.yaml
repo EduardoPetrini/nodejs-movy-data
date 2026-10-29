@@ -1,0 +1,48 @@
+{{- if eq .Values.provisioner.kind "kubernetes" }}
+{{- /*
+What "Start a runner" needs and nothing else: read and patch the scale of the
+runner Deployments by name, and list Jobs to count the ones starting. No
+create, no delete, no pods, no secrets.
+*/ -}}
+{{- $full := include "movy.fullname" . -}}
+{{- $deployments := list -}}
+{{- range .Values.runnerClasses -}}
+{{- if eq .mode "deployment" }}{{ $deployments = append $deployments (printf "%s%s" (include "movy.runnerPrefix" $) .name) }}{{ end -}}
+{{- end -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $full }}-web
+  labels: {{- include "movy.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $full }}-web
+  labels: {{- include "movy.labels" . | nindent 4 }}
+rules:
+  {{- /* An empty resourceNames would grant every Deployment, so no Deployment class means no rule. */}}
+  {{- if $deployments }}
+  - apiGroups: [apps]
+    resources: [deployments/scale]
+    resourceNames: {{- toYaml $deployments | nindent 6 }}
+    verbs: [get, patch]
+  {{- end }}
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $full }}-web
+  labels: {{- include "movy.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $full }}-web
+subjects:
+  - kind: ServiceAccount
+    name: {{ $full }}-web
+    namespace: {{ .Release.Namespace }}
+{{- end }}

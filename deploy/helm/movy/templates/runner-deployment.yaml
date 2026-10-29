@@ -1,0 +1,35 @@
+{{- /*
+Deployment classes: warm runners that answer Test/Preview probes and take the
+small runs. Never autoscaled — scaling a Deployment down can pick a busy pod —
+so the count comes from values, plus whatever "Start a runner" added.
+*/ -}}
+{{- range .Values.runnerClasses }}
+{{- if eq .mode "deployment" }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "movy.runnerPrefix" $ }}{{ .name }}
+  labels:
+    {{- include "movy.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: runner
+    movy.runner-class: {{ .name }}
+spec:
+  replicas: {{ .replicas | default 1 }}
+  selector:
+    matchLabels:
+      {{- include "movy.selector" (dict "root" $ "component" "runner") | nindent 6 }}
+      movy.runner-class: {{ .name }}
+  # A replaced pod drains (up to terminationGracePeriodSeconds) while its
+  # successor is already claiming.
+  strategy:
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  template:
+    metadata:
+      labels:
+        {{- include "movy.selector" (dict "root" $ "component" "runner") | nindent 8 }}
+        movy.runner-class: {{ .name }}
+    spec:
+      {{- include "movy.runnerPod" (dict "root" $ "class" . "job" false) | nindent 6 }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,79 @@
+{{- $full := include "movy.fullname" . -}}
+{{- $k8s := eq .Values.provisioner.kind "kubernetes" -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $full }}-web
+  labels:
+    {{- include "movy.labels" . | nindent 4 }}
+    app.kubernetes.io/component: web
+spec:
+  # Any replica redeems any stream ticket (stream_tickets, migration 0010).
+  replicas: {{ .Values.web.replicas }}
+  selector:
+    matchLabels: {{- include "movy.selector" (dict "root" $ "component" "web") | nindent 6 }}
+  strategy:
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  template:
+    metadata:
+      labels: {{- include "movy.selector" (dict "root" $ "component" "web") | nindent 8 }}
+      annotations:
+        # The class file is read at boot: a changed list rolls the console.
+        checksum/runner-classes: {{ include (print $.Template.BasePath "/runner-classes-cm.yaml") . | sha256sum }}
+    spec:
+      {{- if $k8s }}
+      serviceAccountName: {{ $full }}-web
+      {{- end }}
+      # The token is mounted only for the kubernetes provisioner, which uses it.
+      automountServiceAccountToken: {{ $k8s }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+      containers:
+        - name: web
+          image: {{ include "movy.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          workingDir: /app/apps/web
+          args: [node, .output/server/index.mjs]
+          env:
+            - { name: HOST, value: 0.0.0.0 }
+            - { name: PORT, value: "3000" }
+            # The runner pods run every run; the console only queues them.
+            - { name: MOVY_EMBEDDED_RUNNER, value: "false" }
+            - { name: MOVY_PROVISIONER, value: {{ .Values.provisioner.kind | quote }} }
+            {{- if $k8s }}
+            - { name: MOVY_K8S_JOB_CLASSES, value: {{ include "movy.jobClasses" . | quote }} }
+            - { name: MOVY_K8S_DEPLOYMENT_PREFIX, value: {{ include "movy.runnerPrefix" . | quote }} }
+            {{- end }}
+            - { name: MOVY_RUNNER_CLASSES_FILE, value: /etc/movy/runner-classes.json }
+            - { name: NUXT_ALLOW_PASSWORD_LOGIN, value: {{ .Values.web.allowPasswordLogin | quote }} }
+            - { name: MOVY_PLATFORM_ADMINS, value: {{ join "," .Values.web.platformAdmins | quote }} }
+            {{- with .Values.web.allowedEmailDomain }}
+            - { name: NUXT_ALLOWED_EMAIL_DOMAIN, value: {{ . | quote }} }
+            {{- end }}
+          envFrom:
+            - secretRef: { name: {{ include "movy.secret.movy" . }} }
+          ports:
+            - { name: http, containerPort: 3000 }
+          # /api/health never reads the meta-db: an outage there must not take
+          # every console out of the Service, nor restart them.
+          startupProbe:
+            httpGet: { path: /api/health, port: http }
+            periodSeconds: 2
+            failureThreshold: 60
+          livenessProbe:
+            httpGet: { path: /api/health, port: http }
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /api/health, port: http }
+            periodSeconds: 5
+          resources: {{- toYaml .Values.web.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: runner-classes, mountPath: /etc/movy, readOnly: true }
+      volumes:
+        - name: runner-classes
+          configMap: { name: {{ $full }}-runner-classes }

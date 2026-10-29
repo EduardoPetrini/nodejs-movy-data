@@ -1,0 +1,57 @@
+{{- /*
+Job classes (KEDA): one Job per unit of demand, whose agent claims one run,
+finishes it and exits. KEDA never scales a running Job down, so a busy runner
+is never killed for capacity.
+
+Demand is `runner_demand` (migration 0011), the same view the Compose auto
+mode reads: queued runs not blocked on their destination, plus queued probes —
+without the probes a Test "from large" could never wake a Job. `accurate`,
+because the count already excludes claimed work.
+*/ -}}
+{{- range .Values.runnerClasses }}
+{{- if eq .mode "job" }}
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledJob
+metadata:
+  name: {{ include "movy.runnerPrefix" $ }}{{ .name }}
+  labels:
+    {{- include "movy.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: runner
+    # KEDA copies it onto each Job: the console counts the starting ones by it.
+    movy.runner-class: {{ .name }}
+spec:
+  pollingInterval: {{ $.Values.keda.pollingInterval }}
+  maxReplicaCount: {{ .maxReplicas | default 1 }}
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  scalingStrategy:
+    strategy: accurate
+  jobTargetRef:
+    parallelism: 1
+    completions: 1
+    # Movy has no resume: a failed runner's run is settled, never retried.
+    backoffLimit: 0
+    # Runs can be long; nothing bounds one but the run itself.
+    ttlSecondsAfterFinished: {{ $.Values.keda.ttlSecondsAfterFinished }}
+    template:
+      metadata:
+        labels:
+          {{- include "movy.selector" (dict "root" $ "component" "runner") | nindent 10 }}
+          movy.runner-class: {{ .name }}
+        annotations:
+          # The autoscaler never picks this node to empty while a run is on it.
+          # A manual `kubectl drain` still evicts it; the run settles RunnerVanished.
+          cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
+      spec:
+        {{- include "movy.runnerPod" (dict "root" $ "class" . "job" true) | nindent 8 }}
+  triggers:
+    - type: postgresql
+      metadata:
+        # The name is checked against ^[a-z][a-z0-9-]*$, so it is safe as a literal.
+        query: {{ printf "SELECT claimable_runs + queued_probes FROM runner_demand WHERE runner_class = '%s'" .name | quote }}
+        targetQueryValue: "1"
+      authenticationRef:
+        name: {{ include "movy.fullname" $ }}-scaler
+{{- end }}
+{{- end }}

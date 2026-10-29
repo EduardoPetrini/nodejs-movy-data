@@ -1,0 +1,50 @@
+{{- /*
+The migrations, then the movy_runner and movy_scaler roles and their grants
+(packages/db/scripts/runner-role.ts; idempotent, and it resets each password
+from its Secret).
+
+On INSTALL an ordinary Job, not a pre-install hook: hooks run before the
+release's resources exist, so neither its Secrets nor a bundled meta-db would
+be there to reach. It retries while the meta-db boots; the console and the
+runners retry until the schema exists. On UPGRADE a pre-upgrade hook, so the
+schema moves before any new pod starts.
+*/ -}}
+{{- $upgrade := .Release.IsUpgrade -}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "movy.fullname" . }}-migrate{{ if $upgrade }}-upgrade{{ end }}
+  labels:
+    {{- include "movy.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migrate
+  {{- if $upgrade }}
+  annotations:
+    helm.sh/hook: pre-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation
+  {{- end }}
+spec:
+  backoffLimit: {{ .Values.migrate.backoffLimit }}
+  template:
+    metadata:
+      labels: {{- include "movy.selector" (dict "root" $ "component" "migrate") | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      containers:
+        - name: migrate
+          image: {{ include "movy.toolsImage" . }}
+          imagePullPolicy: {{ .Values.toolsImage.pullPolicy }}
+          workingDir: /app
+          command: [sh, -c, "pnpm --filter @movy/db db:migrate && pnpm --filter @movy/db exec tsx scripts/runner-role.ts"]
+          env:
+            - name: NUXT_DATABASE_URL
+              valueFrom: { secretKeyRef: { name: {{ include "movy.secret.movy" . }}, key: NUXT_DATABASE_URL } }
+            - name: RUNNER_DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ include "movy.secret.runner" . }}, key: RUNNER_DB_PASSWORD } }
+            {{- if include "movy.jobClasses" . }}
+            - name: SCALER_DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ include "movy.secret.scaler" . }}, key: SCALER_DB_PASSWORD } }
+            {{- end }}
+          resources: {{- toYaml .Values.migrate.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
