@@ -104,6 +104,7 @@ In **`apps/runner/src/agent/agent-config.ts`** (parsed strictly, exit 64 on a ba
 - **`packages/db/src/runner-role.ts`:** add `SCALER_ROLE = 'movy_scaler'` and `ensureScalerRole(sql, password)`, shaped like `ensureRunnerRole`: `REVOKE ALL`, `USAGE` on the schema, and `SELECT` on `runner_demand` only.
   - `scripts/runner-role.ts` also runs it when `SCALER_DB_PASSWORD` is set. Like the runner role, it is skipped with a log line otherwise. Compose doesn't set it.
   - `RUNNER_GRANTS` is unchanged, and `movy_runner` gets nothing on the view.
+  - **At implementation:** `ensureRunnerRole` and `ensureScalerRole` share one `ensureLoginRole`. The script now applies each role only when its own password is set, so a Kubernetes migrate Job can set both and Compose keeps setting only the runner's. `loadClassDemand` reads `claimable_runs` only, as before: auto mode never scaled for probes.
 
 ## Step 4 — The `kubernetes` provisioner (gap 4, decision 3)
 
