@@ -118,6 +118,11 @@ New files in `apps/web/server/runners/`:
   - `cleanup()` returns 0: Jobs carry `ttlSecondsAfterFinished`.
   - An API error is a `ProvisionerError` with a safe message (no token, no URL), surfaced as today's docker errors are.
 - **`provisioner.ts`:** `ProvisionerKind` gains `'kubernetes'`. **`use-provisioner.ts`:** `MOVY_PROVISIONER=kubernetes` builds it.
+- **At implementation:**
+  - `ScaleResult.on_demand` and its `scaleSentence` moved here from step 5: `ProvisionResult` *is* the wire type, so the provisioner cannot return it otherwise.
+  - No separate `ProvisionerError`: `KubeApiError` carries the API's own sentence and joins `DockerEngineError` in the scale route's 502. A socket error carries only its code, never the API server's address.
+  - `kube-api.ts` takes an injectable `KubeRequest`, so paths and answer parsing are unit-tested; `inClusterRequest` (HTTPS, token re-read per request since projected tokens rotate) was run against a throwaway kind cluster with this plan's Role: `on_demand` counted 1 active Job and not the completed one, `default` went 1 → 2 replicas then `at_capacity`, and a Deployment outside `resourceNames` was a 403 naming the ServiceAccount only.
+  - `useProvisioner` and `isAutoscale` are thin wrappers over the pure `buildProvisioner(env, deps)` and `readAutoscale(env, warn)`, which is what `use-provisioner.test.ts` tests. A kubernetes setting it cannot read falls back to manual, loudly, as an unknown kind always did.
 - **Auto mode** is meaningless here: KEDA owns Job classes, and nothing would ever scale a Deployment back down. `use-provisioner.ts` logs a warning and ignores `MOVY_AUTOSCALE=true` with the kubernetes provisioner. That is refused with a reason, never applied silently.
 
 ## Step 5 — The UI says "on demand" (gap 4)
