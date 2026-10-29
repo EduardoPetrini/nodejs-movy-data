@@ -7,13 +7,17 @@
  * embeds, wired to the metadata database from the environment instead of from
  * Nuxt. It claims runs of one class, forks `main.js` beside it for each, and
  * answers Test and Preview for that class. Nothing reaches it but the database:
- * no port, no inbound connection, so a runner can sit wherever its databases are.
+ * no inbound connection, so a runner can sit wherever its databases are. The
+ * one exception is opt-in: MOVY_RUNNER_HEALTH_PORT serves `/livez` and
+ * `/readyz` for a kubelet, and answers nothing else.
  *
  *   SIGTERM / SIGINT  drain: claim nothing more, wait up to MOVY_RUNNER_DRAIN_MS
  *                     for live runs, then exit 0. Never cancels a run.
  *   idle exit         only when MOVY_RUNNER_PROVISIONED_BY is set: a runner a
  *                     provisioner started leaves after MOVY_RUNNER_IDLE_EXIT_MS
  *                     with nothing to do. A baseline replica never does.
+ *   run limit         MOVY_RUNNER_MAX_RUNS: claim that many runs, then exit 0
+ *                     once they have settled. 1 is a Kubernetes Job's agent.
  */
 import * as path from 'node:path';
 import { createDb } from '@movy/db';
@@ -31,6 +35,7 @@ import {
   SUPPORTED_SPEC_VERSIONS,
   applyProjection,
   finaliseRunIfUnsettled,
+  isAlive,
   journalPathIn,
   markRunLaunched,
   parseStringField,
@@ -39,13 +44,17 @@ import {
   reattachableRuns,
   sqlAgentQueue,
   sqlProbeQueue,
+  startHealthServer,
   type AgentConfig,
+  type HealthServer,
   type SqlClient,
 } from './agent';
 import { RUNNER_EXIT } from './protocol';
 
 const START_RETRY_MS = 5_000;
 const IDLE_CHECK_MS = 15_000;
+/** The liveness clock: its own timer from boot, so it never waits on the meta-db. */
+const LIVENESS_TICK_MS = 1_000;
 const LOG_PREFIX = '[runner-agent]';
 
 function log(level: 'info' | 'warn' | 'error', message: string): void {
@@ -110,6 +119,7 @@ function buildServices(config: AgentConfig): Services {
     }),
     control: manager,
     slots: config.slots,
+    maxRuns: config.maxRuns ?? undefined,
     journalPathFor: (runId) => journalPathIn(config.journalDir, runId),
     simulationFixture: () => resolveSimulationFixture(config.simulationFixture, path.resolve(__dirname, '..')),
     onError: (err, runId) => log('error', `${runId ? `(${runId}) ` : ''}${err.message}`),
@@ -150,7 +160,25 @@ function busListener(config: AgentConfig, agent: RunnerAgent, probes: ProbeWorke
   });
 }
 
-/** Starts the agent, then keeps it until a signal — or, when provisioned, idleness — stops it. */
+/**
+ * The health port, when configured. Liveness is a clock ticking from boot, not
+ * the agent's lease timer: that one is armed only once the agent registers, so
+ * a runner booting during a meta-db outage would fail liveness and be restarted
+ * in a loop — the mass restart this check must never cause.
+ */
+async function healthPort(
+  config: AgentConfig,
+  ready: () => boolean
+): Promise<{ server: HealthServer | null; ticker: NodeJS.Timeout | null }> {
+  if (config.healthPort === null) return { server: null, ticker: null };
+  let lastTickAt = Date.now();
+  const ticker = setInterval(() => { lastTickAt = Date.now(); }, LIVENESS_TICK_MS);
+  const server = await startHealthServer(config.healthPort, { alive: () => isAlive(lastTickAt, Date.now()), ready });
+  log('info', `health checks on :${server.port} (/livez, /readyz).`);
+  return { server, ticker };
+}
+
+/** Starts the agent, then keeps it until a signal, idleness or its run limit stops it. */
 async function run(config: AgentConfig): Promise<void> {
   const { pool, writer, manager, agent, probes } = buildServices(config);
   const listener = busListener(config, agent, probes);
@@ -158,6 +186,7 @@ async function run(config: AgentConfig): Promise<void> {
   let stopping = false;
   let started = false;
   let idleTimer: NodeJS.Timeout | null = null;
+  const health = await healthPort(config, () => started && !stopping);
 
   const shutdown = async (reason: string, drainMs: number): Promise<void> => {
     if (stopping) return;
@@ -173,6 +202,9 @@ async function run(config: AgentConfig): Promise<void> {
     await writer.close();
     await listener.stop();
     await pool.end().catch(() => undefined);
+    // Last: liveness keeps passing through the whole drain.
+    if (health.ticker) clearInterval(health.ticker);
+    await health.server?.close();
     log('info', 'stopped.');
     process.exit(0);
   };
@@ -201,11 +233,14 @@ async function run(config: AgentConfig): Promise<void> {
   listener.start();
   log('info', 'online.');
 
-  if (config.provisionedBy) {
-    const idle = new IdleWatch(config.idleExitMs, Date.now());
+  // Idle exit is for provisioned runners only; the run limit applies to any
+  // agent given one. A Deployment pod should have neither, or it restarts.
+  if (config.provisionedBy || config.maxRuns !== null) {
+    const idle = config.provisionedBy ? new IdleWatch(config.idleExitMs, Date.now()) : null;
     idleTimer = setInterval(() => {
       const busy = manager.liveRunIds().length + probes.busy;
-      if (idle.observe(busy, Date.now())) void shutdown('idle', 0);
+      if (agent.exhausted && probes.busy === 0) void shutdown('run limit reached', 0);
+      else if (idle?.observe(busy, Date.now())) void shutdown('idle', 0);
     }, IDLE_CHECK_MS);
   }
 }

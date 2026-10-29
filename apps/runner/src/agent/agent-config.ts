@@ -27,6 +27,13 @@ export interface AgentConfig {
   readonly provisionedBy: string | null;
   /** Idle time before a provisioned agent exits. Ignored without `provisionedBy`. */
   readonly idleExitMs: number;
+  /**
+   * Claims this agent makes before it stops claiming and exits once they have
+   * settled; null is unlimited. 1 is Job mode: one Kubernetes Job, one run.
+   */
+  readonly maxRuns: number | null;
+  /** Serves `/livez` and `/readyz` on this port when set; null listens on nothing. */
+  readonly healthPort: number | null;
 }
 
 export class AgentConfigError extends Error {
@@ -35,6 +42,7 @@ export class AgentConfigError extends Error {
 
 export const DEFAULT_DRAIN_MS = 110_000;
 export const DEFAULT_IDLE_EXIT_MS = 10 * 60_000;
+const MAX_PORT = 65_535;
 
 type Env = Readonly<Record<string, string | undefined>>;
 
@@ -88,14 +96,24 @@ export function readAgentConfig(env: Env, hostname: string = os.hostname()): Age
     drainMs: integer(env, 'MOVY_RUNNER_DRAIN_MS', DEFAULT_DRAIN_MS, 0),
     provisionedBy: env.MOVY_RUNNER_PROVISIONED_BY || null,
     idleExitMs: integer(env, 'MOVY_RUNNER_IDLE_EXIT_MS', DEFAULT_IDLE_EXIT_MS, 1_000),
+    maxRuns: optionalInteger(env, 'MOVY_RUNNER_MAX_RUNS', 1),
+    healthPort: optionalInteger(env, 'MOVY_RUNNER_HEALTH_PORT', 1, MAX_PORT),
   };
 }
 
 /** Unset or empty is the default; anything else must be an integer at or above `min`. */
 function integer(env: Env, name: string, fallback: number, min: number): number {
+  return optionalInteger(env, name, min) ?? fallback;
+}
+
+/** Unset or empty is null; anything else must be an integer in `[min, max]`. */
+function optionalInteger(env: Env, name: string, min: number, max = Number.MAX_SAFE_INTEGER): number | null {
   const raw = env[name];
-  if (raw === undefined || raw === '') return fallback;
+  if (raw === undefined || raw === '') return null;
   const n = Number(raw);
-  if (!Number.isInteger(n) || n < min) throw new AgentConfigError(`${name} must be an integer of at least ${min}.`);
+  if (!Number.isInteger(n) || n < min || n > max) {
+    const range = max === Number.MAX_SAFE_INTEGER ? `of at least ${min}` : `from ${min} to ${max}`;
+    throw new AgentConfigError(`${name} must be an integer ${range}.`);
+  }
   return n;
 }

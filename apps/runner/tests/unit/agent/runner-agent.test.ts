@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { RunnerAgent, type AgentQueue, type AgentRunControl } from '../../../src/agent/runner-agent';
+import { RunnerAgent, type AgentQueue, type AgentRunControl, type RunnerAgentOptions } from '../../../src/agent/runner-agent';
 import { RunSpecIncompatibleError, type RunSpecEnvelope } from '../../../src/agent/run-spec-envelope';
 import type { ClaimedRun, HeartbeatResult, SealedSpec, Settlement } from '../../../src/agent/queue-store';
 import type { LaunchRequest } from '../../../src/agent/run-manager';
@@ -57,7 +57,13 @@ function run(id: string): ClaimedRun {
   return { id, orgId: ORG, simulated: false };
 }
 
-function agentWith(q: ReturnType<typeof fakeQueue>, c: ReturnType<typeof fakeControl>, slots = 1, fixture?: string) {
+function agentWith(
+  q: ReturnType<typeof fakeQueue>,
+  c: ReturnType<typeof fakeControl>,
+  slots = 1,
+  fixture?: string,
+  extra: Partial<RunnerAgentOptions> = {}
+) {
   return new RunnerAgent({
     queue: q.queue,
     control: c.control,
@@ -72,6 +78,7 @@ function agentWith(q: ReturnType<typeof fakeQueue>, c: ReturnType<typeof fakeCon
     },
     pollIntervalMs: 0,
     heartbeatIntervalMs: 0,
+    ...extra,
   });
 }
 
@@ -691,5 +698,86 @@ describe('RunnerAgent stopping', () => {
     (q.queue.claimNext as ReturnType<typeof vi.fn>).mockClear();
     await agent.wake();
     expect(q.queue.claimNext).not.toHaveBeenCalled();
+  });
+});
+
+describe('RunnerAgent with a run limit (Job mode)', () => {
+  it('claims no more than its limit, however many slots and queued runs it has', async () => {
+    const q = fakeQueue([run('a'), run('b'), run('c')]);
+    const c = fakeControl();
+    const agent = agentWith(q, c, 3, undefined, { maxRuns: 1 });
+    await agent.start();
+
+    expect(c.launched.map((l) => l.runId)).toEqual(['a']);
+    expect(q.queued.map((r) => r.id)).toEqual(['b', 'c']);
+  });
+
+  it('stops claiming once the limit is reached, and says it is draining', async () => {
+    const q = fakeQueue([run('a'), run('b')]);
+    const c = fakeControl();
+    const agent = agentWith(q, c, 1, undefined, { maxRuns: 1 });
+    await agent.start();
+    c.finish('a');
+    await agent.beat();
+
+    expect(c.launched.map((l) => l.runId)).toEqual(['a']);
+    expect(q.states).toEqual(['draining']);
+  });
+
+  it('is exhausted only once the runs it claimed have settled', async () => {
+    const q = fakeQueue([run('a')]);
+    const c = fakeControl();
+    const agent = agentWith(q, c, 1, undefined, { maxRuns: 1 });
+    await agent.start();
+
+    expect(agent.exhausted).toBe(false);
+    c.finish('a');
+    expect(agent.exhausted).toBe(true);
+  });
+
+  it('counts a claim it could not start, since that run is settled and the Job is spent', async () => {
+    const q = fakeQueue([run('a'), run('b')], { a: 'missing' });
+    const c = fakeControl();
+    const agent = agentWith(q, c, 1, undefined, { maxRuns: 1 });
+    await agent.start();
+
+    expect(c.launched).toEqual([]);
+    expect(q.queued.map((r) => r.id)).toEqual(['b']);
+    expect(agent.exhausted).toBe(true);
+  });
+
+  it('is never exhausted while it has claimed nothing, so an idle Job waits for its idle exit', async () => {
+    const q = fakeQueue([]);
+    const c = fakeControl();
+    const agent = agentWith(q, c, 1, undefined, { maxRuns: 1 });
+    await agent.start();
+
+    expect(agent.exhausted).toBe(false);
+  });
+
+  it('is never exhausted without a limit', async () => {
+    const q = fakeQueue([run('a')]);
+    const c = fakeControl();
+    const agent = agentWith(q, c, 1);
+    await agent.start();
+    c.finish('a');
+
+    expect(agent.exhausted).toBe(false);
+  });
+
+  it('keeps heartbeating the run it holds after it stops claiming', async () => {
+    // Draining is about claiming only: the lease must still be renewed, or the
+    // sweeper settles a live run as vanished.
+    const q = fakeQueue([run('a')]);
+    const c = fakeControl();
+    const agent = agentWith(q, c, 1, undefined, { maxRuns: 1 });
+    await agent.start();
+    q.setBeat({ held: ['a'], cancelling: [] });
+    (q.queue.heartbeat as ReturnType<typeof vi.fn>).mockClear();
+
+    await agent.beat();
+
+    expect(q.queue.heartbeat).toHaveBeenCalledTimes(1);
+    expect(c.control.terminate).not.toHaveBeenCalled();
   });
 });

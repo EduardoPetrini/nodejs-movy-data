@@ -52,4 +52,6 @@ export { journalPathIn } from './journal-path';
 export { AgentConfigError, readAgentConfig, readRunnerClass, readSlots } from './agent-config';
 export type { AgentConfig, SlotConfig } from './agent-config';
 export { IdleWatch } from './idle-watch';
+export { isAlive, startHealthServer } from './health-server';
+export type { HealthServer } from './health-server';
 export { BUNDLED_FIXTURE, resolveSimulationFixture } from './simulation-fixture';

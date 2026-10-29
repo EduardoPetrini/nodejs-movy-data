@@ -15,6 +15,28 @@ describe('readAgentConfig', () => {
       provisionedBy: null,
       idleExitMs: DEFAULT_IDLE_EXIT_MS,
       simulationFixture: undefined,
+      maxRuns: null,
+      healthPort: null,
+    });
+  });
+
+  it('reads the Job-mode run limit and the opt-in health port', () => {
+    expect(readAgentConfig({ ...BASE, MOVY_RUNNER_MAX_RUNS: '1', MOVY_RUNNER_HEALTH_PORT: '8081' }, 'h')).toMatchObject({
+      maxRuns: 1, healthPort: 8081,
+    });
+  });
+
+  it('refuses a run limit or a port that could not be one, rather than run unlimited or unprobed', () => {
+    expect(() => readAgentConfig({ ...BASE, MOVY_RUNNER_MAX_RUNS: '0' })).toThrow(/MOVY_RUNNER_MAX_RUNS/);
+    expect(() => readAgentConfig({ ...BASE, MOVY_RUNNER_MAX_RUNS: 'one' })).toThrow(/MOVY_RUNNER_MAX_RUNS/);
+    expect(() => readAgentConfig({ ...BASE, MOVY_RUNNER_HEALTH_PORT: '0' })).toThrow(/MOVY_RUNNER_HEALTH_PORT/);
+    expect(() => readAgentConfig({ ...BASE, MOVY_RUNNER_HEALTH_PORT: '65536' })).toThrow(/MOVY_RUNNER_HEALTH_PORT/);
+    expect(() => readAgentConfig({ ...BASE, MOVY_RUNNER_HEALTH_PORT: '80a' })).toThrow(AgentConfigError);
+  });
+
+  it('treats an empty run limit and port as unset, as Compose writes them', () => {
+    expect(readAgentConfig({ ...BASE, MOVY_RUNNER_MAX_RUNS: '', MOVY_RUNNER_HEALTH_PORT: '' }, 'h')).toMatchObject({
+      maxRuns: null, healthPort: null,
     });
   });
 

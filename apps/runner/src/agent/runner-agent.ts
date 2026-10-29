@@ -41,6 +41,11 @@ export interface RunnerAgentOptions {
   readonly control: AgentRunControl;
   /** Runs this agent executes at once. */
   readonly slots: number;
+  /**
+   * Claims before it stops claiming for good; undefined is unlimited. With 1,
+   * one Kubernetes Job is one run: the Job's pod exits once `exhausted`.
+   */
+  readonly maxRuns?: number;
   readonly journalPathFor: (runId: string) => string;
   /** The recording a simulated run replays, on THIS host; undefined when there is none. */
   readonly simulationFixture: () => string | undefined;
@@ -94,6 +99,8 @@ export class RunnerAgent {
   /** Cancels already forwarded, so a heartbeat does not re-send one every beat. */
   private readonly cancelSent = new Set<string>();
   private claiming: Promise<void> | null = null;
+  /** Every claim, whether or not its run started: a spent claim is spent. */
+  private claims = 0;
   private wakeAgain = false;
   private draining = false;
   private pollTimer: NodeJS.Timeout | null = null;
@@ -142,6 +149,16 @@ export class RunnerAgent {
     const beatMs = this.options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_MS;
     if (pollMs > 0) this.pollTimer = unref(setInterval(() => void this.wake(), pollMs));
     if (beatMs > 0) this.beatTimer = unref(setInterval(() => void this.beat(), beatMs));
+  }
+
+  /**
+   * Reached its run limit and every run it claimed has finished here: an agent
+   * with nothing left to do and nothing it may take on. Never true without
+   * `maxRuns`, nor before the first claim, so an idle Job leaves by its idle
+   * exit rather than this.
+   */
+  get exhausted(): boolean {
+    return this.limitReached() && this.launching.size === 0 && this.options.control.liveRunIds().length === 0;
   }
 
   /** Claims queued runs until its slots are full or the queue is empty. */
@@ -281,10 +298,22 @@ export class RunnerAgent {
    */
   async stopClaiming(): Promise<void> {
     if (this.draining) return;
+    await this.beginDrain();
+    await this.claiming;
+  }
+
+  /**
+   * Claims nothing more and says so. Never awaits the claim loop, so the loop
+   * itself can call it on reaching its limit without waiting on itself.
+   */
+  private async beginDrain(): Promise<void> {
     this.draining = true;
     this.clearPoll();
     await this.safely(() => this.options.queue.setState('draining'));
-    await this.claiming;
+  }
+
+  private limitReached(): boolean {
+    return this.options.maxRuns !== undefined && this.claims >= this.options.maxRuns;
   }
 
   /**
@@ -315,6 +344,7 @@ export class RunnerAgent {
         return;
       }
       if (!claimed) return;
+      this.claims += 1;
       // The claim grants the lease, so its deadline runs from the claim.
       this.owned.set(claimed.id, sentAt);
       this.launching.add(claimed.id);
@@ -323,6 +353,8 @@ export class RunnerAgent {
       } finally {
         this.launching.delete(claimed.id);
       }
+      // Draining stops claiming only: the beat keeps renewing this run's lease.
+      if (this.limitReached()) return this.beginDrain();
     }
   }
 

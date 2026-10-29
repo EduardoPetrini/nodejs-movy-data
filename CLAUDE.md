@@ -496,7 +496,8 @@ installed variants and broke type identity between packages.
 `apps/runner/src/agent-main.ts` (bin `movy-runner-agent`) is the agent as its own
 process: the same `RunnerAgent`, `RunManager`, `EventWriter` and `ProbeWorker`, wired from
 the environment (`readAgentConfig`, which refuses a bad value at boot, exit 64, rather
-than default it). It listens on no port; it LISTENs on `movy_runs` (`{runnerClass}`, sent
+than default it). It listens on no port unless `MOVY_RUNNER_HEALTH_PORT` asks for one
+(`/livez`, `/readyz`, for a kubelet); it LISTENs on `movy_runs` (`{runnerClass}`, sent
 at enqueue), `movy_run_cancel` (`{runId}`, sent by `requestCancel`) and `movy_probes`.
 
 - **Its pool has a 30 s client-side query timeout and TCP keepalive.** Found by the
@@ -517,6 +518,12 @@ at enqueue), `movy_run_cancel` (`{runId}`, sent by `requestCancel`) and `movy_pr
   runs were forked by a web console and are the embedded agent's to adopt.
 - **Idle exit only when provisioned** (`MOVY_RUNNER_PROVISIONED_BY`): no run AND no probe
   for `MOVY_RUNNER_IDLE_EXIT_MS` (10 min). A baseline replica never removes itself.
+- **`MOVY_RUNNER_MAX_RUNS` ends an agent after that many claims** (a claim it could not
+  start counts), once those runs have settled. `1` is Job mode on Kubernetes. Reaching it
+  stops claiming only: the heartbeat keeps renewing the run's lease.
+- **`/livez` never reads the meta-db.** It is a clock `agent-main` ticks from boot, not the
+  lease timer, which is armed only after registering: a meta-db outage would otherwise
+  fail every runner's liveness at once, and the restarts would kill every live run.
 - **Provisioning** (`server/runners/`): `RunnerProvisioner` is `manual` (answers the
   command) or `docker` (Engine API over the socket, no client library). `POST
   …/runners/scale` needs a **platform operator**, never an org role (see below). The docker provisioner counts every clone not yet

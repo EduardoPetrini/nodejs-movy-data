@@ -100,6 +100,8 @@ MOVY_ENCRYPTION_KEY=… MOVY_RUNNER_CLASS=default node dist/agent-main.js
 | `MOVY_RUNNER_DRAIN_MS` | 110000 | How long SIGTERM waits for live runs. Never cancels one. |
 | `MOVY_RUNNER_PROVISIONED_BY` | unset | Set by a provisioner; only then does it exit when idle… |
 | `MOVY_RUNNER_IDLE_EXIT_MS` | 600000 | …after this long with no run and no probe. |
+| `MOVY_RUNNER_MAX_RUNS` | unset (unlimited) | Claim this many runs, then stop claiming and exit 0 once they have settled. `1` is a Kubernetes Job's agent: one Job, one run. |
+| `MOVY_RUNNER_HEALTH_PORT` | unset | Serves `GET /livez` (its own clock is ticking; never reads the meta-db) and `GET /readyz` (started, not draining) for a kubelet. Unset, the agent listens on nothing. |
 
 A bad value is refused at boot with exit 64, naming the variable.
 
