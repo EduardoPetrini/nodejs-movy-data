@@ -521,6 +521,12 @@ at enqueue), `movy_run_cancel` (`{runId}`, sent by `requestCancel`) and `movy_pr
 - **`MOVY_RUNNER_MAX_RUNS` ends an agent after that many claims** (a claim it could not
   start counts), once those runs have settled. `1` is Job mode on Kubernetes. Reaching it
   stops claiming only: the heartbeat keeps renewing the run's lease.
+- **Demand is one view, `runner_demand`** (migration `0011`): per configured class, queued
+  runs not blocked on their destination (`claimable_runs`) and unexpired queued probes
+  (`queued_probes`). KEDA reads it as `movy_scaler`, whose only grant is SELECT on the view
+  (`ensureScalerRole`, applied when `SCALER_DB_PASSWORD` is set); auto mode's
+  `loadClassDemand` reads `claimable_runs` from it. Never restate the rule inline: the two
+  would drift. `movy_runner` cannot read the view.
 - **`/livez` never reads the meta-db.** It is a clock `agent-main` ticks from boot, not the
   lease timer, which is armed only after registering: a meta-db outage would otherwise
   fail every runner's liveness at once, and the restarts would kill every live run.

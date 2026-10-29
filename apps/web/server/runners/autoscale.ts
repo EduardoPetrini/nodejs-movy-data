@@ -33,23 +33,21 @@ export function classesToScale(
 }
 
 /**
- * Queued work per configured class. A run waiting only on its destination is
- * not demand for a runner — another runner would wait on the same lock — so it
- * is not counted.
+ * Queued work per configured class, as `runner_demand` defines it — the view
+ * KEDA reads too, so auto mode and a cluster cannot disagree about demand. A
+ * run waiting only on its destination is not counted: another runner would
+ * wait on the same lock. Queued probes are left out here: auto mode has
+ * always scaled for runs only, and a probe waits seconds, not a cold start.
  */
 export async function loadClassDemand(sql: SqlClient): Promise<ClassDemand[]> {
   const { rows } = await sql.query<{ name: string; queued: number; free: number; live: number; max_replicas: number }>(
-    `SELECT c.name, c.max_replicas,
-            (SELECT count(*) FROM runs q
-              WHERE q.status = 'queued' AND q.runner_class = c.name
-                AND (q.target_lock_key IS NULL OR NOT EXISTS (
-                      SELECT 1 FROM runs b WHERE b.target_lock_key = q.target_lock_key
-                         AND b.status IN ('running', 'cancelling'))))::int AS queued,
+    `SELECT c.name, c.max_replicas, d.claimable_runs AS queued,
             coalesce(sum(greatest(r.slots - r.busy, 0)) FILTER (WHERE r.state = 'online'), 0)::int AS free,
             count(r.id) FILTER (WHERE r.state IN ('online', 'draining'))::int AS live
-       FROM runner_classes c LEFT JOIN runners r ON r.class = c.name
-      WHERE c.configured
-      GROUP BY c.name`
+       FROM runner_demand d
+       JOIN runner_classes c ON c.name = d.runner_class
+       LEFT JOIN runners r ON r.class = c.name
+      GROUP BY c.name, c.max_replicas, d.claimable_runs`
   );
   return rows.map((r) => ({ name: r.name, queued: r.queued, freeSlots: r.free, live: r.live, maxReplicas: r.max_replicas }));
 }

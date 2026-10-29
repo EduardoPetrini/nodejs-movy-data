@@ -15,6 +15,14 @@
 
 export const RUNNER_ROLE = 'movy_runner';
 
+/**
+ * KEDA's role: reads `runner_demand` (migration 0011) and nothing else. The
+ * scaler's credentials sit in the cluster beside its other triggers, so they
+ * reach a class name and two counts — never a run, an org or a destination.
+ */
+export const SCALER_ROLE = 'movy_scaler';
+export const SCALER_VIEW = 'runner_demand';
+
 type Privilege = 'SELECT' | 'INSERT' | 'UPDATE' | 'DELETE';
 
 /**
@@ -48,21 +56,37 @@ interface SqlClient {
  * Run as the role that owns the tables.
  */
 export async function ensureRunnerRole(sql: SqlClient, password: string): Promise<void> {
-  if (!password) throw new Error('The runner role needs a password.');
-
-  const { rows: existing } = await sql.query(`SELECT 1 FROM pg_roles WHERE rolname = $1`, [RUNNER_ROLE]);
-  // `format` with %I / %L: PostgreSQL quotes the name and the password itself.
-  // A password in a DDL statement cannot be a bind parameter.
-  const verb = existing.length > 0 ? 'ALTER' : 'CREATE';
-  const { rows } = await sql.query<{ stmt: string }>(
-    `SELECT format('${verb} ROLE %I LOGIN PASSWORD %L', $1::text, $2::text) AS stmt`,
-    [RUNNER_ROLE, password]
-  );
-  await sql.query(rows[0]!.stmt);
-
+  await ensureLoginRole(sql, RUNNER_ROLE, password);
   await sql.query(`REVOKE ALL ON ALL TABLES IN SCHEMA public FROM ${RUNNER_ROLE}`);
   await sql.query(`GRANT USAGE ON SCHEMA public TO ${RUNNER_ROLE}`);
   for (const { table, privileges } of RUNNER_GRANTS) {
     await sql.query(`GRANT ${privileges.join(', ')} ON TABLE ${table} TO ${RUNNER_ROLE}`);
   }
+}
+
+/**
+ * Creates the scaler role, or resets its password, with SELECT on the demand
+ * view only. `ALL TABLES` covers views too, so the revoke takes back anything
+ * granted by hand. Run as the role that owns the view.
+ */
+export async function ensureScalerRole(sql: SqlClient, password: string): Promise<void> {
+  await ensureLoginRole(sql, SCALER_ROLE, password);
+  await sql.query(`REVOKE ALL ON ALL TABLES IN SCHEMA public FROM ${SCALER_ROLE}`);
+  await sql.query(`GRANT USAGE ON SCHEMA public TO ${SCALER_ROLE}`);
+  await sql.query(`GRANT SELECT ON TABLE ${SCALER_VIEW} TO ${SCALER_ROLE}`);
+}
+
+/** Creates `role` with a login, or resets its password. */
+async function ensureLoginRole(sql: SqlClient, role: string, password: string): Promise<void> {
+  if (!password) throw new Error(`The ${role} role needs a password.`);
+
+  const { rows: existing } = await sql.query(`SELECT 1 FROM pg_roles WHERE rolname = $1`, [role]);
+  // `format` with %I / %L: PostgreSQL quotes the name and the password itself.
+  // A password in a DDL statement cannot be a bind parameter.
+  const verb = existing.length > 0 ? 'ALTER' : 'CREATE';
+  const { rows } = await sql.query<{ stmt: string }>(
+    `SELECT format('${verb} ROLE %I LOGIN PASSWORD %L', $1::text, $2::text) AS stmt`,
+    [role, password]
+  );
+  await sql.query(rows[0]!.stmt);
 }

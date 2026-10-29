@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { PGlite } from '@electric-sql/pglite';
 import { freshMetaDb } from './helpers/meta-db';
-import { RUNNER_GRANTS, RUNNER_ROLE, ensureRunnerRole } from '../src/runner-role';
+import { RUNNER_GRANTS, RUNNER_ROLE, SCALER_ROLE, ensureRunnerRole, ensureScalerRole } from '../src/runner-role';
 
 /**
  * Against PGlite with the real migrations, and as the role itself: a test of
@@ -12,19 +12,31 @@ let db: PGlite;
 beforeAll(async () => {
   db = await freshMetaDb();
   await ensureRunnerRole(db, "it's-a-pass'word");
+  await ensureScalerRole(db, "scaler's-pass'word");
 });
 
 afterAll(async () => {
   await db.close();
 });
 
-async function asRunner<T>(fn: () => Promise<T>): Promise<T> {
-  await db.query(`SET ROLE ${RUNNER_ROLE}`);
+async function as<T>(role: string, fn: () => Promise<T>): Promise<T> {
+  await db.query(`SET ROLE ${role}`);
   try {
     return await fn();
   } finally {
     await db.query('RESET ROLE');
   }
+}
+
+function asRunner<T>(fn: () => Promise<T>): Promise<T> {
+  return as(RUNNER_ROLE, fn);
+}
+
+async function baseTables(): Promise<string[]> {
+  const { rows } = await db.query<{ table_name: string }>(
+    `SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'`
+  );
+  return rows.map((r) => r.table_name);
 }
 
 describe('the runner role', () => {
@@ -33,11 +45,8 @@ describe('the runner role', () => {
   });
 
   it('cannot read any table it is not granted, including ones added after it was written', async () => {
-    const { rows } = await db.query<{ table_name: string }>(
-      `SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'`
-    );
     const granted = new Set(RUNNER_GRANTS.map((g) => g.table));
-    const others = rows.map((r) => r.table_name).filter((t) => !granted.has(t));
+    const others = (await baseTables()).filter((t) => !granted.has(t));
     expect(others).toEqual(expect.arrayContaining(['connections', 'users', 'organizations', 'platform_admins']));
     for (const table of others) {
       await expect(asRunner(() => db.query(`SELECT 1 FROM "${table}" LIMIT 1`)), table).rejects.toThrow(/permission denied/);
@@ -76,5 +85,51 @@ describe('the runner role', () => {
 
   it('refuses an empty password rather than creating a role anyone can log in as', async () => {
     await expect(ensureRunnerRole(db, '')).rejects.toThrow(/password/);
+  });
+
+  it('cannot read the demand view, which is the scaler\'s alone', async () => {
+    await expect(asRunner(() => db.query(`SELECT 1 FROM runner_demand`))).rejects.toThrow(/permission denied/);
+  });
+});
+
+describe('the scaler role (KEDA)', () => {
+  function asScaler<T>(fn: () => Promise<T>): Promise<T> {
+    return as(SCALER_ROLE, fn);
+  }
+
+  it('reads runner_demand, through the view\'s owner rights and no grant of its own on runs', async () => {
+    const { rows } = await asScaler(() =>
+      db.query<{ n: number }>(`SELECT claimable_runs + queued_probes AS n FROM runner_demand WHERE runner_class = 'default'`)
+    );
+    expect(rows).toEqual([{ n: 0 }]);
+  });
+
+  it('cannot read any table: not runs, not connections, not one added later', async () => {
+    const tables = await baseTables();
+    expect(tables).toEqual(expect.arrayContaining(['runs', 'connections', 'run_specs', 'runner_probes']));
+    for (const table of tables) {
+      await expect(asScaler(() => db.query(`SELECT 1 FROM "${table}" LIMIT 1`)), table).rejects.toThrow(/permission denied/);
+    }
+  });
+
+  it('cannot write to the view', async () => {
+    await expect(asScaler(() => db.query(`DELETE FROM runner_demand`))).rejects.toThrow(/permission denied/);
+  });
+
+  it('is safe to apply again, and takes back a grant that is no longer listed', async () => {
+    await db.query(`GRANT SELECT ON runs TO ${SCALER_ROLE}`);
+    await ensureScalerRole(db, 'another');
+    await expect(asScaler(() => db.query(`SELECT 1 FROM runs`))).rejects.toThrow(/permission denied/);
+    await expect(asScaler(() => db.query(`SELECT 1 FROM runner_demand`))).resolves.toBeDefined();
+  });
+
+  it('refuses an empty password', async () => {
+    await expect(ensureScalerRole(db, '')).rejects.toThrow(/password/);
+  });
+
+  it('leaves the runner role\'s grants alone, and the runner role leaves its', async () => {
+    await ensureRunnerRole(db, 'again');
+    await expect(asScaler(() => db.query(`SELECT 1 FROM runner_demand`))).resolves.toBeDefined();
+    await expect(asRunner(() => db.query(`SELECT 1 FROM runs LIMIT 1`))).resolves.toBeDefined();
   });
 });
