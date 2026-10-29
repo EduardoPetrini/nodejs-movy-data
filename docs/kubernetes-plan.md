@@ -133,6 +133,11 @@ New files in `apps/web/server/runners/`:
   - The runner summary carries the same flag, so the panel says "on demand" instead of "0 online" for such a class.
 - **`StartRunner.vue`** is absent for `scheduling`, as it is today for any reason other than `no_runner`. The probe 503 sentence for an on-demand class says to retry in a minute.
 - No other surface changes. Compose keeps every current sentence, because `onDemand` is false there.
+- **At implementation:**
+  - **Gap found: a probe "from large" could never wake a Job.** `runProbe` answered `no_runner` before queuing anything when no runner of the class was online — always true for an idle Job class — so `queued_probes` stayed 0. For an on-demand class the probe is now queued and waited for regardless; its 504 says a runner is being started. Verified live: the demand view read `1 probes` during the wait, and 0 after.
+  - `isOnDemand(class)` is on every `RunnerProvisioner` (false for `manual` and `docker`), and the console asks it on each queue and panel request. So the cluster client is built on first API call (`lazyKubeApi`), and a missing ServiceAccount mount is a `KubeApiError` sentence: "Start a runner" fails with a 502, and nothing else does.
+  - For an on-demand class the destination comes first, then `scheduling` (no runner, or every slot busy: a new Job is started either way), then `starting`.
+  - The panel's availability gains `on_demand` (grey dot; "On demand · a runner starts for each run" / "On demand · 2 runners running"), and both class selectors stop colouring such a class as a warning. `StartRunner` is hidden for it in "Test from" as well as on the queue notice.
 
 ## Step 6 — The Helm chart (`deploy/helm/movy`)
 
