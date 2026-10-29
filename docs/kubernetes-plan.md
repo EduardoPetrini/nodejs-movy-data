@@ -75,7 +75,10 @@ In **`apps/runner/src/agent/agent-config.ts`** (parsed strictly, exit 64 on a ba
 - **`RunnerAgent`** (`runner-agent.ts`) gains an optional `maxRuns`. It counts successful claims in `claimLoop`. When the count reaches `maxRuns` it calls the existing `stopClaiming()` and exposes `exhausted`.
 - **`agent-main.ts`:** the idle interval also exits through `shutdown('done', 0)` when `exhausted` is true and nothing is busy. `IdleWatch` is reused as is.
 - **Deployment pods** leave `MOVY_RUNNER_PROVISIONED_BY` unset. Today that already means "never idle-exit", which is required there: the Deployment would restart a pod that exits (gap 3). The Helm template sets it **only** on Job pods, and the chart's test (step 8) asserts that.
-- **Health:** a new `apps/runner/src/agent/health-server.ts`, about 40 lines on `node:http`. It takes two functions, `alive()` and `ready()`, so it can be tested without an agent. The lease-check timer in `runner-agent.ts` records `lastTickAt`. `alive` means `now - lastTickAt < 10_000`, and `ready` means started and not draining. The server binds `0.0.0.0` and is closed during `shutdown`.
+- **Health:** a new `apps/runner/src/agent/health-server.ts`, about 40 lines on `node:http`. It takes two functions, `alive()` and `ready()`, so it can be tested without an agent. `alive` means `now - lastTickAt < 10_000`, and `ready` means started and not draining. The server binds `0.0.0.0` and is closed last in `shutdown`, so liveness holds through the drain.
+  - **Changed at implementation:** `lastTickAt` comes from a 1 s ticker `agent-main` starts at boot, not from the lease-check timer. That timer is armed only inside `agent.start()`, after `register()` reaches the meta-db, so a runner booting during an outage would fail liveness and restart in a loop: the failure Decision 4 rules out. Both detect the same thing, a blocked event loop.
+  - `stopClaiming()` awaits the claim loop, so the loop cannot call it on reaching `maxRuns`. Its no-wait half is a private `beginDrain()` that both use.
+  - The run-limit check in `agent-main` runs whenever `MOVY_RUNNER_MAX_RUNS` is set, not only for provisioned agents, so a limit is never silently ignored.
 
 ## Step 3 — What KEDA reads: a `runner_demand` view and a `movy_scaler` role (gaps 5, 6)
 
