@@ -5,6 +5,7 @@ import { UnknownRunnerClassError, loadClassCapacity } from '~~/server/runners/pr
 import { useProvisioner } from '~~/server/runners/use-provisioner';
 import { DockerEngineError } from '~~/server/runners/docker-engine';
 import { NoRunnerTemplateError } from '~~/server/runners/docker-provisioner';
+import { KubeApiError } from '~~/server/runners/kube-api';
 import type { ScaleResult } from '#shared/runner-wire';
 
 /**
@@ -30,9 +31,10 @@ export default defineEventHandler(async (event): Promise<ScaleResult> => {
     return await useProvisioner().scaleUp(capacity);
   } catch (err) {
     if (err instanceof UnknownRunnerClassError) throw createError({ statusCode: 404, statusMessage: err.message });
-    // The engine's own sentence — a missing image, an unreachable socket — is
-    // what the admin needs, and it names infrastructure, never a credential.
-    if (err instanceof DockerEngineError || err instanceof NoRunnerTemplateError) {
+    // The engine's own sentence — a missing image, an unreachable socket, a
+    // forbidden patch — is what the operator needs, and it names
+    // infrastructure, never a credential or the API server's address.
+    if (err instanceof DockerEngineError || err instanceof NoRunnerTemplateError || err instanceof KubeApiError) {
       throw createError({ statusCode: 502, statusMessage: err.message });
     }
     console.error('[runners] scale failed:', err instanceof Error ? err.message : err);

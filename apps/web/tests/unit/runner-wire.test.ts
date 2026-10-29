@@ -53,4 +53,11 @@ describe('scaleSentence', () => {
     expect(scaleSentence({ status: 'at_capacity', runnerClass: 'large', maxReplicas: 1 }, 'Large')).toContain('limit of 1 runner.');
     expect(scaleSentence({ status: 'at_capacity', runnerClass: 'large', maxReplicas: 3 }, 'Large')).toContain('limit of 3 runners.');
   });
+
+  it('explains an on-demand class instead of pretending to start one, with how many are starting', () => {
+    const sentence = (starting: number) => scaleSentence({ status: 'on_demand', runnerClass: 'large', starting }, 'Large');
+    expect(sentence(0)).toBe('The Large class starts a runner for each queued run. None is starting now.');
+    expect(sentence(1)).toBe('The Large class starts a runner for each queued run. 1 is starting now.');
+    expect(sentence(2)).toBe('The Large class starts a runner for each queued run. 2 are starting now.');
+  });
 });

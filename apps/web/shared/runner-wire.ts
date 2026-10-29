@@ -88,7 +88,12 @@ export type ScaleResult =
   /** This deployment starts runners by hand: here is the command. */
   | { status: 'manual'; runnerClass: string; command: string }
   /** Already at the class's `max_replicas`; nothing was started. */
-  | { status: 'at_capacity'; runnerClass: string; maxReplicas: number };
+  | { status: 'at_capacity'; runnerClass: string; maxReplicas: number }
+  /**
+   * A class the cluster runs one Job per queued run for: queuing a run is
+   * what starts a runner, so there is nothing to start by hand.
+   */
+  | { status: 'on_demand'; runnerClass: string; starting: number };
 
 /** One line for what "Start a runner" did. Pure, so the wording is unit-tested. */
 export function scaleSentence(result: ScaleResult, classLabel: string): string {
@@ -99,5 +104,12 @@ export function scaleSentence(result: ScaleResult, classLabel: string): string {
       return `This deployment starts runners by hand. Run this to start a ${classLabel} runner:`;
     case 'at_capacity':
       return `The ${classLabel} class is already at its limit of ${result.maxReplicas} ${result.maxReplicas === 1 ? 'runner' : 'runners'}.`;
+    case 'on_demand':
+      return `The ${classLabel} class starts a runner for each queued run. ${startingNow(result.starting)}`;
   }
+}
+
+function startingNow(n: number): string {
+  if (n === 0) return 'None is starting now.';
+  return `${n} ${n === 1 ? 'is' : 'are'} starting now.`;
 }

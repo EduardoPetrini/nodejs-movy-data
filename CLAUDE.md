@@ -531,7 +531,13 @@ at enqueue), `movy_run_cancel` (`{runId}`, sent by `requestCancel`) and `movy_pr
   lease timer, which is armed only after registering: a meta-db outage would otherwise
   fail every runner's liveness at once, and the restarts would kill every live run.
 - **Provisioning** (`server/runners/`): `RunnerProvisioner` is `manual` (answers the
-  command) or `docker` (Engine API over the socket, no client library). `POST
+  command), `docker` (Engine API over the socket, no client library) or `kubernetes`
+  (`kube-api.ts`, the pod's ServiceAccount, no client library either). Under `kubernetes` a
+  Job class (`MOVY_K8S_JOB_CLASSES`) answers `on_demand` and starts nothing — queuing the run
+  is the scale-up, KEDA's — and a Deployment class gets `replicas + 1` read from the
+  Deployment, never from registered runners, so a pod still booting counts against the cap.
+  `MOVY_AUTOSCALE` is refused there with a warning. A config it cannot read falls back to
+  `manual`, loudly. `POST
   …/runners/scale` needs a **platform operator**, never an org role (see below). The docker provisioner counts every clone not yet
   finished — created, booting or registered — by its container id (= the runner id, its
   hostname), and serialises scale-ups per class, so simultaneous clicks on one replica

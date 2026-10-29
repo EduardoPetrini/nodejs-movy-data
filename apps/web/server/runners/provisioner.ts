@@ -10,8 +10,10 @@ import type { ScaleResult } from '../../shared/runner-wire';
  * - `docker` starts a container through the Docker Engine API. It needs the
  *   Docker socket, which is root on the host, so it is opt-in only
  *   (`docker-compose.provisioner.yml`).
+ * - `kubernetes` adds a replica to a Deployment class, and for a Job class
+ *   says the cluster starts one per queued run (`kubernetes-provisioner.ts`).
  */
-export type ProvisionerKind = 'manual' | 'docker';
+export type ProvisionerKind = 'manual' | 'docker' | 'kubernetes';
 
 /** One runner class as provisioning needs it. */
 export interface ClassCapacity {
