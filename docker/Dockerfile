@@ -42,6 +42,17 @@ RUN pnpm build
 
 FROM deps AS runtime
 ENV NODE_ENV=production
+# tini as PID 1 reaps the runner processes the agent forks. A zombie keeps its
+# pid, so it would pass the liveness check that settles vanished runs. In the
+# image rather than Compose's `init: true` because Kubernetes has no such flag.
+#
+# No `-g`: tini forwards a signal to its direct child only, the agent. The
+# runners it forks are detached on purpose, and a SIGTERM forwarded to them
+# would read as a user's cancel; the agent drains them instead.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends tini \
+ && rm -rf /var/lib/apt/lists/*
+ENTRYPOINT ["/usr/bin/tini", "--"]
 COPY . .
 # --ignore-scripts: the only install script in the tree is web's `nuxt
 # prepare`, which generates types for development. The built server in

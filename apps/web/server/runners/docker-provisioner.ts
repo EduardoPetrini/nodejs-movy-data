@@ -141,7 +141,10 @@ export function cloneBody(template: ContainerInspect, c: ClassCapacity): Record<
     // A provisioned runner leaves when idle and must stay gone; cleanup removes it.
     RestartPolicy: { Name: 'no' },
     AutoRemove: false,
-    Init: true,
+    // The image's ENTRYPOINT is tini. Docker's own init in front of it would
+    // leave tini off PID 1, where it reaps nothing; a template started from an
+    // older Compose file still carries `Init: true`, hence explicit.
+    Init: false,
   };
   if (c.cpuMillis) hostConfig.NanoCpus = c.cpuMillis * 1_000_000;
   if (c.memoryMb) {

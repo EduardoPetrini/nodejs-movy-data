@@ -36,9 +36,8 @@ x-runner: &runner
   env_file: [docker/runner.env]
   working_dir: /app
   command: node apps/runner/dist/agent-main.js
-  # Reaps the runner processes the agent forks. A zombie keeps its pid, so it
-  # would pass the liveness check that settles vanished runs.
-  init: true
+  # No `init: true`: the image runs under tini, which reaps the runners the
+  # agent forks (see docker/Dockerfile).
   # = MOVY_RUNNER_DRAIN_MS plus a margin: `docker compose stop` lets live runs
   # finish this long. Draining never cancels a run.
   stop_grace_period: 2m

@@ -94,10 +94,15 @@ describe('cloneBody', () => {
     expect(env.some((e) => e.startsWith('MOVY_RUNNER_ID='))).toBe(false);
   });
 
-  it('takes its limits from the class, never restarts, and runs under an init', () => {
+  it('takes its limits from the class and never restarts', () => {
     expect(body.HostConfig).toMatchObject({
-      NanoCpus: 4_000_000_000, Memory: 8192 * 1024 * 1024, RestartPolicy: { Name: 'no' }, Init: true, NetworkMode: 'movy-net',
+      NanoCpus: 4_000_000_000, Memory: 8192 * 1024 * 1024, RestartPolicy: { Name: 'no' }, NetworkMode: 'movy-net',
     });
+  });
+
+  it('keeps the image\'s tini as PID 1, even copied from a template that still runs under Docker\'s init', () => {
+    // A second init in front would leave tini off PID 1, where it reaps nothing.
+    expect(body.HostConfig).toMatchObject({ Init: false });
   });
 
   it('sizes swap to its own memory, never the template\'s smaller one, which Docker refuses', () => {
