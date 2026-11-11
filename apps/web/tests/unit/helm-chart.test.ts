@@ -112,6 +112,27 @@ describe.skipIf(!hasHelm)('helm chart', () => {
       }
     });
 
+    /*
+     * "Start a runner" writes `.spec.replicas` through the scale subresource,
+     * which takes ownership of the field. Helm 4 applies server-side, so an
+     * upgrade rendering a DIFFERENT count failed on that conflict (found on
+     * kind, 2026-11-11), and forcing it would remove the started runner. A
+     * re-applied value equal to the live one is no conflict, so the template
+     * renders the larger of the two. `helm template` has no cluster, so the
+     * lookup is pinned by source shape here and proven on kind.
+     */
+    it("never renders fewer runners than the Deployment has: Start a runner's survive an upgrade", () => {
+      const source = fs.readFileSync(path.join(CHART, 'templates/runner-deployment.yaml'), 'utf8');
+      expect(source).toMatch(/replicas: \{\{ include "movy\.replicas"/);
+      const helpers = fs.readFileSync(path.join(CHART, 'templates/_helpers.tpl'), 'utf8');
+      expect(helpers).toMatch(/define "movy\.replicas"[\s\S]*lookup "apps\/v1" "Deployment"[\s\S]*max /);
+
+      // No cluster: the values' count, as before.
+      expect((named(ms, 'Deployment', 'movy-runner-default') as any).spec.replicas).toBe(1);
+      const out = renderKind('--set', 'runnerClasses[0].replicas=2');
+      expect((named(out, 'Deployment', 'movy-runner-default') as any).spec.replicas).toBe(2);
+    });
+
     it('scales a Job class on runner_demand as movy_scaler, counting queued probes too', () => {
       const [trigger] = (named(ms, 'ScaledJob', 'movy-runner-large') as any).spec.triggers;
       expect(trigger.type).toBe('postgresql');

@@ -146,6 +146,27 @@ it into 1 without a word, so only an absent field takes the default.
 {{- end -}}
 
 {{/*
+A Deployment class's replicas: the values' count, or the live Deployment's when
+that is larger. "Start a runner" writes `.spec.replicas` through the scale
+subresource, which takes ownership of the field, and Helm 4 applies
+server-side: rendering a different count fails the upgrade on that conflict,
+and forcing it would remove the started runner mid-run. Re-applying the live
+value is no conflict. Raising the count in values still works; lowering it
+below the live one is `kubectl scale`. Without a cluster (`helm template`,
+GitOps) `lookup` is empty and the values' count renders.
+(dict "root" $ "class" .)
+*/}}
+{{- define "movy.replicas" -}}
+{{- $want := include "movy.count" (dict "class" .class "field" "replicas" "default" 1) | int64 -}}
+{{- $live := lookup "apps/v1" "Deployment" .root.Release.Namespace (printf "%s%s" (include "movy.runnerPrefix" .root) .class.name) -}}
+{{- if and $live $live.spec (hasKey $live.spec "replicas") -}}
+{{- max $want (int64 $live.spec.replicas) -}}
+{{- else -}}
+{{- $want -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 A password inside a URL's userinfo. `urlquery` is a query-string escape and
 writes a space as `+`, which a URL reads back as a literal plus; it escapes a
 real `+` as %2B, so every `+` left is a space.
