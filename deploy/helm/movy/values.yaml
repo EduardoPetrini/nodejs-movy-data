@@ -41,6 +41,12 @@ metaDb:
 # generated once and kept across upgrades (and uninstalls). Set them here only
 # to bring your own; NEVER change encryptionKey on a live install — every saved
 # connection password becomes undecryptable.
+#
+# "Already stored" is read with Helm's `lookup`, which only `helm install` and
+# `helm upgrade` against a cluster can do. `helm template`, Argo CD and Flux's
+# post-render render without one, so they mint NEW values on every render, and
+# applying that output rotates the key. Under GitOps set all four here (or
+# through your secret manager), every time.
 secrets:
   encryptionKey: ""      # 32 random bytes, base64
   sessionPassword: ""
