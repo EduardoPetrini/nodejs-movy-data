@@ -78,10 +78,14 @@ test.describe('probes', () => {
 
   test('asking a class with no runner online is refused at once, not after a timeout', async ({ page }) => {
     const { classes } = (await (await page.request.get(`/api/orgs/${ORG}/runners`)).json()) as {
-      classes: { name: string; online: number }[];
+      classes: { name: string; online: number; onDemand: boolean }[];
     };
     const large = classes.find((c) => c.name === 'large');
     test.skip(!large || large.online > 0, 'needs a configured "large" class with no runner');
+    // On Kubernetes `large` is a Job class: its probe is queued, and that queued
+    // row is what starts a Job, so it is answered rather than refused (on kind,
+    // within seconds). k8s-scaling.spec.ts covers that path.
+    test.skip(large!.onDemand, '"large" is on demand here: a probe starts a runner instead of being refused');
 
     const id = await labConnectionId(page.request, 'Lab PostgreSQL');
     const started = Date.now();

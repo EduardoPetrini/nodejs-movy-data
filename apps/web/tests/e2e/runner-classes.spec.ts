@@ -7,7 +7,8 @@ import { test, expect, type Page } from '@playwright/test';
  *
  * Needs a configured `large` class with no runner online — what Compose ships
  * (docker/runner-classes.json, with `runner-large` at zero replicas until
- * scaled). Skipped where that is not the case.
+ * scaled). Skipped where that is not the case, and where `large` is on demand
+ * (a Kubernetes Job class), whose queued run starts a runner instead.
  */
 const ORG = 'acme';
 const EDITOR = { email: 'editor@movy.local', password: 'movy-dev' };
@@ -22,7 +23,7 @@ async function signIn(page: Page): Promise<void> {
   await page.waitForURL((url) => !url.pathname.startsWith('/login'));
 }
 
-interface ClassRow { name: string; online: number }
+interface ClassRow { name: string; online: number; onDemand: boolean }
 
 test.describe('runner classes', () => {
   test.beforeEach(async ({ page }) => {
@@ -32,6 +33,9 @@ test.describe('runner classes', () => {
     const { classes } = (await response.json()) as { classes: ClassRow[] };
     const large = classes.find((c) => c.name === 'large');
     test.skip(!large || large.online > 0, 'needs a configured "large" class with no runner (pnpm docker:e2e)');
+    // On Kubernetes `large` is a Job class: a queued run reads `scheduling` and
+    // starts a Job, never `no_runner`. k8s-scaling.spec.ts covers that path.
+    test.skip(large!.onDemand, '"large" is on demand here: a queued run starts a runner');
   });
 
   test('the launch form offers the configured classes', async ({ page }) => {
