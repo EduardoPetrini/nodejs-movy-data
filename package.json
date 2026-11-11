@@ -24,7 +24,10 @@
     "docker:cli": "docker compose run --rm cli",
     "docker:e2e": "docker compose --profile e2e run --rm --build e2e",
     "docker:scale": "bash scripts/docker-scale.sh",
-    "k8s:sync-fixtures": "bash scripts/k8s-sync-fixtures.sh"
+    "k8s:sync-fixtures": "bash scripts/k8s-sync-fixtures.sh",
+    "k8s:up": "bash scripts/k8s-up.sh",
+    "k8s:e2e": "bash scripts/k8s-e2e.sh",
+    "k8s:down": "bash scripts/k8s-down.sh"
   },
   "keywords": [],
   "author": "",

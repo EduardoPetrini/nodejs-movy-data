@@ -1,0 +1,15 @@
+# The local cluster `pnpm k8s:up` creates. One node is enough: the chart's
+# point on kind is the shape (Deployment and Job classes, KEDA, the migrate Job,
+# two console replicas), not scheduling across nodes.
+#
+# No port mappings: the console is reached through `kubectl port-forward`
+# (`pnpm k8s:e2e`), so it is http://localhost to the browser and the Secure
+# session cookie sticks, which a NodePort on a hostname would not give.
+#
+# SQL Server (lab) has no arm64 image; on Apple Silicon it runs under Docker
+# Desktop's Rosetta emulation and needs about 2 GB of the VM's memory.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: movy
+nodes:
+  - role: control-plane
