@@ -15,7 +15,7 @@ metadata:
     app.kubernetes.io/component: runner
     movy.runner-class: {{ .name }}
 spec:
-  replicas: {{ .replicas | default 1 }}
+  replicas: {{ include "movy.count" (dict "class" . "field" "replicas" "default" 1) }}
   selector:
     matchLabels:
       {{- include "movy.selector" (dict "root" $ "component" "runner") | nindent 6 }}

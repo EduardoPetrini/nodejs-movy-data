@@ -6,7 +6,7 @@ boot; a class dropped from it stays as history.
 {{- include "movy.validateClasses" . -}}
 {{- $classes := list -}}
 {{- range .Values.runnerClasses -}}
-{{- $c := dict "name" .name "label" .label "cpuMillis" (int .cpuMillis) "memoryMb" (int .memoryMb) "maxReplicas" (int (.maxReplicas | default 1)) -}}
+{{- $c := dict "name" .name "label" .label "cpuMillis" (int .cpuMillis) "memoryMb" (int .memoryMb) "maxReplicas" (int (include "movy.count" (dict "class" . "field" "maxReplicas" "default" 1))) -}}
 {{- with .description }}{{ $_ := set $c "description" . }}{{ end -}}
 {{- with .suggestAboveBytes }}{{ $_ := set $c "suggestAboveBytes" (int64 .) }}{{ end -}}
 {{- if .default }}{{ $_ := set $c "isDefault" true }}{{ end -}}

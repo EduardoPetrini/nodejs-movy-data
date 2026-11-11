@@ -22,7 +22,7 @@ metadata:
     movy.runner-class: {{ .name }}
 spec:
   pollingInterval: {{ $.Values.keda.pollingInterval }}
-  maxReplicaCount: {{ .maxReplicas | default 1 }}
+  maxReplicaCount: {{ include "movy.count" (dict "class" . "field" "maxReplicas" "default" 1) }}
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
   scalingStrategy:

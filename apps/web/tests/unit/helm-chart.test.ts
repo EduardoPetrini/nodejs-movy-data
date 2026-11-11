@@ -141,6 +141,15 @@ describe.skipIf(!hasHelm)('helm chart', () => {
       expect(podOf(named(prod, 'ScaledJob', 'movy-runner-large')).containers[0].resources.limits).toEqual({ cpu: '4', memory: '8Gi' });
     });
 
+    it('keeps a count of 0 as 0: `| default 1` used to read it as unset', () => {
+      const out = renderKind('--set', 'runnerClasses[0].replicas=0', '--set', 'runnerClasses[1].maxReplicas=0');
+      expect((named(out, 'Deployment', 'movy-runner-default') as any).spec.replicas).toBe(0);
+      expect((named(out, 'ScaledJob', 'movy-runner-large') as any).spec.maxReplicaCount).toBe(0);
+      const cm = named(out, 'ConfigMap', 'movy-runner-classes') as any;
+      const large = parseRunnerClassesFile(JSON.parse(cm.data['runner-classes.json'])).find((c) => c.name === 'large');
+      expect(large?.maxReplicas).toBe(0);
+    });
+
     it.each([
       [['--set', 'runnerClasses[0].name=Web'], /must be lowercase letters/],
       [['--set', 'runnerClasses[0].name=web'], /reserved/],
@@ -148,6 +157,15 @@ describe.skipIf(!hasHelm)('helm chart', () => {
       [['--set', 'runnerClasses[1].mode=daemonset'], /must be deployment or job/],
       [['--set', 'runnerClasses[1].name=large', '--set', 'runnerClasses[0].name=large'], /listed twice/],
       [['--set', `runnerClasses[1].name=${'x'.repeat(32)}`, '--set', 'fullnameOverride=a-twenty-char-name-x'], /past 63 characters/],
+      // The console's parser refuses these at boot, so the chart must too.
+      [['--set', `runnerClasses[0].label=${'L'.repeat(41)}`], /label is required, at most 40 characters/],
+      [['--set', 'runnerClasses[0].cpuMillis=0.5'], /cpuMillis must be a whole number/],
+      [['--set', 'runnerClasses[1].maxReplicas=-1'], /maxReplicas must be a whole number/],
+      [['--set', 'runnerClasses[1].suggestAboveBytes=0'], /suggestAboveBytes must be a whole number/],
+      // `| default 1` used to turn 0 into 1 without a word.
+      [['--set', 'runnerClasses[0].slots=0'], /slots must be a whole number of at least 1/],
+      // "Start a runner" would answer at_capacity on a class already past its cap.
+      [['--set', 'runnerClasses[0].replicas=3'], /replicas \(3\) is above its maxReplicas \(2\)/],
     ])('refuses %j at render time, not in a pod', (args, message) => {
       const out = render('-f', KIND_VALUES, ...args);
       expect(out.status).not.toBe(0);
@@ -216,6 +234,24 @@ describe.skipIf(!hasHelm)('helm chart', () => {
       expect(out.status).toBe(0);
       expect(stringData(out.manifests, 'movy-console').NUXT_DATABASE_URL).toBe('postgres://movy:p%40ss%3Aw%2Frd@db.internal:5432/movy_data');
       expect(stringData(out.manifests, 'movy-scaler').connection).toMatch(/@db\.internal:5432\/movy_data$/);
+    });
+
+    /*
+     * `urlquery` is a query-string escape: it writes a space as `+`, which a
+     * URL's userinfo reads back as a literal plus, so the console would sign
+     * in with `a+b+c`. Every URL must decode to the password as given.
+     */
+    it('encodes a password with a space and a plus so every URL decodes back to it', () => {
+      const password = 'a b+c';
+      const out = render('--set', 'metaDb.host=db.internal', '--set', `metaDb.password=${password}`);
+      expect(out.status).toBe(0);
+      const decoded = (url: string) => decodeURIComponent(new URL(url).password);
+      expect(decoded(stringData(out.manifests, 'movy-console').NUXT_DATABASE_URL)).toBe(password);
+
+      const roles = render('--set', 'metaDb.host=db', '--set', 'metaDb.password=x',
+        '--set', `secrets.runnerDbPassword=${password}`, '--set', `secrets.scalerDbPassword=${password}`).manifests;
+      expect(decoded(stringData(roles, 'movy-runner').MOVY_DATABASE_URL)).toBe(password);
+      expect(decoded(stringData(roles, 'movy-scaler').connection)).toBe(password);
     });
 
     it('refuses an external meta-db with no host or no password: neither can be invented', () => {

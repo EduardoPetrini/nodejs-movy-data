@@ -100,13 +100,58 @@ not a pod.
 {{- fail (printf "runnerClasses: %q has mode %q; it must be deployment or job" .name (toString .mode)) -}}
 {{- end -}}
 {{- if not .label }}{{ fail (printf "runnerClasses: %q needs a label" .name) }}{{ end -}}
+{{- $label := trim (toString .label) -}}
+{{- if or (eq (len $label) 0) (gt (len $label) 40) -}}
+{{- fail (printf "runnerClasses: %q label is required, at most 40 characters" .name) -}}
+{{- end -}}
 {{- if or (not .cpuMillis) (not .memoryMb) }}{{ fail (printf "runnerClasses: %q needs cpuMillis and memoryMb" .name) }}{{ end -}}
+{{- $c := . -}}
+{{- range $field, $min := dict "cpuMillis" 1 "memoryMb" 1 "maxReplicas" 0 "suggestAboveBytes" 1 "slots" 1 "replicas" 0 -}}
+{{- if and (hasKey $c $field) (not (kindIs "invalid" (index $c $field))) -}}
+{{- include "movy.wholeNumber" (dict "class" $c.name "field" $field "value" (index $c $field) "min" $min) -}}
+{{- end -}}
+{{- end -}}
+{{- if and (eq .mode "deployment") (gt (int (include "movy.count" (dict "class" . "field" "replicas" "default" 1))) (int (include "movy.count" (dict "class" . "field" "maxReplicas" "default" 1)))) -}}
+{{- fail (printf "runnerClasses: %q replicas (%s) is above its maxReplicas (%s)" .name (include "movy.count" (dict "class" . "field" "replicas" "default" 1)) (include "movy.count" (dict "class" . "field" "maxReplicas" "default" 1))) -}}
+{{- end -}}
 {{- if and (eq .mode "job") (gt (len (printf "%s%s-xxxxx" (include "movy.runnerPrefix" $) .name)) 63) -}}
 {{- fail (printf "runnerClasses: %q makes Job names past 63 characters; shorten it or fullnameOverride" .name) -}}
 {{- end -}}
 {{- if .default }}{{ $defaults = add1 $defaults }}{{ end -}}
 {{- end -}}
 {{- if ne $defaults 1 }}{{ fail "runnerClasses: exactly one class must be default: true" }}{{ end -}}
+{{- end -}}
+
+{{/*
+The same whole-number rule `parseRunnerClassesFile` applies at boot, so a value
+the console would refuse fails the render instead.
+(dict "class" name "field" name "value" v "min" n)
+*/}}
+{{- define "movy.wholeNumber" -}}
+{{- $v := .value -}}
+{{- $isNumber := or (kindIs "int" $v) (kindIs "int64" $v) (kindIs "float64" $v) -}}
+{{- if or (not $isNumber) (and $isNumber (or (ne (float64 $v) (floor $v)) (lt (float64 $v) (float64 .min)))) -}}
+{{- fail (printf "runnerClasses: %q %s must be a whole number of at least %d" .class .field (int .min)) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+A count that may legitimately be 0. `| default 1` reads 0 as unset and turns
+it into 1 without a word, so only an absent field takes the default.
+(dict "class" $class "field" name "default" n)
+*/}}
+{{- define "movy.count" -}}
+{{- $v := index .class .field -}}
+{{- if and (hasKey .class .field) (not (kindIs "invalid" $v)) }}{{ int64 $v }}{{ else }}{{ .default }}{{ end -}}
+{{- end -}}
+
+{{/*
+A password inside a URL's userinfo. `urlquery` is a query-string escape and
+writes a space as `+`, which a URL reads back as a literal plus; it escapes a
+real `+` as %2B, so every `+` left is a space.
+*/}}
+{{- define "movy.urlPart" -}}
+{{- urlquery . | replace "+" "%20" -}}
 {{- end -}}
 
 {{/*
